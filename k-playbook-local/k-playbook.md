@@ -48,14 +48,25 @@ Pakete unter `internal/`:
 - `sqlq` — Hilfe für PostgreSQL-taugliche Abfragen: Platzhalter `$n`, `Bind` je Dialekt,
   `Check` auf verbotene Konstrukte.
 - `hub/store`, `node/store` — die gekapselten Datenbanken von Hub und Node, je eine
-  Schnittstelle `Store` mit SQLite-Umsetzung und DDL.
+  Schnittstelle `Store` mit SQLite-Umsetzung und DDL. Der Hub-Store schreibt Dokumente mit
+  Urheber (`docTx`: User, Account, Träger); die Vorgänge im Namen eines Accounts stehen in
+  `hub/store/write.go` — `CreateDocumentAs`, `WriteDocumentAs`, `DeleteDocumentAs` (mit
+  `recursive`), `RenameDocumentAs` mit `WriteAuth`: Account-Zeile zuerst sperren, dann Account,
+  Lesbarkeit und Recht in der Transaktion; Fehlerarten `ErrNotReadable`, `ErrForbidden`,
+  `ErrNameTaken`, `ErrPathConflict`, `ErrStaleRevision`, `ErrNotFound`, `ErrInvalid`.
 - `contract` — neutral, der Vertrag zwischen Node und Hub als Go-Typen: Anfragen, Antworten,
-  Fehlercodes, Schnittstelle `Hub` (`Whoami`, `Rotate`, `Sync`), Fassung (`contract.Version`),
-  Form der Account-Zeilen (`AccountContent`).
+  Fehlercodes, Schnittstelle `Hub` (`Whoami`, `Rotate`, `Sync` und die Schreibvorgänge
+  `Create`, `Write`, `Delete`, `Rename` mit `WriteResponse`: Revision und Zeilen in der Form von
+  `sync`), Fassung (`contract.Version`), Form der Account-Zeilen (`AccountContent`),
+  `MaxDocumentBytes`; `ErrOutcomeUnknown` (Ausgang unklar) und `ErrUnknownOperation` (der Hub
+  kennt den Vorgang nicht).
 - `contract/httpapi` — neutral, der Vertrag über HTTP: `NewHandler` bedient jede Umsetzung von
   `contract.Hub`, `Client` setzt sie über HTTP um (Wiederholung nur für `whoami` und `sync`,
-  `rotate` nie; unklarer Ausgang als `contract.ErrOutcomeUnknown`; folgt keiner Weiterleitung,
-  3xx ist ein eindeutiger Fehler).
+  `rotate` und die Schreibvorgänge nie; unklarer Ausgang als `contract.ErrOutcomeUnknown`; 404
+  mit `invalid` als `contract.ErrUnknownOperation`; folgt keiner Weiterleitung, 3xx ist ein
+  eindeutiger Fehler). Body höchstens 1 MiB (`MaxBodyBytes`), bei Schreibvorgängen 7 MiB
+  (`MaxWriteBodyBytes`: jedes Dokument auch als `\u00XX`); `content` ist Pflicht; ungültiges
+  UTF-8 schickt der Client nicht ab, der Handler nimmt es als ungültiges JSON.
 - `reqlog` — neutral, eine Logzeile je HTTP-Anfrage; Namen nur über `ident.LogName`, nie ein
   Token.
 - `loopback` — neutral, die Prüfung, dass eine HTTP-Anfrage diesen Rechner meint: `Host`
@@ -63,15 +74,25 @@ Pakete unter `internal/`:
   `node/mcpnode` benutzen dieselbe Prüfung.
 - `hub/replication` — die Seite des Hubs im Vertrag: setzt `contract.Hub` über dem Hub-Store
   um (Anmeldung von Node und Account, erlaubte Collections, Seitenschnitt); der Store liefert
-  nur Zeilen und schreibt `rotate` in einer Transaktion.
+  nur Zeilen und schreibt `rotate` in einer Transaktion. Die Schreibvorgänge (`write.go`)
+  prüfen Fassung, Form (Name, Inhalt, `base_revision` ≥ 1, neuer Name) und die Anmeldung des
+  Nodes, dann ruft der Store `…DocumentAs` mit dem Node als Träger; seine Fehlerarten werden
+  Codes, alles andere bleibt ein Fehler, der kein Fehler des Vertrags ist.
 - `node/replica` — die Replica des Nodes (je Hub-Eintrag eine SQLite-Datei) und der Abgleich
   (`Syncer`), der sie über `contract.Hub` füllt; dazu die Account-Zeilen (`AccountRows` über
-  den Teilindex `documents_system`, `WriteAccountRows` nach `rotate`).
+  den Teilindex `documents_system`, `WriteAccountRows` nach `rotate`) und `WriteRows`, das die
+  Zeilen der Antwort eines Schreibvorgangs übernimmt — gebunden an `entry_id`/`hub_id`, nur in
+  Collections mit Stand in `sync_state`, per `id` nur vorwärts, `sync_state` bleibt.
 - `node/mcpnode` — der MCP-Eingang des Nodes (`/mcp`, go-sdk, zustandslos): Host/Origin,
   Header-Paare je Hub, Anmeldung über alle Hubs (`Authenticate`), Werkzeug `whoami`
   (`Whoami`, auch für `node whoami`); Werkzeuge `list`, `read`, `changes` (`list.go`,
   `read.go`, `changes.go`) über dem gemeinsamen Schritt in `access.go` (Adresse, Anmeldung,
-  Recht, Replica je Hub) und den Abfragen in `node/replica/read.go`.
+  Recht, Replica je Hub) und den Abfragen in `node/replica/read.go`; Werkzeuge `create`,
+  `write`, `delete`, `rename` (`write.go`) auf demselben Schritt, den Weg zum Hub und den
+  Anstoß des Abgleichs bekommt es als `HubLink` von `cmd/kephalaion`. Fehler der Werkzeuge,
+  die schreiben, tragen einen Code (Codes des Vertrags, dazu `unreachable`,
+  `outcome_unknown`, `unsupported`, `internal`); `/mcp` nimmt Bodys bis 7 MiB
+  (`MaxRequestBytes`).
 
 Regeln dazu:
 
@@ -87,8 +108,18 @@ Regeln dazu:
   `hub/replication` darüber, `http` der Client aus `contract/httpapi` (nur Loopback);
   `internal/node` kennt nur `contract.Hub`. Auch `local` prüft die Anmeldung wie jeder
   Transport; die Tests des Vertrags (`hub/replication`) laufen gegen `local` und HTTP. Ein
-  Fehler von `rotate`, der kein Fehler des Vertrags ist, gilt auf jedem Transport als unklar
-  (`contract.ErrOutcomeUnknown`) — über `local` hüllt `localHub` in `synccmd.go` ihn ein.
+  Fehler von `rotate` oder eines Schreibvorgangs, der kein Fehler des Vertrags ist, gilt auf
+  jedem Transport als unklar (`contract.ErrOutcomeUnknown`) — über `local` hüllt `localHub` in
+  `synccmd.go` ihn ein. `localHub` hält den Hub in einem Feld und setzt jede Methode
+  ausdrücklich um (keine Einbettung): Ein neuer Vorgang in `contract.Hub` bricht den Bau, bis
+  er dort steht. Die Werkzeuge des Nodes, die schreiben, bekommen denselben `connector` als
+  `mcpnode.HubLink` (`nodeHubLink` in `serve.go`; `https`/`ssh` als `mcpnode.ErrUnsupported`)
+  und den Anstoß `backgroundSync.kick`.
+- **Schreibvorgänge werden nie wiederholt** — `create`, `write`, `delete`, `rename` wie
+  `rotate`: kein Transport, kein Node und keine Erweiterung schickt einen ein zweites Mal. Drei
+  Ausgänge sind zu unterscheiden: abgelehnt (ein Code, endgültig), nicht erreicht (nichts
+  gespeichert), unklar (kann gespeichert sein — der Node stößt den Abgleich an, der Aufrufer
+  sieht nach). Einen Schlüssel für Wiederholungen gibt es nicht.
 - **Die Replica ist abgeleitet.** Sie enthält nur, was der Hub geliefert hat, und darf wie
   der Node-Store SQLite-Eigenes benutzen. Angelegt wird sie nur vom Abgleich, nie von `init`;
   `node hub rm` und `config import` (für weggefallene Aliase) entfernen sie mit, innerhalb der
@@ -125,8 +156,13 @@ Regeln dazu:
 - **Accounts am Hub.** Die Tabelle `accounts` führt Beschreibung, gesperrt, die gemerkten
   Rechte eines gesperrten Accounts und **maßgeblich Hash und User** (`"user"`, Index
   `accounts_user`); die `SYSTEM:A:`-Zeilen je Account und Collection tragen Rechte und eine
-  Kopie von Hash und User. `created_by`/`updated_by` ist der User des schreibenden Accounts,
-  die CLI am Hub schreibt `admin`; `actions.account` bleibt der Account. `set --user` schreibt
+  Kopie von Hash und User. **Urheber:** `created_by`/`updated_by` ist der User des schreibenden
+  Accounts, die CLI am Hub schreibt `admin`; `actions.account` bleibt der Account. Ein
+  Schreibvorgang über einen Node trägt User, Account und Node (`docTx`) und schreibt je
+  Dokument eine Zeile in `actions` mit `account`, `carrier` = Node und `action` (`create`,
+  `update`, `delete`, `rename`) unter seiner Revision; die CLI schreibt `admin` ohne Träger.
+  Recht: `write` für Neues und Eigenes (`created_by` = User des Accounts), `supersede` für
+  Fremdes, `write` dafür nicht nötig; bei einem Verzeichnis je Dokument. `set --user` schreibt
   alle lebenden Zeilen des Accounts unter einer Revision neu, Löschmarken und Dokumente
   bleiben. Jede Änderung an den Zeilen
   ist ein Schreibvorgang mit Revision und genau einer Zeile in `actions` (`admin`, bei `rotate`
@@ -136,7 +172,9 @@ Regeln dazu:
   WHERE name = $1`, erst danach wird gelesen — kein `SELECT … FOR UPDATE` (SQLite). `rotate`
   beginnt stattdessen mit dem bedingten Schreiben (`… AND token_hash = $3 AND locked = 0`) und
   prüft die Zahl der Zeilen, liest danach den User; der Import sperrt vorher alle Zeilen von
-  `accounts`. Zeilen werden
+  `accounts`. Die Schreibvorgänge über einen Node (`writeAs` in `hub/store/write.go`) sperren
+  ebenso zuerst die Zeile ihres Accounts (`lockAccount`) und lesen erst danach Hash, Sperre und
+  User. Zeilen werden
   nie entfernt: Löschmarke, und bei erneutem `grant` wiederbelebt — auch wenn die Collection
   entfernt wird: Löschmarken von `SYSTEM:A:`-Zeilen blockieren das Entfernen nicht (CLI und
   Import) und bleiben stehen; lebende Zeilen und gemerkte Rechte eines gesperrten Accounts
@@ -156,9 +194,11 @@ Regeln dazu:
   `reqlog`. Als Node gleicht `serve` im Hintergrund ab (`cmd/kephalaion/bgsync.go`): beim Start
   und je `sync_interval` (`settings`, je Runde gelesen, `0` aus), je Hub-Eintrag eine
   Goroutine, verdrahtet über `connector` wie `node sync` — `local` bekommt den Hub-Store
-  desselben `serve`. Beim Beenden bricht er ab, bevor die Stores schließen; `serve` wartet
-  darauf höchstens `shutdownGrace`. Log nur bei Zeilen, erstem Fehler, Wechsel der Fehlerart
-  (`replica.ErrorKind`) und Erholung.
+  desselben `serve`. `backgroundSync.kick` stößt einen Eintrag außer der Reihe an — nach einem
+  Schreibvorgang über MCP (Erfolg oder unklarer Ausgang), auch bei `sync_interval` `0`; läuft
+  der Abgleich des Eintrags schon, folgt genau einer. Beim Beenden bricht er ab, bevor die
+  Stores schließen; `serve` wartet darauf höchstens `shutdownGrace`. Log nur bei Zeilen, erstem
+  Fehler, Wechsel der Fehlerart (`replica.ErrorKind`) und Erholung.
 - **Nebenläufigkeit am Node:** `node sync`, `node hub rm|add`, `config import` und `rotate`
   laufen als eigene Prozesse neben `serve`. Keine Sperre über Prozesse: Jedes Schreiben des
   Abgleichs ist an `hubs.entry_id` gebunden (ULID, beim Anlegen vergeben, nie wiederkehrend,
@@ -183,6 +223,17 @@ Regeln dazu:
   Log), ein abgebrochener ctx ist ein Fehler der Anfrage. Nie `SYSTEM:`-Namen, Löschmarken nur
   in `changes`. Gelesen wird ohne Transaktion; `changes` erkennt eine neu angelegte oder
   geleerte Replica an der `generation` in ihrem `db_info`, die es vor allem anderen liest.
+  **Schreiben** (`create`, `write`, `delete`, `rename`, `write.go`), in dieser Folge: Adresse,
+  Name und neuer Name prüfen; wie beim Lesen Anmeldung, Replica und Lesbarkeit — ohne den Hub
+  zu fragen; dann `HubLink.Connect` und Account samt Token aus dem Header an den Hub. Nach
+  Erfolg kommen die Zeilen der Antwort per `replica.WriteRows` in die Replica, bevor der Client
+  antwortet (scheitert das: Erfolg mit `note`), danach `HubLink.Sync` — ebenso nach unklarem
+  Ausgang. Ein Fehler ist `isError` mit der Meldung als Text und `error.code`/`error.message`
+  in der Struktur; `account_unauthenticated` des Hubs wird `not_readable`, `unauthenticated`
+  und `unsupported_version` gehen durch. Meldungen ohne Adresse und Transport des Hubs; das
+  Log nennt Vorgang, Hub, Node, Account und Code, nie Token oder Inhalt. Grenze: Schreiben
+  setzt voraus, dass die Replica Collection und Account-Zeile trägt; „noch nie abgeglichen“
+  nennt `kephalaion node sync <hub>`.
 - **Keine Migrationen, Schema neu anlegen** — befristet, solange es keine Daten gibt, die
   bleiben müssen. Ändert sich das Schema, wird `SchemaVersion` im Store-Paket erhöht;
   vorhandene Datenbanken werden dann abgelehnt und neu angelegt. Dokumente am Hub gelten
