@@ -354,3 +354,143 @@ und ist benannt.
 
 ### Offen (nicht gefixt)
 - —
+
+## Ausführung
+
+**Status:** Erfolgreich ausgeführt  
+**Datum:** 2026-09-27  
+**Zusammenfassung:** Der Hub schreibt im Namen von Accounts: `create`, `write`, `delete`, `rename` (Verzeichnisse als Ganzes, alles oder nichts, eine Revision), mit Sperre der Account-Zeile zuerst, Rechten (`write` für Neues und Eigenes, `supersede` für Fremdes), Vorbedingung `base_revision` und Urheber (User in `created_by`/`updated_by`, Account und Node in `actions`). Der Vertrag trägt die vier Vorgänge in Fassung 1 über `local` und HTTP, nie wiederholt, mit „nichts geschehen“ und „Ausgang unklar“ getrennt. Der Node bietet sie als MCP-Werkzeuge an, schreibt die Antwortzeilen vor der Antwort in die Replica und stößt den Abgleich an. Die Erweiterung 0.0.5 speichert, legt an, löscht und benennt darüber um. Durchlauf mit zwei Nodes als Test (`TestMCPWriteTwoNodes`), Doku nachgezogen, `make check` vollständig grün.
+
+**Ablauf:** je Etappe ein Sub-Agent, nacheinander. Commits auf `dev`, alle gepusht:
+
+| Etappe | Commit(s) |
+|---|---|
+| Refine-Stand, Fortschritt angelegt | `d08b739` (Baseline) |
+| 1 — Hub-Store | `2aad808` |
+| 2 — Vertrag | `cd91d8e` |
+| 3 — Node | `18df1b0` |
+| 4 — rename und Verzeichnisse | `01ac746` |
+| 5 — Erweiterung 0.0.5 | `d03092d` |
+| 6 — Durchlauf und Doku | `89d4c37`, `ef6be90`, `373e175`, `229cd69`, `9bf4016`, `27c6abb`, `a9e4690`, `7425394` |
+
+Dazwischen liegen zwei fremde Commits des Nutzers aus einer parallelen Sitzung (`9db5559` Konzept `vendor/`, `c2253bc` Task 015). Sie sind im Diff unten herausgerechnet.
+
+**Entscheidungen während der Ausführung** (über die Task hinaus, in der Doku festgehalten):
+
+- **Zusätzliche Codes am MCP-Werkzeug:** `unsupported` gilt, wenn der Hub den Vorgang nicht kennt, und bei `https`/`ssh`. `internal` gilt für Fehler des Nodes selbst (`node.db`, Replica nicht lesbar). `unauthenticated` und `unsupported_version` vom Hub gehen durch; `account_unauthenticated` vom Hub wird am Node zu `not_readable`.
+- **Vertrag:** `base_revision < 1` ist `invalid`, `content` ist über HTTP Pflicht, und ungültiges UTF-8 prüfen Client und Handler (Befund `json-utf8.md`). Die Body-Grenze liegt für Schreibvorgänge bei 7 MiB, sonst bei 1 MiB, am Eingang `/mcp` bei 7 MiB. Im Vertrag ergänzt: Bricht der Node eine Anfrage ab, antwortet der Hub mit 503 und `internal`.
+- **Anstoß des Abgleichs:** nach Erfolg und nach `outcome_unknown`, auch bei `sync_interval 0`.
+- **`rename`, Ziel nach der Art:**
+  - Ziel von derselben Art belegt → `name_taken`, ohne Überschreiben und ohne Zusammenlegen.
+  - Ziel von der anderen Art belegt → `path_conflict`.
+  - Das Recht wird vor dem Ziel geprüft. `recursive` bei einem Dokument wird ignoriert.
+- **`localHub` hält den Hub in einem Feld statt ihn einzubetten.** Ein neuer Vorgang rutscht sonst ohne die Behandlung des unklaren Ausgangs durch (Befund `rename-verzeichnisse.md`).
+- **Erweiterung:**
+  - Auf dem Weg zum Node unterscheidet sie „nicht erreichbar“, „Ausgang unklar“ und „abgelehnt“.
+  - `stale_revision` ist ein gewöhnlicher Fehler; ein Fehler des Providers löst nie „Datei ist neuer“ aus.
+  - Leere Ordner gelten nur im jeweiligen Fenster.
+  - Bei `delete` und `rename` schickt sie kein `base_revision` (Befund `vscode-schreiben.md`).
+
+**Prüfung:**
+
+- **Tests:** `make check` vollständig grün. `go test -race` grün über `internal/node/...` und `internal/hub/...` sowie über die MCP-, Serve- und Abgleichstests in `cmd/kephalaion`.
+- **Erweiterung gegen den echten Node** (nach `make dev-install`, `home:eins` unter `test/schreiben/`, danach aufgeräumt): 118 Prüfungen, alle bestanden.
+- **Isolierter Aufbau im Scratchpad** („Hub nicht erreichbar“, unklarer Ausgang): 24 Prüfungen, alle bestanden.
+- **Noch offen:** die Handgriffe im echten VS Code (Liste in `docs/vscode.md`, „Umsetzung: Schreiben“) geht der Nutzer selbst durch. `.vsix`: `vscode/kephalaion-0.0.5.vsix` (gitignored, nicht installiert).
+
+**Geänderte Dateien** (nur die Commits dieses Tasks, summiert über `git log --numstat`; 61 Dateien, +7372 / −606):
+
+```
+ README.md                                     |  +72  -11
+ cmd/kephalaion/bgsync.go, bgsync_test.go      | +142  -15
+ cmd/kephalaion/configcmd.go                   |   +2   -2
+ cmd/kephalaion/mcpwrite_test.go               | +455   -2
+ cmd/kephalaion/serve.go, serve_test.go        |  +78  -30
+ cmd/kephalaion/synccmd.go, synccmd_test.go    | +169  -15
+ docs/begriffe.md                              |  +58  -32
+ docs/fortschritt.md                           |  +29   -8
+ docs/konzept.md                               |  +66  -26
+ docs/vertrag.md                               | +259  -68
+ docs/vscode.md                                | +149  -23
+ internal/contract/contract.go (+ Test)        | +220  -14
+ internal/contract/httpapi/* (+ write_test.go) | +559  -24
+ internal/hub/replication/* (+ Tests)          | +855  -13
+ internal/hub/store/* (write.go, rename_test.go, write_test.go, …) | +1646 -82
+ internal/ident/ident.go (+ Test)              |  +75   -0
+ internal/node/mcpnode/* (write.go, rename_test.go, write_test.go, docenv_test.go, …) | +1589 -142
+ internal/node/replica/* (+ Tests)             | +236  -13
+ k-playbook-local/k-playbook.md                |  +67  -16
+ k-playbook-local/material/befunde/ (4 neue Befunde) | +168 -0
+ k-playbook-local/tasks/014-schreiben-ueber-mcp.md |   +6  -6
+ vscode/README.md, extension.js, package.json  | +476  -67
+```
+
+**Code-Änderungen** (Auszug; der volle Diff ist `git diff d08b739 7425394 -- cmd internal vscode`, 7890 Zeilen):
+
+Neu sind der Hub-Store `internal/hub/store/write.go` (`CreateDocumentAs`, `WriteDocumentAs`, `DeleteDocumentAs(…, recursive)`, `RenameDocumentAs`), die Hub-Seite des Vertrags `internal/hub/replication/write.go`, die Werkzeuge `internal/node/mcpnode/write.go` und das Schreiben in die Replica `replica.WriteRows`. Geändert sind `contract.Hub` samt `httpapi` (Pfade, Grenzen, keine Wiederholung), `localHub` und `nodeHubLink` in `cmd/kephalaion` sowie die Erweiterung. Die beiden tragenden Stellen:
+
+`internal/hub/store/write.go` — jeder Schreibvorgang, eine Transaktion, Account-Zeile zuerst:
+
+```go
+func (s *sqliteStore) writeAs(ctx context.Context, auth WriteAuth, collection string, fn func(w *docTx, rights contract.Rights) error) error {
+	sqlTx, tx, err := s.begin(ctx)
+	...
+	if err := lockAccount(ctx, tx, auth.Account); err != nil {
+		return err
+	}
+	user, err := accountUser(ctx, tx, auth)          // Hash in konstanter Zeit, gesperrt = ungültig
+	...
+	rights, err := readableRights(ctx, tx, auth, collection) // Collection, node_collections, SYSTEM:A:-Zeile
+	...
+	w := newDocTx(tx, user, auth.Account, auth.Carrier)
+	if err := fn(&w, rights); err != nil {
+		return err
+	}
+	return sqlTx.Commit()
+}
+
+func (w *docTx) mayChange(cur Document, rights contract.Rights, verb string) error {
+	if cur.CreatedBy == w.by {
+		if rights.Write { return nil }
+		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: write fehlt", ...)}
+	}
+	if rights.Supersede { return nil }
+	return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: gehört %s, supersede fehlt", ...)}
+}
+```
+
+`internal/contract/httpapi/client.go` — Schreibvorgänge genau einmal, nach dem Abschicken unklar:
+
+```go
+func (c *Client) write(ctx context.Context, op string, version int, auth contract.NodeAuth, req any) (contract.WriteResponse, error) {
+	var resp contract.WriteResponse
+	if err := c.call(ctx, op, version, auth, req, &resp, false, c.ShortTimeout); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return resp, nil
+}
+...
+		if !retry {
+			if ce.sent {
+				return fmt.Errorf("%w: %v", contract.ErrOutcomeUnknown, ce.err)
+			}
+			return ce.err
+		}
+```
+
+**Code-Review** (`engineering:code-review`, nur über den Diff):
+
+| Schwere | Stelle | Befund | Empfehlung |
+|---|---|---|---|
+| mittel (latent, PostgreSQL, unbestätigt) | `hub/store/write.go` `writeAs`; `documents.go` `DocumentRename` | `writeAs` sperrt nur die Zeile des eigenen Accounts; die globale Revisionssperre (`lazyRevision.get`) kommt erst nach `checkBase`, `name_taken` und `checkPathFree`, und die UPDATEs gehen nur über `id`. Unter SQLite schadet das nicht (`_txlock=immediate` serialisiert alle Schreiber). Unter PostgreSQL/READ COMMITTED könnten zwei Accounts beide `base_revision` bestehen und still überschreiben, oder zwei lebende Dokumente gleichen Namens entstehen. | Nach `lockAccount` sofort `LockRevision`, oder bedingte UPDATEs (`AND revision=$n AND deleted=0`) mit Zeilenzahl prüfen. |
+| mittel | `mcpnode/write.go` `hubFailure`; `vscode/extension.js` | Nach einer Ablehnung (`stale_revision`, `not_found`, `name_taken`) stößt der Node keinen Abgleich an. Bei `sync_interval 0` scheitert weiteres Speichern mit `stale_revision`, bis ein anderer Anlass die Replica nachzieht. | Auch nach diesen Codes den Abgleich anstoßen; in der Erweiterung `stale_revision` mit klarer Meldung („neuere Fassung am Hub, neu laden“). |
+| mittel | `hub/store/write.go` Verzeichnis-Vorgänge | Bei Verzeichnissen je Dokument ein UPDATE, ein INSERT in `actions` und ein SELECT (etwa 3N Anweisungen) in einer Transaktion unter der globalen Schreibsperre. | Mengenbasiert: ein UPDATE über `dirRange`, `INSERT … SELECT`, ein SELECT je Revision. |
+| niedrig (unbestätigt) | `write.go`, `documents.go` `dirRange` | `name >= 'dir/' AND name < 'dir0'` stimmt nur bei Byte-Sortierung; unter PostgreSQL mit Locale-Kollation könnten Dokumente fehlen. | `COLLATE "C"` oder Präfixvergleich über `substr`. |
+| niedrig | `httpapi/server.go`; `mcpnode` | UTF-8-Schutz mit Lücken: `\ud800` als JSON-Escape wird still zu U+FFFD. Der MCP-Eingang prüft ungültige Bytes nicht selbst, und das go-sdk ersetzt sie still. | Body am `/mcp`-Eingang mit `utf8.Valid` prüfen; einzelne Surrogat-Escapes im Hub ablehnen. |
+| niedrig | `vscode/extension.js` `writeFile` | `base_revision` kommt aus einem frischen `read` beim Speichern, nicht aus dem geladenen Stand. Ein Abgleich im Fenster zwischen der mtime-Prüfung von VS Code und `read` wird still überschrieben. | Die Revision je URI beim `readFile` merken und diese schicken. |
+| niedrig | `vscode/extension.js` `fetch` | Kein Timeout: Hängt der Node, hängt das Speichern. | `AbortSignal.timeout` etwas über 30 s, Abbruch als „unklar“. |
+| niedrig (unbestätigt) | `cmd/kephalaion/serve.go` `startRole` | Die Node-Rolle setzt in `startRole` keinen Handler mehr, das macht erst `serve`. Ein anderer Aufrufer fiele auf `http.DefaultServeMux` zurück. | Standard `http.NotFoundHandler()`, den `serve` ersetzt. |
+
+Unter SQLite keine kritischen Fehler. Reihenfolge der Prüfungen, keine Wiederholung, die Einordnung als unklar über `local` und `http`, die Verzeichnisgrenzen (`a` / `a-b` / `a/`) und der Schutz vor Token- und Inhaltslecks stimmen am Diff mit dem Vertrag überein.
+
+**Intent-Alignment:** Ja. Alle Intent-Punkte sind umgesetzt und über local, HTTP und MCP getestet: der Hub als einziger Schreiber mit Prüfung von Anmeldung, Recht, Form und Vorbedingung; Urheber; `name_taken`/`stale_revision` als endgültige Fehler; die Replica vor der Antwort; keine Wiederholung und drei unterscheidbare Meldungen; Lesen offline; Verzeichnisse als Ganzes. In VS Code gehen Speichern, neue Dateien, Löschen und Umbenennen; Drag & Drop ist über den Ersatz für `vscode` geprüft. Rest: Die Handgriffe im echten VS Code sind noch von Hand durchzugehen. `supersede` ohne `write` ist in der Erweiterung bewusst schreibgeschützt.
