@@ -8,8 +8,9 @@ Prozess, `http` ist HTTP mit JSON (`internal/contract/httpapi`, siehe „HTTP“
 dasselbe; die Tests des Vertrags laufen gegen beide.
 
 Die Vorgänge: `whoami` (wer bin ich, gilt dieser Account und wem gehört er), `rotate` (Token
-eines Accounts ersetzen), `sync` (Abgleich) und die Schreibvorgänge `create`, `write` und
-`delete` (ein Dokument anlegen, ersetzen, löschen — im Namen eines Accounts). Begriffe:
+eines Accounts ersetzen), `sync` (Abgleich) und die Schreibvorgänge `create`, `write`, `delete`
+und `rename` (ein Dokument anlegen, ersetzen, löschen, umbenennen — `delete` und `rename` auch
+ein Verzeichnis als Ganzes —, im Namen eines Accounts). Begriffe:
 [`begriffe.md`](begriffe.md); Hintergrund: [`konzept.md`](konzept.md), „Abgleich“,
 „Authentifizierung“ und „Transport, Token und Fehlschläge“.
 
@@ -211,9 +212,11 @@ Clients gegen sie. `content` ist JSON in genau dieser Form:
 
 ## Schreibvorgänge
 
-`create`, `write` und `delete` schreiben ein Dokument im Namen eines Accounts; der Node ist der
+`create`, `write`, `delete` und `rename` schreiben im Namen eines Accounts; der Node ist der
 Träger. Ob geschrieben werden darf, entscheidet allein der Hub — so wirkt eine Sperre beim
-Schreiben sofort. Jeder Vorgang ist eine Transaktion mit höchstens einer Revision.
+Schreiben sofort. Jeder Vorgang ist eine Transaktion mit höchstens einer Revision. `delete` und
+`rename` nehmen auch ein **Verzeichnis** — einen Namen, unter dem lebende Dokumente liegen
+(`<name>/…`) —, als Ganzes: alle Dokumente darunter, alles oder nichts, eine Revision.
 
 ### Felder
 
@@ -222,9 +225,11 @@ Schreiben sofort. Jeder Vorgang ist eine Transaktion mit höchstens einer Revisi
 | Fassung, Node, Token | — (Pfad, Header) | wie bei `sync`; der Node ist der Träger |
 | Account | `account` | `{"account": <name>, "token": <token>}`, wie bei `whoami` |
 | Collection | `collection` | die Collection am Hub |
-| Name | `name` | der Name des Dokuments |
+| Name | `name` | der Name des Dokuments, bei `delete` und `rename` auch eines Verzeichnisses |
 | Inhalt | `content` | nur `create` und `write`, Pflicht: der ganze Inhalt, auch leer (`""`) |
-| Vorbedingung | `base_revision` | nur `write` und `delete`, wahlweise: die Revision, auf der der Vorgang beruht |
+| Vorbedingung | `base_revision` | nur `write`, `delete` und `rename`, wahlweise: die Revision, auf der der Vorgang beruht; nur für ein Dokument |
+| Rekursiv | `recursive` | nur `delete`, wahlweise, Standard falsch: ein Verzeichnis mit allen Dokumenten darunter löschen |
+| Neuer Name | `new_name` | nur `rename`, Pflicht: der neue Name in derselben Collection |
 
 ### Prüfung
 
@@ -232,10 +237,12 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
 
 1. **Fassung** (`unsupported_version`).
 2. **Form der Anfrage**, ohne Datenbank (`invalid`): der Name nach den Pfadregeln
-   (`ident.CheckDocName`, kein `SYSTEM:`); der Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB
+   (`ident.CheckDocName`, kein `SYSTEM:`) — die Wurzel einer Collection (`""`) ist kein Name,
+   `delete` löscht sie nie; der Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB
    (`contract.MaxDocumentBytes`), leer ist erlaubt; `base_revision`, wenn angegeben, ≥ 1 — eine
-   Revision 0 gibt es nicht. Die Collection gehört nicht dazu: Eine ungültige gibt es nicht,
-   das ist `not_readable`.
+   Revision 0 gibt es nicht; bei `rename` der neue Name nach denselben Regeln, weder gleich dem
+   alten noch darunter (`x` nach `x/y`; `ident.CheckRename`). Die Collection gehört nicht dazu:
+   Eine ungültige gibt es nicht, das ist `not_readable`.
 3. **Anmeldung des Nodes** (`unauthenticated`).
 4. Der Rest in der Transaktion des Vorgangs. Ihre erste Anweisung sperrt die Zeile des Accounts
    in `accounts`; danach:
@@ -246,17 +253,19 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
      Antwort für alle drei.
    - **Recht** aus dieser Zeile: `write` für `create` und für Eigenes — `created_by` ist der
      User des Accounts, gleich über welchen seiner Accounts es angelegt wurde —, `supersede`
-     für Fremdes; `write` ist dafür nicht nötig. Sonst `forbidden`, die Meldung nennt den Grund
-     („gehört admin, supersede fehlt“).
+     für Fremdes; `write` ist dafür nicht nötig. Bei einem Verzeichnis gilt das je Dokument
+     darunter; ein einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`,
+     die Meldung nennt den Grund („gehört admin, supersede fehlt“).
    - **Name und Vorbedingung** je Vorgang, siehe unten. `base_revision` weicht von der Revision
      des lebenden Dokuments ab: `stale_revision`, die Meldung nennt die aktuelle. Die Revision
      ist global und steigt nur, Gleichheit genügt. Ohne `base_revision` gilt keine
      Vorbedingung.
 
 **Urheber:** `created_by`/`updated_by` ist der User des Accounts. `actions` bekommt je Dokument
-eine Zeile: `account` = der Account, `carrier` = der Node, `action` = `create`, `update` oder
-`delete`, dazu `document_id` und die Revision des Vorgangs. Fehlversuche stehen nicht in
-`actions`, nur im Log des Hubs (ohne Token, ohne Inhalt).
+eine Zeile: `account` = der Account, `carrier` = der Node, `action` = `create`, `update`,
+`delete` oder `rename`, dazu `document_id` und die Revision des Vorgangs — bei einem
+Verzeichnis je Dokument darunter eine, alle unter derselben Revision. Fehlversuche stehen nicht
+in `actions`, nur im Log des Hubs (ohne Token, ohne Inhalt).
 
 ### create
 
@@ -273,9 +282,43 @@ der Hub nichts: keine neue Revision, die Antwort trägt die bestehende Zeile und
 
 ### delete
 
-Setzt eine Löschmarke auf ein lebendes Dokument (Inhalt `null`, `deleted` wahr, neue Revision);
-gibt es keines: `not_found` — auch für einen Namen, unter dem nur Dokumente liegen (ein
-Verzeichnis). Recht und `base_revision` wie bei `write`.
+Setzt eine Löschmarke auf ein lebendes Dokument (Inhalt `null`, `deleted` wahr, neue Revision).
+Recht und `base_revision` wie bei `write`; `recursive` gilt für ein Dokument nicht — es wird
+gelöscht wie ohne, kein Fehler.
+
+Ist `name` ein **Verzeichnis**, nur mit `recursive` wahr, sonst `invalid` („ist ein
+Verzeichnis“): Dann bekommen alle lebenden Dokumente darunter eine Löschmarke, unter einer
+Revision, alles oder nichts. `base_revision` gibt es für ein Verzeichnis nicht (`invalid`). Ist
+`name` weder Dokument noch Verzeichnis — auch wenn darunter nur Löschmarken liegen —:
+`not_found`.
+
+Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis `recursive` und
+`base_revision` (`invalid`); das Recht; bei einem Dokument `base_revision`.
+
+### rename
+
+Gibt einem lebenden Dokument den Namen `new_name`, in derselben Collection. Die `id` bleibt,
+ebenso Inhalt, `meta` und `created_by`; der Name ist neu, dazu Revision, `updated_at` und
+`updated_by`. Recht und `base_revision` wie bei `write`.
+
+Ist `name` ein **Verzeichnis**, bekommen alle lebenden Dokumente darunter den neuen Präfix
+(`name/a/b.md` → `new_name/a/b.md`), unter einer Revision, alles oder nichts; jeder neue Name
+muss den Pfadregeln folgen (sonst `invalid`, etwa zu lang). `base_revision` gibt es für ein
+Verzeichnis nicht (`invalid`). Weder Dokument noch Verzeichnis: `not_found`. Über Collections
+oder Hubs hinweg geht `rename` nicht.
+
+**Das Ziel** — geprüft im Stand vor dem Umbenennen; liegt die Quelle im Ziel (`x/y` nach `x`),
+belegt sie es selbst:
+
+- **Belegt** ist es für ein Dokument, wenn ein lebendes Dokument `new_name` heißt, für ein
+  Verzeichnis, wenn es das Verzeichnis `new_name` schon gibt: `name_taken`. Nichts wird
+  überschrieben, zwei Verzeichnisse werden nicht zusammengelegt. Eine Löschmarke unter dem
+  Namen hindert nicht.
+- **Datei und Verzeichnis zugleich** wie bei `create`: ein Dokument auf ein Verzeichnis, ein
+  Verzeichnis auf ein Dokument, oder ein Dokument über `new_name`: `path_conflict`.
+
+Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis die neuen Namen und
+`base_revision` (`invalid`); das Recht; bei einem Dokument `base_revision`; zuletzt das Ziel.
 
 ### Antwort
 
@@ -284,7 +327,12 @@ Verzeichnis). Recht und `base_revision` wie bei `write`.
 | Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
 | Fassung | `version` | 1 |
 | Revision | `revision` | die Revision des Vorgangs; bei `write` mit unverändertem Inhalt die bestehende |
-| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke |
+| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke, bei `rename` die Zeile unter dem neuen Namen; bei einem Verzeichnis alle Dokumente darunter, nach Name |
+
+Ob ein Vorgang ein Dokument oder ein Verzeichnis traf, zeigen die Zeilen: ein Dokument ist genau
+eine Zeile unter `name` (bei `rename` unter `new_name`), ein Verzeichnis sind Zeilen, die alle
+darunter liegen. Nach `rename` ersetzt der Node die Zeilen per `id` — der alte Name ist damit
+aus seiner Replica verschwunden.
 
 Die Antwort ist die Wahrheit, nicht die Anfrage: Der Node übernimmt `rows` in seine Replica.
 Alles, was sie braucht, liest der Hub vor dem Commit — die `hub_id` vor der Transaktion, die
@@ -295,8 +343,8 @@ Zeilen in ihr; danach stellt er sie nur noch zusammen.
 `whoami` und `sync` ändern nichts; ein Transport darf sie wiederholen (über HTTP siehe
 „Wiederholung“). `rotate` und die Schreibvorgänge schickt ein Transport **genau einmal**, nie
 ein zweites Mal: Nach `rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch
-ergäbe `name_taken` oder einen Konflikt mit sich selbst. Einen Schlüssel, an dem der Hub eine
-Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier:
+ergäbe `name_taken`, `not_found` oder einen Konflikt mit sich selbst. Einen Schlüssel, an dem
+der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier:
 
 - **Erfolg** — die Antwort.
 - **Abgelehnt** — ein Fehler des Vertrags (ein Code unten), endgültig. Der Hub hat nichts
@@ -328,11 +376,11 @@ nichts geändert.
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
 | `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr — dieselbe Meldung für alle drei (Schreibvorgänge) |
 | `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes; die Meldung nennt den Grund |
-| `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`, `delete`) |
-| `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`) |
-| `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`) |
+| `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
+| `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
+| `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |
 | `stale_revision` | 409 | das Dokument hat nicht die Revision `base_revision`; die Meldung nennt die aktuelle |
-| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, kein gültiges JSON; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
+| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
 | `unsupported_version` | 404 | Fassung nicht unterstützt |
 
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
@@ -343,8 +391,8 @@ ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP a
 ## HTTP
 
 - **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/sync`,
-  `/v1/create`, `/v1/write`, `/v1/delete`. Die Fassung im Pfad ist die Fassung des Vertrags.
-  Eine fremde Fassung (`/v2/…`, auch `/v0/…`) beantwortet der Hub mit 404 und
+  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`. Die Fassung im Pfad ist die Fassung
+  des Vertrags. Eine fremde Fassung (`/v2/…`, auch `/v0/…`) beantwortet der Hub mit 404 und
   `unsupported_version`, vor der Anmeldung; ein unbekannter Vorgang ist 404 mit `invalid`, noch
   vor dem Lesen des Bodys; eine andere Methode als POST 405.
 - **Anmeldung des Nodes** in Headern: `X-Keph-Node: <name>` und `Authorization: Bearer
@@ -353,9 +401,9 @@ ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP a
   sonst legte ein vergessenes Feld still ein leeres Dokument an oder leerte eines.
 - **UTF-8:** JSON ist UTF-8; ein Body mit ungültigem UTF-8 ist kein gültiges JSON (`invalid`).
   `encoding/json` ersetzte solche Bytes still durch U+FFFD, der Hub schriebe einen anderen Namen
-  oder Inhalt als gemeint. Der Client schickt deshalb einen Schreibvorgang, dessen Name oder
-  Inhalt kein gültiges UTF-8 ist, nicht ab und meldet `invalid` — dieselbe Antwort wie über
-  `local`.
+  oder Inhalt als gemeint. Der Client schickt deshalb einen Schreibvorgang, dessen Name, neuer
+  Name oder Inhalt kein gültiges UTF-8 ist, nicht ab und meldet `invalid` — dieselbe Antwort
+  wie über `local`.
 - **Antwort:** 200 mit JSON, gzip-komprimiert, wenn die Anfrage `Accept-Encoding: gzip` trägt
   (der Client des Nodes bittet immer darum). Fehler: Status nach der Tabelle oben, Body
   `{"code": …, "message": …}`. Der Client unterscheidet Fehler am Code im Body, nicht am
@@ -393,7 +441,9 @@ ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP a
 
 - **Ein großer Import ist eine unbegrenzte Seite.** `hub import` schreibt alle Dokumente unter
   einer Revision, und eine Revision kommt immer ganz. Über HTTP wird das später ein Datenstrom
-  oder eine Obergrenze je Schreibvorgang; in Fassung 1 gibt es kein Limit.
+  oder eine Obergrenze je Schreibvorgang; in Fassung 1 gibt es kein Limit. Dasselbe gilt für
+  `delete` und `rename` eines großen Verzeichnisses: eine Revision, und die Antwort trägt jede
+  Zeile — bei `rename` samt Inhalt.
 - **Wiederherstellung aus einer Sicherung** braucht eine neue `hub_id` (siehe oben).
 - **Kein Schlüssel für Wiederholungen.** Nach unklarem Ausgang eines Schreibvorgangs sieht der
   Aufrufer nach, statt zu wiederholen. Ein Schlüssel, an dem der Hub eine Wiederholung erkennt,

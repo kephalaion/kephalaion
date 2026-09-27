@@ -173,3 +173,7 @@ func (f *fakeHub) Write(context.Context, contract.WriteRequest) (contract.WriteR
 func (f *fakeHub) Delete(context.Context, contract.DeleteRequest) (contract.WriteResponse, error) {
 	return contract.WriteResponse{}, errors.New("delete: in der Attrappe nicht umgesetzt")
 }
+
+func (f *fakeHub) Rename(context.Context, contract.RenameRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("rename: in der Attrappe nicht umgesetzt")
+}

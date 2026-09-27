@@ -23,8 +23,8 @@ import (
 // Bearer <token>.
 const HeaderNode = "X-Keph-Node"
 
-// Die Vorgänge, je ein Pfad /v<Fassung>/<Vorgang>. OpCreate, OpWrite und
-// OpDelete sind die Schreibvorgänge.
+// Die Vorgänge, je ein Pfad /v<Fassung>/<Vorgang>. OpCreate, OpWrite,
+// OpDelete und OpRename sind die Schreibvorgänge.
 const (
 	OpWhoami = "whoami"
 	OpRotate = "rotate"
@@ -32,6 +32,7 @@ const (
 	OpCreate = "create"
 	OpWrite  = "write"
 	OpDelete = "delete"
+	OpRename = "rename"
 )
 
 // MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate und sync:
@@ -51,7 +52,7 @@ func bodyLimit(op string) (limit int64, ok bool) {
 	switch op {
 	case OpWhoami, OpRotate, OpSync:
 		return MaxBodyBytes, true
-	case OpCreate, OpWrite, OpDelete:
+	case OpCreate, OpWrite, OpDelete, OpRename:
 		return MaxWriteBodyBytes, true
 	}
 	return 0, false

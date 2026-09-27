@@ -28,7 +28,7 @@ type writeOp struct {
 	call func(c *Client, ctx context.Context) (contract.WriteResponse, error)
 }
 
-// writeOps sind die drei Schreibvorgänge, je mit einer kleinen Anfrage.
+// writeOps sind die Schreibvorgänge, je mit einer kleinen Anfrage.
 func writeOps() []writeOp {
 	base := int64(3)
 	create := contract.CreateRequest{Version: 1, Auth: auth, Account: writeAccount, Collection: "a", Name: "n.md",
@@ -37,10 +37,30 @@ func writeOps() []writeOp {
 		Content: "geheimer Inhalt", BaseRevision: &base}
 	del := contract.DeleteRequest{Version: 1, Auth: auth, Account: writeAccount, Collection: "a", Name: "n.md",
 		BaseRevision: &base}
+	delDir := contract.DeleteRequest{Version: 1, Auth: auth, Account: writeAccount, Collection: "a", Name: "dir",
+		Recursive: true}
+	rename := contract.RenameRequest{Version: 1, Auth: auth, Account: writeAccount, Collection: "a", Name: "n.md",
+		NewName: "neu/n.md", BaseRevision: &base}
 	return []writeOp{
 		{OpCreate, create, func(c *Client, ctx context.Context) (contract.WriteResponse, error) { return c.Create(ctx, create) }},
 		{OpWrite, write, func(c *Client, ctx context.Context) (contract.WriteResponse, error) { return c.Write(ctx, write) }},
 		{OpDelete, del, func(c *Client, ctx context.Context) (contract.WriteResponse, error) { return c.Delete(ctx, del) }},
+		{OpDelete, delDir, func(c *Client, ctx context.Context) (contract.WriteResponse, error) { return c.Delete(ctx, delDir) }},
+		{OpRename, rename, func(c *Client, ctx context.Context) (contract.WriteResponse, error) { return c.Rename(ctx, rename) }},
+	}
+}
+
+// Jeder Schreibvorgang hat die Grenze der Schreibvorgänge, auch die ohne
+// Inhalt: Ein Hub vor Task 014 und ein neuer sollen sich nicht je Vorgang
+// unterscheiden.
+func TestWriteBodyLimit(t *testing.T) {
+	for _, op := range []string{OpCreate, OpWrite, OpDelete, OpRename} {
+		if limit, ok := bodyLimit(op); !ok || limit != MaxWriteBodyBytes {
+			t.Errorf("%s: Grenze %d, %v", op, limit, ok)
+		}
+	}
+	if _, ok := bodyLimit("move"); ok {
+		t.Error("unbekannter Vorgang hat eine Grenze")
 	}
 }
 
@@ -224,7 +244,7 @@ func TestUnknownOperation(t *testing.T) {
 	current := NewHandler(&echoHub{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, op, _ := parsePath(r.URL.Path)
-		if op == OpCreate || op == OpWrite || op == OpDelete {
+		if op == OpCreate || op == OpWrite || op == OpDelete || op == OpRename {
 			calls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
@@ -288,6 +308,14 @@ func TestWriteInvalidUTF8(t *testing.T) {
 		},
 		"delete Name": func() error {
 			_, err := c.Delete(ctx, contract.DeleteRequest{Version: 1, Auth: auth, Name: "n\xff.md"})
+			return err
+		},
+		"rename Name": func() error {
+			_, err := c.Rename(ctx, contract.RenameRequest{Version: 1, Auth: auth, Name: "n\xff.md", NewName: "neu.md"})
+			return err
+		},
+		"rename neuer Name": func() error {
+			_, err := c.Rename(ctx, contract.RenameRequest{Version: 1, Auth: auth, Name: "n.md", NewName: "neu\xff.md"})
 			return err
 		},
 	} {

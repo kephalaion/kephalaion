@@ -135,6 +135,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.Version, req.Auth = version, auth
 		reqlog.Note(ctx, "account", req.Account.Account)
 		resp, err = h.hub.Delete(ctx, req)
+	case OpRename:
+		var req contract.RenameRequest
+		if !decode(w, r, body, &req) {
+			return
+		}
+		req.Version, req.Auth = version, auth
+		reqlog.Note(ctx, "account", req.Account.Account)
+		resp, err = h.hub.Rename(ctx, req)
 	default:
 		// bodyLimit kennt den Vorgang, der Handler nicht: ein Fehler hier.
 		writeError(w, r, http.StatusNotFound, string(contract.CodeInvalid), fmt.Sprintf("unbekannter Vorgang %q", op))

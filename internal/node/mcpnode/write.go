@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,9 +15,9 @@ import (
 	"github.com/kephalaion/kephalaion/internal/reqlog"
 )
 
-// Die Werkzeuge, die schreiben (create, write, delete): Der Node prüft
-// Anmeldung und Lesbarkeit wie beim Lesen gegen die Replica (access.go) und
-// reicht Account und Token dann an den Hub; ob geschrieben werden darf,
+// Die Werkzeuge, die schreiben (create, write, delete, rename): Der Node
+// prüft Anmeldung und Lesbarkeit wie beim Lesen gegen die Replica (access.go)
+// und reicht Account und Token dann an den Hub; ob geschrieben werden darf,
 // entscheidet allein der Hub. Nach Erfolg schreibt der Node die Zeilen der
 // Antwort in die Replica, bevor er antwortet, und stößt den Abgleich des Hubs
 // an, ohne zu warten — ebenso nach unklarem Ausgang. Nie wiederholt.
@@ -88,15 +89,28 @@ type WriteInput struct {
 // DeleteInput sind die Argumente von delete.
 type DeleteInput struct {
 	Collection   string `json:"collection" jsonschema:"<hub>:<collection>, Hub-Teil entbehrlich bei nur einem Hub"`
-	Name         string `json:"name" jsonschema:"Name des Dokuments in der Collection"`
-	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der das Löschen beruht (aus read); hat das Dokument eine andere: stale_revision"`
+	Name         string `json:"name" jsonschema:"Name des Dokuments oder Verzeichnisses in der Collection"`
+	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der das Löschen beruht (aus read); hat das Dokument eine andere: stale_revision. Nur für Dokumente"`
+	Recursive    bool   `json:"recursive,omitempty" jsonschema:"ein Verzeichnis mit allen Dokumenten darunter löschen; ohne es ist ein Verzeichnis invalid. Für ein Dokument ohne Belang"`
 }
 
-// WriteOutput ist die Antwort von create, write und delete: das Dokument, wie
-// der Hub es nach dem Vorgang meldet — bei delete die Löschmarke. Bei einem
-// Fehler (isError) tragen nur Address, Name und Error etwas.
+// RenameInput sind die Argumente von rename.
+type RenameInput struct {
+	Collection   string `json:"collection" jsonschema:"<hub>:<collection>, Hub-Teil entbehrlich bei nur einem Hub"`
+	Name         string `json:"name" jsonschema:"Name des Dokuments oder Verzeichnisses in der Collection"`
+	NewName      string `json:"new_name" jsonschema:"der neue Name in derselben Collection; nicht belegt, nicht unter dem alten"`
+	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der das Umbenennen beruht (aus read); hat das Dokument eine andere: stale_revision. Nur für Dokumente"`
+}
+
+// WriteOutput ist die Antwort von create, write, delete und rename: das
+// Dokument, wie der Hub es nach dem Vorgang meldet — bei delete die
+// Löschmarke, bei rename unter dem neuen Namen. Nennt der Aufruf ein
+// Verzeichnis (delete mit recursive, rename), ist Kind directory und die
+// Antwort trägt Name, Revision, Count und Updated. Bei einem Fehler (isError)
+// tragen nur Address, Name — der des Aufrufs, bei rename der alte — und
+// Error etwas.
 type WriteOutput struct {
-	// Kind ist document; fehlt bei einem Fehler.
+	// Kind ist document oder directory; fehlt bei einem Fehler.
 	Kind string `json:"kind,omitempty"`
 	// Address ist die Collection als <hub>:<collection>; bei einem Fehler vor
 	// dem Auflösen der Adresse die Angabe des Aufrufs.
@@ -106,8 +120,12 @@ type WriteOutput struct {
 	// Revision ist die Revision des Vorgangs; bei write mit unverändertem
 	// Inhalt die bestehende.
 	Revision int64 `json:"revision,omitempty"`
-	// Deleted: das Dokument ist gelöscht (delete).
-	Deleted bool   `json:"deleted,omitempty"`
+	// Deleted: das Dokument ist gelöscht, bei einem Verzeichnis alle darunter
+	// (delete).
+	Deleted bool `json:"deleted,omitempty"`
+	// Count ist bei einem Verzeichnis die Zahl der Dokumente, die der
+	// Vorgang geschrieben hat.
+	Count   int    `json:"count,omitempty"`
 	Created *Stamp `json:"created,omitempty"`
 	Updated *Stamp `json:"updated,omitempty"`
 	// Size ist die Größe des Inhalts in Bytes; fehlt bei einer Löschmarke.
@@ -132,17 +150,36 @@ const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dok
 const writeDescription = "Ersetzt den Inhalt eines Dokuments, über den Hub. Mit base_revision nur, wenn das " +
 	"Dokument noch diese Revision hat, sonst stale_revision. Antwort wie create."
 
-const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). base_revision wie bei write. " +
-	"Antwort wie create, mit deleted."
+const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). base_revision wie bei write, nur für " +
+	"Dokumente. Ein Verzeichnis nur mit recursive: alle Dokumente darunter, alles oder nichts. Antwort wie create, " +
+	"mit deleted; bei einem Verzeichnis kind directory und count."
+
+const renameDescription = "Benennt ein Dokument oder ein Verzeichnis um, über den Hub, in derselben Collection; die " +
+	"id bleibt, ein Verzeichnis alles oder nichts. Ist das Ziel belegt: name_taken, nichts wird überschrieben. " +
+	"base_revision wie bei write, nur für Dokumente. Antwort wie create unter dem neuen Namen; bei einem " +
+	"Verzeichnis kind directory und count."
 
 // writeOp ist ein Aufruf eines Werkzeugs, das schreibt: Werkzeug, Adresse,
-// Name und der Vorgang am Hub.
+// Name und der Vorgang am Hub. newName ist bei rename der neue Name; um ihn
+// geht dann die Antwort. dir sagt, dass der Vorgang auch ein Verzeichnis
+// nehmen kann (delete, rename).
 type writeOp struct {
 	tool       string
 	collection string
 	name       string
+	rename     bool
+	newName    string
+	dir        bool
 	call       func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 		collection string) (contract.WriteResponse, error)
+}
+
+// result ist der Name, um den es in der Antwort geht: bei rename der neue.
+func (op writeOp) result() string {
+	if op.rename {
+		return op.newName
+	}
+	return op.name
 }
 
 func (n *Node) create(ctx context.Context, req *mcp.CallToolRequest, in CreateInput) (*mcp.CallToolResult, WriteOutput, error) {
@@ -164,11 +201,21 @@ func (n *Node) replace(ctx context.Context, req *mcp.CallToolRequest, in WriteIn
 }
 
 func (n *Node) remove(ctx context.Context, req *mcp.CallToolRequest, in DeleteInput) (*mcp.CallToolResult, WriteOutput, error) {
-	return n.write(ctx, req, writeOp{tool: "delete", collection: in.Collection, name: in.Name,
+	return n.write(ctx, req, writeOp{tool: "delete", collection: in.Collection, name: in.Name, dir: true,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: account,
-				Collection: coll, Name: in.Name, BaseRevision: in.BaseRevision})
+				Collection: coll, Name: in.Name, BaseRevision: in.BaseRevision, Recursive: in.Recursive})
+		}})
+}
+
+func (n *Node) rename(ctx context.Context, req *mcp.CallToolRequest, in RenameInput) (*mcp.CallToolResult, WriteOutput, error) {
+	return n.write(ctx, req, writeOp{tool: "rename", collection: in.Collection, name: in.Name, rename: true,
+		newName: in.NewName, dir: true,
+		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
+			coll string) (contract.WriteResponse, error) {
+			return hub.Rename(ctx, contract.RenameRequest{Version: contract.Version, Auth: node, Account: account,
+				Collection: coll, Name: in.Name, NewName: in.NewName, BaseRevision: in.BaseRevision})
 		}})
 }
 
@@ -216,6 +263,14 @@ func (n *Node) doWrite(ctx context.Context, req *mcp.CallToolRequest, op writeOp
 	if err := ident.CheckDocName(op.name); err != nil {
 		return &toolError{msg: "name: " + err.Error()}
 	}
+	if op.rename {
+		if err := ident.CheckDocName(op.newName); err != nil {
+			return &toolError{msg: "new_name: " + err.Error()}
+		}
+		if err := ident.CheckRename(op.name, op.newName); err != nil {
+			return &toolError{msg: err.Error()}
+		}
+	}
 	// Dieselbe Prüfung wie beim Lesen: angemeldet, Replica da, Collection
 	// lesbar. Die Replica bleibt nicht offen, während der Hub arbeitet.
 	a, err := r.open(ctx, t)
@@ -243,7 +298,7 @@ func (n *Node) doWrite(ctx context.Context, req *mcp.CallToolRequest, op writeOp
 	if err != nil {
 		return n.hubFailure(ctx, h, t, err)
 	}
-	*out = n.accept(ctx, h, t, op.name, resp)
+	*out = n.accept(ctx, h, t, op, resp)
 	n.kick(h)
 	return nil
 }
@@ -303,25 +358,14 @@ func (n *Node) hubFailure(ctx context.Context, h store.Hub, t target, err error)
 
 // accept übernimmt die Antwort eines Erfolgs: Die Zeilen kommen in die
 // Replica, bevor der Client antwortet — so liefert read sofort die neue
-// Revision. Scheitert das, bleibt es ein Erfolg mit Hinweis; der Abgleich
-// holt nach. Auch bei abgebrochenem Aufruf wird noch geschrieben: Der Hub
-// hat gespeichert.
-func (n *Node) accept(ctx context.Context, h store.Hub, t target, name string, resp contract.WriteResponse) WriteOutput {
+// Revision, nach rename den neuen Namen (die Zeile ersetzt die alte per id).
+// Scheitert das, bleibt es ein Erfolg mit Hinweis; der Abgleich holt nach.
+// Auch bei abgebrochenem Aufruf wird noch geschrieben: Der Hub hat
+// gespeichert.
+func (n *Node) accept(ctx context.Context, h store.Hub, t target, op writeOp, resp contract.WriteResponse) WriteOutput {
+	name := op.result()
 	out := WriteOutput{Kind: KindDocument, Address: t.Address(), Name: name, Revision: resp.Revision}
-	row, found := -1, 0
-	var err error
-	for i, r := range resp.Rows {
-		switch {
-		case r.Collection != t.Collection:
-			err = fmt.Errorf("der Hub antwortet mit einer Zeile aus Collection %q", r.Collection)
-		case r.Name == name:
-			row = i
-			found++
-		}
-	}
-	if err == nil && found != 1 {
-		err = fmt.Errorf("der Hub antwortet mit %d Zeilen für %s, erwartet eine", found, name)
-	}
+	doc, dir, err := answerShape(t.Collection, name, op.dir, resp.Rows)
 	if err == nil {
 		err = replica.WriteRows(context.WithoutCancel(ctx), n.nodes, h, resp.HubID, resp.Rows)
 	}
@@ -330,16 +374,57 @@ func (n *Node) accept(ctx context.Context, h store.Hub, t target, name string, r
 		out.Note = "Am Hub gespeichert, aber nicht in die Replica übernommen: read zeigt den alten Stand, bis der " +
 			"Abgleich nachholt."
 	}
-	if row >= 0 {
-		r := resp.Rows[row]
-		out.ID, out.Deleted = r.ID, r.Deleted
-		out.Created, out.Updated = stamp(r.CreatedAt, r.CreatedBy), stamp(r.UpdatedAt, r.UpdatedBy)
-		if r.Content != nil {
-			size := int64(len(*r.Content))
+	switch {
+	case doc != nil:
+		out.ID, out.Deleted = doc.ID, doc.Deleted
+		out.Created, out.Updated = stamp(doc.CreatedAt, doc.CreatedBy), stamp(doc.UpdatedAt, doc.UpdatedBy)
+		if doc.Content != nil {
+			size := int64(len(*doc.Content))
 			out.Size = &size
 		}
+	case dir:
+		// Alle Zeilen eines Vorgangs tragen dieselbe Revision, dieselbe Zeit
+		// und denselben Urheber.
+		first := resp.Rows[0]
+		out.Kind, out.Count, out.Deleted = KindDirectory, len(resp.Rows), first.Deleted
+		out.Updated = stamp(first.UpdatedAt, first.UpdatedBy)
 	}
 	return out
+}
+
+// answerShape prüft die Zeilen einer Antwort: alle aus der Collection des
+// Ziels, und entweder genau eine unter name — ein Dokument, dann doc — oder,
+// wenn der Vorgang ein Verzeichnis nehmen kann (dirOK), mindestens eine und
+// alle unter name/ — ein Verzeichnis, dann dir. Sonst ein Fehler; ein
+// eindeutiges Dokument liefert es auch dann.
+func answerShape(collection, name string, dirOK bool, rows []contract.Row) (doc *contract.Row, dir bool, err error) {
+	at, under := 0, 0
+	for i, r := range rows {
+		switch {
+		case r.Collection != collection:
+			err = fmt.Errorf("der Hub antwortet mit einer Zeile aus Collection %q", r.Collection)
+		case r.Name == name:
+			at++
+			doc = &rows[i]
+		case dirOK && strings.HasPrefix(r.Name, name+"/"):
+			under++
+		default:
+			err = fmt.Errorf("der Hub antwortet mit %s, erwartet %s", r.Name, name)
+		}
+	}
+	if at != 1 {
+		doc = nil
+	}
+	switch {
+	case err != nil:
+		return doc, false, err
+	case at == 1 && under == 0:
+		return doc, false, nil
+	case at == 0 && under > 0:
+		return nil, true, nil
+	}
+	return doc, false, fmt.Errorf("der Hub antwortet mit %d Zeilen für %s und %d darunter, erwartet ein Dokument "+
+		"oder ein Verzeichnis", at, name, under)
 }
 
 // kick stößt den Abgleich eines Hub-Eintrags an, ohne zu warten.

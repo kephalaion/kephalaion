@@ -223,3 +223,42 @@ func TestWriteRows(t *testing.T) {
 		t.Error("abgelehnte Zeile geschrieben")
 	}
 }
+
+// Die Zeilen eines rename ersetzen die alten per id: Der alte Name ist
+// sofort weg, der neue da — ein Dokument wie ein ganzes Verzeichnis, ohne
+// den Stand zu ändern.
+func TestWriteRowsRename(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, "a")
+	e.hub.allowed = map[string]bool{"a": true}
+	e.put(t)
+	h := e.hubEntry()
+	x, d1, d2 := ulid.Make().String(), ulid.Make().String(), ulid.Make().String()
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{docRow(x, "a", "x.md", str("x"), 5),
+		docRow(d1, "a", "dir/a.md", str("a"), 6), docRow(d2, "a", "dir/sub/b.md", str("b"), 6)}); err != nil {
+		t.Fatal(err)
+	}
+	before := e.states()
+	renamed := []contract.Row{docRow(x, "a", "archiv/x.md", str("x"), 7)}
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, renamed); err != nil {
+		t.Fatal(err)
+	}
+	dir := []contract.Row{docRow(d1, "a", "neu/a.md", str("a"), 8), docRow(d2, "a", "neu/sub/b.md", str("b"), 8)}
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, dir); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"doc.md": "x", "archiv/x.md": "x", "neu/a.md": "a", "neu/sub/b.md": "b"}
+	if got := e.names("a"); !reflect.DeepEqual(got, want) {
+		t.Errorf("nach rename: %v", got)
+	}
+	rep := e.replica()
+	if _, err := rep.Document(ctx, "a", "x.md"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("alter Name: %v", err)
+	}
+	if d, err := rep.Document(ctx, "a", "neu/sub/b.md"); err != nil || d.ID != d2 || d.Revision != 8 {
+		t.Errorf("neuer Name: %+v, %v", d, err)
+	}
+	if after := e.states(); !reflect.DeepEqual(after, before) {
+		t.Errorf("Stand geändert: %v → %v", before, after)
+	}
+}

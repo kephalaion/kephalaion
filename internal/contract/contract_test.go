@@ -104,8 +104,8 @@ func TestAccountContent(t *testing.T) {
 }
 
 // Die Schreibvorgänge als JSON: Account als Objekt wie bei whoami, content
-// auch leer, base_revision nur, wenn gesetzt; Fassung und Anmeldung des
-// Nodes nie im Body.
+// auch leer, base_revision und recursive nur, wenn gesetzt; Fassung und
+// Anmeldung des Nodes nie im Body.
 func TestWriteJSON(t *testing.T) {
 	acc := AccountAuth{Account: "bob", Token: "keph_account"}
 	node := NodeAuth{Node: "laptop", Token: "keph_node"}
@@ -120,6 +120,12 @@ func TestWriteJSON(t *testing.T) {
 			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","content":"x","base_revision":4}`},
 		{DeleteRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md"},
 			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md"}`},
+		{DeleteRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "dir", Recursive: true},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"dir","recursive":true}`},
+		{RenameRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md", NewName: "neu/n.md"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","new_name":"neu/n.md"}`},
+		{RenameRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md", NewName: "m.md", BaseRevision: &base},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","new_name":"m.md","base_revision":4}`},
 	} {
 		b, err := json.Marshal(c.req)
 		if err != nil || string(b) != c.want {

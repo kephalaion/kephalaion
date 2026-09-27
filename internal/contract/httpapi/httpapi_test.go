@@ -24,8 +24,8 @@ type echoHub struct {
 	auth contract.NodeAuth
 	err  error
 	rows int
-	// last ist die letzte Schreibanfrage (CreateRequest, WriteRequest oder
-	// DeleteRequest).
+	// last ist die letzte Schreibanfrage (CreateRequest, WriteRequest,
+	// DeleteRequest oder RenameRequest).
 	last any
 }
 
@@ -48,6 +48,10 @@ func (e *echoHub) Write(_ context.Context, req contract.WriteRequest) (contract.
 }
 
 func (e *echoHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	return e.written(req.Auth, req.Version, req)
+}
+
+func (e *echoHub) Rename(_ context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
 	return e.written(req.Auth, req.Version, req)
 }
 

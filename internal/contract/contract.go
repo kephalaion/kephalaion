@@ -55,8 +55,12 @@ type Hub interface {
 	// Vorbedingung einer Revision.
 	Write(ctx context.Context, req WriteRequest) (WriteResponse, error)
 	// Delete setzt eine Löschmarke auf ein Dokument, wahlweise unter der
-	// Vorbedingung einer Revision.
+	// Vorbedingung einer Revision — mit Recursive auf alle Dokumente unter
+	// einem Verzeichnis.
 	Delete(ctx context.Context, req DeleteRequest) (WriteResponse, error)
+	// Rename gibt einem Dokument oder allen Dokumenten unter einem
+	// Verzeichnis einen neuen Namen; die id bleibt.
+	Rename(ctx context.Context, req RenameRequest) (WriteResponse, error)
 }
 
 // NodeAuth ist die Anmeldung des Nodes am Hub: sein Name dort und sein Token.
@@ -168,7 +172,8 @@ type WriteRequest struct {
 	BaseRevision *int64 `json:"base_revision,omitempty"`
 }
 
-// DeleteRequest setzt eine Löschmarke auf ein lebendes Dokument.
+// DeleteRequest setzt eine Löschmarke auf ein lebendes Dokument oder, mit
+// Recursive, auf alle Dokumente unter einem Verzeichnis.
 type DeleteRequest struct {
 	// Version ist die Fassung des Nodes; über HTTP im Pfad.
 	Version int `json:"-"`
@@ -177,13 +182,34 @@ type DeleteRequest struct {
 	Account    AccountAuth `json:"account"`
 	Collection string      `json:"collection"`
 	Name       string      `json:"name"`
-	// BaseRevision wie bei WriteRequest.
+	// BaseRevision wie bei WriteRequest; nur für ein Dokument, bei einem
+	// Verzeichnis invalid.
+	BaseRevision *int64 `json:"base_revision,omitempty"`
+	// Recursive löscht ein Verzeichnis mit allen Dokumenten darunter; ohne es
+	// ist ein Verzeichnis invalid. Für ein Dokument gilt es nicht.
+	Recursive bool `json:"recursive,omitempty"`
+}
+
+// RenameRequest gibt einem lebenden Dokument oder allen Dokumenten unter
+// einem Verzeichnis einen neuen Namen, in derselben Collection; die id
+// bleibt, ein belegtes Ziel wird nicht überschrieben.
+type RenameRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth       NodeAuth    `json:"-"`
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+	Name       string      `json:"name"`
+	// NewName ist der neue Name; weder gleich Name noch darunter.
+	NewName string `json:"new_name"`
+	// BaseRevision wie bei DeleteRequest.
 	BaseRevision *int64 `json:"base_revision,omitempty"`
 }
 
 // WriteResponse ist die Antwort jedes Schreibvorgangs (create, write,
-// delete). Sie ist die Wahrheit, nicht die Anfrage: Der Node übernimmt Rows
-// in seine Replica.
+// delete, rename). Sie ist die Wahrheit, nicht die Anfrage: Der Node
+// übernimmt Rows in seine Replica.
 type WriteResponse struct {
 	HubID   string `json:"hub_id"`
 	Version int    `json:"version"`
@@ -191,7 +217,10 @@ type WriteResponse struct {
 	// (write) die bestehende des Dokuments.
 	Revision int64 `json:"revision"`
 	// Rows sind die geschriebenen Zeilen in der Form von sync, bei delete
-	// die Löschmarken; bei unverändertem Inhalt die bestehende Zeile.
+	// die Löschmarken, bei rename die Zeilen unter den neuen Namen; bei
+	// unverändertem Inhalt die bestehende Zeile. Bei einem Verzeichnis alle
+	// Dokumente darunter, nach Name: Ein Dokument ist genau eine Zeile unter
+	// dem Namen (bei rename dem neuen), ein Verzeichnis sind Zeilen darunter.
 	Rows []Row `json:"rows"`
 }
 
@@ -296,9 +325,12 @@ const (
 	// CodeForbidden: dem Account fehlt das Recht — write für Neues und
 	// Eigenes, supersede für Fremdes; die Meldung nennt den Grund.
 	CodeForbidden Code = "forbidden"
-	// CodeNotFound: kein lebendes Dokument mit dem Namen (write, delete).
+	// CodeNotFound: kein lebendes Dokument mit dem Namen (write), bei delete
+	// und rename auch kein Verzeichnis.
 	CodeNotFound Code = "not_found"
-	// CodeNameTaken: ein lebendes Dokument trägt den Namen schon (create).
+	// CodeNameTaken: ein lebendes Dokument trägt den Namen schon (create,
+	// rename), oder das Verzeichnis gibt es schon (rename eines
+	// Verzeichnisses).
 	CodeNameTaken Code = "name_taken"
 	// CodePathConflict: der Name wäre zugleich Datei und Verzeichnis.
 	CodePathConflict Code = "path_conflict"

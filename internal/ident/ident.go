@@ -227,6 +227,42 @@ func DocAncestors(name string) []string {
 	return out
 }
 
+// CheckRename prüft ein Umbenennen von name nach newName nach den
+// Pfadregeln: beide Namen gültig (CheckDocName), das Ziel weder gleich der
+// Quelle noch in ihr — x nach x/y machte ein Verzeichnis zu seinem eigenen
+// Unterverzeichnis. Ob name ein Dokument oder ein Verzeichnis ist und ob das
+// Ziel frei ist, weiß erst die Datenbank.
+func CheckRename(name, newName string) error {
+	if err := CheckDocName(name); err != nil {
+		return err
+	}
+	if err := CheckDocName(newName); err != nil {
+		return fmt.Errorf("neuer Name: %w", err)
+	}
+	if newName == name {
+		return fmt.Errorf("Dokument %q: der neue Name ist der alte", name)
+	}
+	if strings.HasPrefix(newName, name+"/") {
+		return fmt.Errorf("Dokument %q: der neue Name %q liegt darunter; nichts kann in sich selbst wandern", name, newName)
+	}
+	return nil
+}
+
+// DocRenamed liefert den Namen, den doc bekommt, wenn name nach newName
+// umbenannt wird: newName selbst, wenn doc = name; liegt doc unter dem
+// Verzeichnis name, newName mit dem Rest darunter. ok ist false, wenn doc
+// weder name ist noch darunter liegt.
+func DocRenamed(doc, name, newName string) (renamed string, ok bool) {
+	if doc == name {
+		return newName, true
+	}
+	rest, ok := strings.CutPrefix(doc, name+"/")
+	if !ok {
+		return "", false
+	}
+	return newName + "/" + rest, true
+}
+
 // DocChild liefert den Eintrag, unter dem ein Name im Verzeichnis prefix
 // erscheint (prefix wie von DocDirPrefix): das nächste Segment und, ob es ein
 // Unterverzeichnis ist. ok ist false, wenn der Name nicht unter prefix liegt.

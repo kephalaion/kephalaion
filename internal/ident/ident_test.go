@@ -154,6 +154,45 @@ func TestDocAncestorsAndChild(t *testing.T) {
 	}
 }
 
+// Umbenennen: beide Namen gültig, das Ziel weder gleich noch in der Quelle;
+// in die Gegenrichtung (x/y nach x) entscheidet erst die Datenbank.
+func TestCheckRename(t *testing.T) {
+	for _, ok := range [][2]string{{"a.md", "b.md"}, {"x", "xy"}, {"x/y", "x"}, {"x", "y/x"}, {"a/b", "a/c/b"}} {
+		if err := CheckRename(ok[0], ok[1]); err != nil {
+			t.Errorf("CheckRename(%q, %q): %v", ok[0], ok[1], err)
+		}
+	}
+	for _, c := range []struct{ name, newName, want string }{
+		{"x", "x", "der neue Name ist der alte"},
+		{"x", "x/y", "liegt darunter"},
+		{"a/b", "a/b/c/d", "liegt darunter"},
+		{"x", "", "neuer Name"},
+		{"x", "SYSTEM:A:bob", "neuer Name"},
+		{"x", "y/", "neuer Name"},
+		{"", "y", "Name fehlt"},
+		{"SYSTEM:A:bob", "y", "vorbehalten"},
+	} {
+		if err := CheckRename(c.name, c.newName); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("CheckRename(%q, %q) = %v, erwartet %q", c.name, c.newName, err, c.want)
+		}
+	}
+	for _, c := range []struct {
+		doc, name, newName, want string
+		ok                       bool
+	}{
+		{"a.md", "a.md", "b.md", "b.md", true},
+		{"dir/a.md", "dir", "neu", "neu/a.md", true},
+		{"dir/sub/b.md", "dir", "x/y", "x/y/sub/b.md", true},
+		{"dirx/a.md", "dir", "neu", "", false},
+		{"dir", "dir/a.md", "neu", "", false},
+	} {
+		got, ok := DocRenamed(c.doc, c.name, c.newName)
+		if got != c.want || ok != c.ok {
+			t.Errorf("DocRenamed(%q, %q, %q) = %q, %v", c.doc, c.name, c.newName, got, ok)
+		}
+	}
+}
+
 func TestCheckPrincipalName(t *testing.T) {
 	for _, ok := range []string{"alice", "laptop", "admin2", "x-admin"} {
 		if err := CheckPrincipalName("Account", ok); err != nil {

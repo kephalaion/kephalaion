@@ -334,8 +334,12 @@ func (s *countingStore) WriteDocumentAs(ctx context.Context, auth store.WriteAut
 	return s.after(s.Store.WriteDocumentAs(ctx, auth, collection, name, content, base))
 }
 
-func (s *countingStore) DeleteDocumentAs(ctx context.Context, auth store.WriteAuth, collection, name string, base *int64) (store.WriteResult, error) {
-	return s.after(s.Store.DeleteDocumentAs(ctx, auth, collection, name, base))
+func (s *countingStore) DeleteDocumentAs(ctx context.Context, auth store.WriteAuth, collection, name string, base *int64, recursive bool) (store.WriteResult, error) {
+	return s.after(s.Store.DeleteDocumentAs(ctx, auth, collection, name, base, recursive))
+}
+
+func (s *countingStore) RenameDocumentAs(ctx context.Context, auth store.WriteAuth, collection, name, newName string, base *int64) (store.WriteResult, error) {
+	return s.after(s.Store.RenameDocumentAs(ctx, auth, collection, name, newName, base))
 }
 
 // overHTTP stellt den Hub über st hinter handler (nil: unverändert) und
@@ -380,11 +384,16 @@ func TestWriteNotRepeatedAfter5xx(t *testing.T) {
 		t.Errorf("write: %d Aufrufe, %v", st.calls.Load(), err)
 	}
 	st.calls.Store(0)
-	if _, err := c.Delete(ctx, f.deleteReq(acc["bob"], "a", "neu.md", nil)); !errors.Is(err, contract.ErrOutcomeUnknown) ||
+	if _, err := c.Rename(ctx, f.renameReq(acc["bob"], "a", "neu.md", "dir/neu.md", nil)); !errors.Is(err, contract.ErrOutcomeUnknown) ||
+		st.calls.Load() != 1 {
+		t.Errorf("rename: %d Aufrufe, %v", st.calls.Load(), err)
+	}
+	st.calls.Store(0)
+	if _, err := c.Delete(ctx, f.deleteDirReq(acc["bob"], "a", "dir")); !errors.Is(err, contract.ErrOutcomeUnknown) ||
 		st.calls.Load() != 1 {
 		t.Errorf("delete: %d Aufrufe, %v", st.calls.Load(), err)
 	}
-	if _, err := f.st.Document(ctx, "a", "neu.md"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.Document(ctx, "a", "dir/neu.md"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("nach delete: %v", err)
 	}
 	// Über local meldet der Hub denselben Fehler als gewöhnlichen; unklar

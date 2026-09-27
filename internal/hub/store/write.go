@@ -11,8 +11,8 @@ import (
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
 
-// Schreiben über einen Node (Task 014): create, write und delete im Namen
-// eines Accounts, getragen von einem Node. Anders als die CLI am Hub
+// Schreiben über einen Node (Task 014): create, write, delete und rename im
+// Namen eines Accounts, getragen von einem Node. Anders als die CLI am Hub
 // (PutDocument, DeleteDocument, ImportDocuments — admin, ohne Träger) prüft
 // jeder Vorgang in seiner Transaktion, wer schreibt:
 //
@@ -28,6 +28,13 @@ import (
 //     supersede für Fremdes; write ist dafür nicht nötig. Sonst
 //     ErrForbidden mit dem Grund.
 //
+// delete und rename nehmen auch ein Verzeichnis — alle lebenden Dokumente
+// darunter, als Ganzes: eine Revision, das Recht je Dokument, alles oder
+// nichts. Reihenfolge nach der Lesbarkeit: gibt es den Namen (ErrNotFound),
+// gilt der Vorgang für diese Art (ErrInvalid: Verzeichnis ohne recursive,
+// base_revision bei einem Verzeichnis, ein neuer Name ungültig), das Recht,
+// die Revision eines Dokuments, zuletzt das Ziel von rename.
+//
 // created_by/updated_by ist der User, actions nennt je Dokument Account und
 // Node. Die Antwort — Revision und Zeilen in der Form von SyncRows — liest
 // der Vorgang vor dem Commit.
@@ -36,7 +43,8 @@ import (
 // ErrAccountAuth, ErrNotFound und ErrPathConflict.
 var (
 	// ErrInvalid: Name oder Inhalt ist ungültig (ident.CheckDocName,
-	// CheckContent); die Meldung nennt den Grund.
+	// ident.CheckRename, CheckContent), oder der Vorgang gilt nicht für ein
+	// Verzeichnis; die Meldung nennt den Grund.
 	ErrInvalid = errors.New("ungültig")
 	// ErrNotReadable: die Collection gibt es nicht, der Node darf sie nicht
 	// abgleichen, oder der Account hat keine lebende Zeile in ihr.
@@ -190,11 +198,72 @@ func checkBase(cur Document, base *int64) error {
 
 // result liest die Zeile id nach dem Schreiben, in der Form von SyncRows.
 func (w *docTx) result(ctx context.Context, rev int64, id string) (WriteResult, error) {
-	r, err := scanRow(w.tx.QueryRowContext(ctx, q(queries.DocumentByID), id))
-	if err != nil {
-		return WriteResult{}, fmt.Errorf("Dokument %s lesen: %w", id, err)
+	return w.results(ctx, rev, []string{id})
+}
+
+// results liest die Zeilen ids nach dem Schreiben, in dieser Reihenfolge und
+// in der Form von SyncRows.
+func (w *docTx) results(ctx context.Context, rev int64, ids []string) (WriteResult, error) {
+	out := WriteResult{Revision: rev, Rows: make([]contract.Row, 0, len(ids))}
+	for _, id := range ids {
+		r, err := scanRow(w.tx.QueryRowContext(ctx, q(queries.DocumentByID), id))
+		if err != nil {
+			return WriteResult{}, fmt.Errorf("Dokument %s lesen: %w", id, err)
+		}
+		out.Rows = append(out.Rows, r)
 	}
-	return WriteResult{Revision: rev, Rows: []contract.Row{r}}, nil
+	return out, nil
+}
+
+// source liest, was ein Name vor delete oder rename bezeichnet: ein lebendes
+// Dokument (dir false, genau eines in docs) oder ein Verzeichnis (dir true)
+// — dann alle lebenden Dokumente darunter, nach Name. Weder noch ist
+// ErrNotFound.
+func (w *docTx) source(ctx context.Context, collection, name string) (docs []Document, dir bool, err error) {
+	cur, err := liveDocument(ctx, w.tx, collection, name)
+	if err == nil {
+		return []Document{cur}, false, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, false, err
+	}
+	docs, err = liveDocuments(ctx, w.tx, collection, name+"/")
+	if err != nil {
+		return nil, false, err
+	}
+	if len(docs) == 0 {
+		return nil, false, &kindError{ErrNotFound, fmt.Sprintf(
+			"%s gibt es in %s weder als Dokument noch als Verzeichnis", name, collection)}
+	}
+	return docs, true, nil
+}
+
+// checkDirBase lehnt eine Vorbedingung für ein Verzeichnis ab: base_revision
+// gilt nur für Dokumente.
+func checkDirBase(collection, name string, base *int64) error {
+	if base != nil {
+		return invalidError{fmt.Errorf("%s ist in %s ein Verzeichnis; base_revision gilt nur für Dokumente", name, collection)}
+	}
+	return nil
+}
+
+// mayChangeAll prüft das Recht an jedem Dokument (mayChange); das erste
+// verbotene lässt den ganzen Vorgang scheitern.
+func (w *docTx) mayChangeAll(docs []Document, rights contract.Rights, verb string) error {
+	for _, d := range docs {
+		if err := w.mayChange(d, rights, verb); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ids(docs []Document) []string {
+	out := make([]string, len(docs))
+	for i, d := range docs {
+		out[i] = d.ID
+	}
+	return out
 }
 
 func checkWriteName(name string) error {
@@ -273,31 +342,128 @@ func (s *sqliteStore) WriteDocumentAs(ctx context.Context, auth WriteAuth, colle
 	return out, nil
 }
 
-func (s *sqliteStore) DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64) (WriteResult, error) {
+func (s *sqliteStore) DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64, recursive bool) (WriteResult, error) {
 	if err := checkWriteName(name); err != nil {
 		return WriteResult{}, err
 	}
 	var out WriteResult
 	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
-		cur, err := liveDocument(ctx, w.tx, collection, name)
+		docs, dir, err := w.source(ctx, collection, name)
 		if err != nil {
 			return err
 		}
-		if err := w.mayChange(cur, rights, "löschen"); err != nil {
+		if dir {
+			if !recursive {
+				return invalidError{fmt.Errorf("%s ist in %s ein Verzeichnis mit %d Dokumenten; löschen nur mit recursive",
+					name, collection, len(docs))}
+			}
+			if err := checkDirBase(collection, name, base); err != nil {
+				return err
+			}
+		}
+		if err := w.mayChangeAll(docs, rights, "löschen"); err != nil {
 			return err
 		}
-		if err := checkBase(cur, base); err != nil {
-			return err
+		if !dir {
+			if err := checkBase(docs[0], base); err != nil {
+				return err
+			}
 		}
-		rev, err := w.delete(ctx, cur)
-		if err != nil {
-			return err
+		for _, d := range docs {
+			if _, err := w.delete(ctx, d); err != nil {
+				return err
+			}
 		}
-		out, err = w.result(ctx, rev, cur.ID)
+		out, err = w.results(ctx, w.rev.rev, ids(docs))
 		return err
 	})
 	if err != nil {
 		return WriteResult{}, err
 	}
 	return out, nil
+}
+
+func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, collection, name, newName string, base *int64) (WriteResult, error) {
+	if err := ident.CheckRename(name, newName); err != nil {
+		return WriteResult{}, invalidError{err}
+	}
+	var out WriteResult
+	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
+		docs, dir, err := w.source(ctx, collection, name)
+		if err != nil {
+			return err
+		}
+		renamed := make([]string, len(docs))
+		for i, d := range docs {
+			renamed[i], _ = ident.DocRenamed(d.Name, name, newName)
+			if err := ident.CheckDocName(renamed[i]); err != nil {
+				return invalidError{fmt.Errorf("%s umbenennen: %w", d.Name, err)}
+			}
+		}
+		if dir {
+			if err := checkDirBase(collection, name, base); err != nil {
+				return err
+			}
+		}
+		if err := w.mayChangeAll(docs, rights, "umbenennen"); err != nil {
+			return err
+		}
+		if !dir {
+			if err := checkBase(docs[0], base); err != nil {
+				return err
+			}
+		}
+		if err := renameTargetFree(ctx, w.tx, collection, newName, dir); err != nil {
+			return err
+		}
+		for i, d := range docs {
+			if err := w.rename(ctx, d, renamed[i]); err != nil {
+				return err
+			}
+		}
+		out, err = w.results(ctx, w.rev.rev, ids(docs))
+		return err
+	})
+	if err != nil {
+		return WriteResult{}, err
+	}
+	return out, nil
+}
+
+// renameTargetFree prüft das Ziel eines Umbenennens, im Stand davor — liegt
+// die Quelle im Ziel (x/y nach x), belegt sie es selbst:
+//
+//   - Ein Dokument geht nicht auf ein lebendes Dokument, ein Verzeichnis
+//     nicht auf ein Verzeichnis: ErrNameTaken. Nichts wird überschrieben oder
+//     zusammengelegt.
+//   - Ein Dokument auf ein Verzeichnis, ein Verzeichnis auf ein Dokument oder
+//     ein Dokument über dem Ziel: ErrPathConflict — der Name wäre zugleich
+//     Datei und Verzeichnis, wie bei create.
+func renameTargetFree(ctx context.Context, db sqlitedb.Querier, collection, newName string, dir bool) error {
+	if !dir {
+		if _, err := liveDocument(ctx, db, collection, newName); err == nil {
+			return &kindError{ErrNameTaken, fmt.Sprintf("Dokument %s gibt es in %s schon", newName, collection)}
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return checkPathFree(ctx, db, collection, newName)
+	}
+	what := "Verzeichnis " + newName
+	n, err := count(ctx, db, queries.DocumentLiveCount, collection, newName)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return &kindError{ErrPathConflict, fmt.Sprintf(
+			"%s: %s ist in %s ein Dokument und kann nicht zugleich Verzeichnis sein", what, newName, collection)}
+	}
+	lo, hi := dirRange(newName + "/")
+	if n, err = count(ctx, db, queries.DocumentsUnderLive, collection, lo, hi); err != nil {
+		return err
+	}
+	if n > 0 {
+		return &kindError{ErrNameTaken, fmt.Sprintf(
+			"Verzeichnis %s gibt es in %s schon, mit %d Dokumenten; umbenennen legt nicht zusammen", newName, collection, n)}
+	}
+	return checkAncestorsFree(ctx, db, collection, what, newName)
 }

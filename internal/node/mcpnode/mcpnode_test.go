@@ -155,7 +155,7 @@ func (e *env) whoami(t *testing.T, header http.Header) (WhoamiOutput, string) {
 }
 
 // wantTools sind die Werkzeuge des Nodes, nach Name.
-var wantTools = []string{"changes", "create", "delete", "list", "read", "whoami", "write"}
+var wantTools = []string{"changes", "create", "delete", "list", "read", "rename", "whoami", "write"}
 
 func pair(alias, account, tok string) http.Header {
 	h := http.Header{}

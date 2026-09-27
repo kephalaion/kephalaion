@@ -137,13 +137,19 @@ Ausführlich: [`konzept.md`](konzept.md).
   nach dem letzten Eintrag, bei `changes` der Stand je Collection und die `generation` je Hub.
 - **create** / **write** / **delete** / **rename** — *geplant, Task 014.* Werkzeuge des Nodes
   und Vorgänge des Vertrags, die schreiben: anlegen (scheitert an einem lebenden Namen),
-  ersetzen, löschen (Löschmarke) und umbenennen (`id` bleibt). `delete` und `rename` nehmen
-  auch ein Verzeichnis, als Ganzes. Der Node prüft Anmeldung und Lesbarkeit und reicht an den
-  Hub; der Hub prüft `write`/`supersede` und die Vorbedingung. Nie wiederholt.
+  ersetzen, löschen (Löschmarke) und umbenennen (`id` bleibt; der neue Name heißt
+  **new_name**, in derselben Collection; ein belegtes Ziel wird nicht überschrieben, zwei
+  Verzeichnisse werden nicht zusammengelegt). `delete` und `rename` nehmen auch ein
+  Verzeichnis, als Ganzes: eine Revision, alles oder nichts; die Werkzeuge antworten dann mit
+  Art `directory` und der Zahl der Dokumente (**count**). Der Node prüft Anmeldung und
+  Lesbarkeit und reicht an den Hub; der Hub prüft `write`/`supersede` und die Vorbedingung.
+  Nie wiederholt.
 - **base_revision** — *geplant, Task 014.* Die Revision, auf der ein `write`, `delete` oder
-  `rename` beruht. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`).
+  `rename` beruht. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`). Nur für
+  Dokumente; bei einem Verzeichnis ist sie `invalid`.
 - **recursive** — *geplant, Task 014.* Angabe bei `delete`: ein Verzeichnis mit allen
-  Dokumenten darunter löschen; ohne sie ist ein Verzeichnis kein Ziel von `delete`.
+  Dokumenten darunter löschen; ohne sie ist ein Verzeichnis kein Ziel von `delete`
+  (`invalid`). Für ein Dokument ohne Belang.
 - **write error codes** (Fehlercodes beim Schreiben) — *geplant, Task 014.* `name_taken`
   (Name vergeben), `stale_revision` (Revision veraltet), `path_conflict` (Name wäre zugleich
   Datei und Verzeichnis), `not_found`, `forbidden` (Recht fehlt), `not_readable` (Collection

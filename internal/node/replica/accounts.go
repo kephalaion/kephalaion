@@ -102,7 +102,7 @@ func AdoptHubID(ctx context.Context, nodes store.Store, h store.Hub, hubID strin
 
 // Zeilen aus der Antwort eines Vorgangs, der schreibt, übernimmt der Node in
 // die Replica, bevor er antwortet: nach rotate die Account-Zeilen
-// (WriteAccountRows), nach create, write und delete die Dokumente
+// (WriteAccountRows), nach create, write, delete und rename die Dokumente
 // (WriteRows). Beide schreiben wie eine Seite des Abgleichs: nur Zeilen der
 // gewünschten Collections, per id und nie durch eine ältere Revision, in einer
 // Transaktion, die zuerst entry_id und hub_id prüft (apply). Der Stand des
@@ -177,9 +177,10 @@ func WriteAccountRows(ctx context.Context, nodes store.Store, h store.Hub, hubID
 }
 
 // WriteRows schreibt die Zeilen, die ein Schreibvorgang (create, write,
-// delete) geliefert hat, in die Replica eines Hub-Eintrags — so liefert read
-// die eigene Änderung sofort, und ein zweites Speichern beruht auf der neuen
-// Revision. Anders als WriteAccountRows legt es keine Replica an und leert
+// delete, rename) geliefert hat, in die Replica eines Hub-Eintrags — so
+// liefert read die eigene Änderung sofort, und ein zweites Speichern beruht
+// auf der neuen Revision; nach rename ersetzt die Zeile per id die unter dem
+// alten Namen. Anders als WriteAccountRows legt es keine Replica an und leert
 // keine, und es schreibt nur in Collections, die die Replica schon führt
 // (Stand in sync_state). Fehlt die Replica, gehört sie zu einem anderen
 // Eintrag oder nennt sie eine andere hub_id, ist nichts geschrieben und der

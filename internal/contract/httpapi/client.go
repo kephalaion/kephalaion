@@ -116,12 +116,25 @@ func (c *Client) Write(ctx context.Context, req contract.WriteRequest) (contract
 	return c.write(ctx, OpWrite, req.Version, req.Auth, req)
 }
 
-// Delete löscht ein Dokument, genau einmal; Ausgang wie bei Rotate.
+// Delete löscht ein Dokument oder ein Verzeichnis, genau einmal; Ausgang wie
+// bei Rotate.
 func (c *Client) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
 	if err := checkUTF8(req.Name, nil); err != nil {
 		return contract.WriteResponse{}, err
 	}
 	return c.write(ctx, OpDelete, req.Version, req.Auth, req)
+}
+
+// Rename benennt ein Dokument oder ein Verzeichnis um, genau einmal; Ausgang
+// wie bei Rotate.
+func (c *Client) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
+	if err := checkUTF8(req.Name, nil); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	if err := checkUTF8(req.NewName, nil); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return c.write(ctx, OpRename, req.Version, req.Auth, req)
 }
 
 // checkUTF8 lehnt einen Namen oder Inhalt ab, der kein gültiges UTF-8 ist:

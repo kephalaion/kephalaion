@@ -269,6 +269,13 @@ func (f failWriteAfterCommit) Delete(ctx context.Context, req contract.DeleteReq
 	return contract.WriteResponse{}, errDBGone
 }
 
+func (f failWriteAfterCommit) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
+	if _, err := f.Hub.Rename(ctx, req); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return contract.WriteResponse{}, errDBGone
+}
+
 // Über local ist ein Fehler eines Schreibvorgangs, der kein Fehler des
 // Vertrags ist, ein unklarer Ausgang — der Hub kann geschrieben haben, wie
 // über HTTP bei 500. Ein Fehler des Vertrags bleibt eindeutig.
@@ -313,16 +320,22 @@ func TestLocalWriteOutcome(t *testing.T) {
 	_, err = hub.Write(ctx, contract.WriteRequest{Version: contract.Version, Auth: node, Account: acc,
 		Collection: "team-x", Name: "neu.md", Content: "zwei", BaseRevision: &doc.Revision})
 	unclear("write", err)
+	_, err = hub.Rename(ctx, contract.RenameRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "neu.md", NewName: "dir/neu.md"})
+	unclear("rename", err)
+	if doc, err := hs.Document(ctx, "team-x", "dir/neu.md"); err != nil || doc.Content != "zwei" {
+		t.Fatalf("nach rename: %+v, %v", doc, err)
+	}
 	_, err = hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: acc,
-		Collection: "team-x", Name: "neu.md"})
+		Collection: "team-x", Name: "dir", Recursive: true})
 	unclear("delete", err)
-	if _, err := hs.Document(ctx, "team-x", "neu.md"); !errors.Is(err, hubstore.ErrNotFound) {
+	if _, err := hs.Document(ctx, "team-x", "dir/neu.md"); !errors.Is(err, hubstore.ErrNotFound) {
 		t.Errorf("nach delete: %v", err)
 	}
 
 	// Ein Fehler des Vertrags ist eindeutig, auch über local.
 	_, err = hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: acc,
-		Collection: "team-x", Name: "neu.md"})
+		Collection: "team-x", Name: "dir/neu.md"})
 	if !errors.Is(err, contract.ErrNotFound) || errors.Is(err, contract.ErrOutcomeUnknown) {
 		t.Errorf("not_found: %v", err)
 	}

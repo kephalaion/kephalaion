@@ -54,8 +54,8 @@ hält die anderen nicht auf. Transport local nimmt den Hub desselben serve,
 http den Hub unter seiner Adresse; https und ssh werden noch übergangen.
 Erfolg und letzter Fehler je Hub stehen in node.db (kephalaion status).
 kephalaion node sync läuft daneben wie immer. Nach einem Schreibvorgang über
-MCP (create, write, delete) gleicht serve den Hub außer der Reihe ab, auch
-bei sync_interval 0.
+MCP (create, write, delete, rename) gleicht serve den Hub außer der Reihe ab,
+auch bei sync_interval 0.
 
 Als Node fragt serve außerdem höchstens einmal am Tag bei GitHub nach dem
 neuesten Release (nach einem Fehler frühestens nach einer Stunde) und gibt

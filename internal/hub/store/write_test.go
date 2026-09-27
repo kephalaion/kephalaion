@@ -187,7 +187,7 @@ func TestWriteAsAuthor(t *testing.T) {
 		t.Errorf("Document nach ersetzen: %+v, %v", d, err)
 	}
 
-	deleted, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "notes/x.md", rev(written.Revision))
+	deleted, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "notes/x.md", rev(written.Revision), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestWriteAsRights(t *testing.T) {
 			return err
 		}, "gehört admin, supersede fehlt"},
 		{"alice löscht Fremdes ohne supersede", func() error {
-			_, err := s.DeleteDocumentAs(ctx, f.as("alice"), "a", "eigen.md", nil)
+			_, err := s.DeleteDocumentAs(ctx, f.as("alice"), "a", "eigen.md", nil, false)
 			return err
 		}, "gehört kleist, supersede fehlt"},
 		{"eve legt ohne write an", func() error {
@@ -281,10 +281,10 @@ func TestWriteAsRights(t *testing.T) {
 	if _, err := s.WriteDocumentAs(ctx, f.as("bob2"), "a", "eigen.md", "von bob2", nil); err != nil {
 		t.Errorf("bob2 ändert Dokument von bob: %v", err)
 	}
-	if _, err := s.DeleteDocumentAs(ctx, f.as("bob2"), "a", "eigen.md", nil); err != nil {
+	if _, err := s.DeleteDocumentAs(ctx, f.as("bob2"), "a", "eigen.md", nil, false); err != nil {
 		t.Errorf("bob2 löscht Dokument von bob: %v", err)
 	}
-	if _, err := s.DeleteDocumentAs(ctx, f.as("eve"), "a", "fremd.md", nil); err != nil {
+	if _, err := s.DeleteDocumentAs(ctx, f.as("eve"), "a", "fremd.md", nil, false); err != nil {
 		t.Errorf("eve löscht Fremdes mit supersede: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestWriteAsRights(t *testing.T) {
 		!strings.Contains(err.Error(), "ändern: write fehlt") {
 		t.Errorf("Eigenes ohne write ändern: %v", err)
 	}
-	if _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "entzogen.md", nil); !errors.Is(err, ErrForbidden) ||
+	if _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "entzogen.md", nil, false); !errors.Is(err, ErrForbidden) ||
 		!strings.Contains(err.Error(), "löschen: write fehlt") {
 		t.Errorf("Eigenes ohne write löschen: %v", err)
 	}
@@ -319,7 +319,8 @@ func TestWriteAsAuthAndReadable(t *testing.T) {
 		out := map[string]error{}
 		_, out["create"] = s.CreateDocumentAs(ctx, auth, collection, "neu.md", "x")
 		_, out["write"] = s.WriteDocumentAs(ctx, auth, collection, "x.md", "y", nil)
-		_, out["delete"] = s.DeleteDocumentAs(ctx, auth, collection, "x.md", nil)
+		_, out["delete"] = s.DeleteDocumentAs(ctx, auth, collection, "x.md", nil, false)
+		_, out["rename"] = s.RenameDocumentAs(ctx, auth, collection, "x.md", "y.md", nil)
 		return out
 	}
 	expect := func(what string, auth WriteAuth, collection string, want error) {
@@ -432,7 +433,7 @@ func TestCreateDocumentAs(t *testing.T) {
 	}
 
 	// Eine Löschmarke hindert nicht: neue id.
-	if _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", nil); err != nil {
+	if _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", nil, false); err != nil {
 		t.Fatal(err)
 	}
 	again, err := s.CreateDocumentAs(ctx, f.as("alice"), "a", "x.md", "neu")
@@ -475,7 +476,7 @@ func TestWriteDeleteRevision(t *testing.T) {
 			return err
 		}},
 		{"write künftig", func() error { _, err := s.WriteDocumentAs(ctx, bob, "a", "x.md", "drei", rev(r2+5)); return err }},
-		{"delete veraltet", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", rev(r1)); return err }},
+		{"delete veraltet", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", rev(r1), false); return err }},
 	}
 	for _, c := range stale {
 		u := snapshot(t, s)
@@ -505,7 +506,7 @@ func TestWriteDeleteRevision(t *testing.T) {
 		fn   func() error
 	}{
 		{"write ohne Dokument", func() error { _, err := s.WriteDocumentAs(ctx, bob, "a", "fehlt.md", "x", nil); return err }},
-		{"delete ohne Dokument", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "fehlt.md", nil); return err }},
+		{"delete ohne Dokument", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "fehlt.md", nil, false); return err }},
 		{"write in anderer Collection", func() error { _, err := s.WriteDocumentAs(ctx, bob, "c", "x.md", "x", nil); return err }},
 	}
 	for _, c := range missing {
@@ -516,7 +517,7 @@ func TestWriteDeleteRevision(t *testing.T) {
 		u.check(c.what)
 	}
 
-	deleted, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", rev(r2))
+	deleted, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", rev(r2), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +529,7 @@ func TestWriteDeleteRevision(t *testing.T) {
 		fn   func() error
 	}{
 		{"write auf Löschmarke", func() error { _, err := s.WriteDocumentAs(ctx, bob, "a", "x.md", "x", nil); return err }},
-		{"delete auf Löschmarke", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", nil); return err }},
+		{"delete auf Löschmarke", func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "x.md", nil, false); return err }},
 	} {
 		u := snapshot(t, s)
 		if err := c.fn(); !errors.Is(err, ErrNotFound) {
@@ -539,7 +540,7 @@ func TestWriteDeleteRevision(t *testing.T) {
 	// SYSTEM:-Namen sind kein Ziel: die Zeile des Accounts bleibt, wie sie ist.
 	for _, fn := range []func() error{
 		func() error { _, err := s.WriteDocumentAs(ctx, bob, "a", "SYSTEM:A:bob", "{}", nil); return err },
-		func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "SYSTEM:A:bob", nil); return err },
+		func() error { _, err := s.DeleteDocumentAs(ctx, bob, "a", "SYSTEM:A:bob", nil, false); return err },
 	} {
 		if err := fn(); !errors.Is(err, ErrInvalid) {
 			t.Errorf("SYSTEM:-Name: %v", err)
@@ -564,7 +565,10 @@ func TestWriteAsLockFirst(t *testing.T) {
 		func() error { _, err := s.WriteDocumentAs(ctx, f.as("bob"), "a", "x.md", "y", nil); return err },
 		func() error { _, err := s.WriteDocumentAs(ctx, f.as("alice"), "a", "x.md", "z", nil); return err },
 		func() error { _, err := s.CreateDocumentAs(ctx, wrong, "a", "y.md", "y"); return err },
-		func() error { _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "x.md", nil); return err },
+		func() error { _, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "x.md", "d/x.md", nil); return err },
+		func() error { _, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "d", "e", nil); return err },
+		func() error { _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "e", nil, false); return err },
+		func() error { _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "e", nil, true); return err },
 	}
 	for _, fn := range steps {
 		_ = fn()

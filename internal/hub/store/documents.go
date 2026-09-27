@@ -294,20 +294,27 @@ func (w *docTx) delete(ctx context.Context, cur Document) (int64, error) {
 	return rev, nil
 }
 
+// rename gibt einem lebenden Dokument einen neuen Namen; id, Inhalt und
+// created_by bleiben. Frei sein muss der Name schon; das prüft der Aufrufer.
+func (w *docTx) rename(ctx context.Context, cur Document, newName string) error {
+	rev, err := w.rev.get(ctx)
+	if err != nil {
+		return err
+	}
+	res, err := w.tx.ExecContext(ctx, q(queries.DocumentRename), cur.ID, newName, rev, w.now, w.by)
+	if err := mustAffect(res, err, "Dokument "+cur.Name); err != nil {
+		return err
+	}
+	return w.logAction(ctx, "rename", cur.ID, rev)
+}
+
 // checkPathFree prüft, dass ein neuer Name nicht zugleich Datei und
 // Verzeichnis wäre: Keines der Verzeichnisse über ihm ist ein lebendes
 // Dokument, und unter ihm als Verzeichnis liegt keines. Löschmarken zählen
 // nicht.
 func checkPathFree(ctx context.Context, db sqlitedb.Querier, collection, name string) error {
-	for _, dir := range ident.DocAncestors(name) {
-		n, err := count(ctx, db, queries.DocumentLiveCount, collection, dir)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			return &kindError{ErrPathConflict, fmt.Sprintf(
-				"Dokument %s: %s ist in %s ein Dokument und kann nicht zugleich Verzeichnis sein", name, dir, collection)}
-		}
+	if err := checkAncestorsFree(ctx, db, collection, "Dokument "+name, name); err != nil {
+		return err
 	}
 	lo, hi := dirRange(name + "/")
 	n, err := count(ctx, db, queries.DocumentsUnderLive, collection, lo, hi)
@@ -318,6 +325,22 @@ func checkPathFree(ctx context.Context, db sqlitedb.Querier, collection, name st
 		return &kindError{ErrPathConflict, fmt.Sprintf(
 			"Dokument %s: %s ist in %s ein Verzeichnis mit %d Dokumenten und kann nicht zugleich Dokument sein",
 			name, name, collection, n)}
+	}
+	return nil
+}
+
+// checkAncestorsFree prüft, dass keines der Verzeichnisse über name ein
+// lebendes Dokument ist; what nennt das Ziel in der Meldung.
+func checkAncestorsFree(ctx context.Context, db sqlitedb.Querier, collection, what, name string) error {
+	for _, dir := range ident.DocAncestors(name) {
+		n, err := count(ctx, db, queries.DocumentLiveCount, collection, dir)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return &kindError{ErrPathConflict, fmt.Sprintf(
+				"%s: %s ist in %s ein Dokument und kann nicht zugleich Verzeichnis sein", what, dir, collection)}
+		}
 	}
 	return nil
 }
@@ -420,12 +443,19 @@ func (s *sqliteStore) Documents(ctx context.Context, collection, dir string) ([]
 	if err := requireCollection(ctx, s.db, collection); err != nil {
 		return nil, err
 	}
+	return liveDocuments(ctx, s.db, collection, prefix)
+}
+
+// liveDocuments liest die lebenden Dokumente einer Collection unter prefix
+// (mit '/' am Ende, "" für alle), nach Name, ohne SYSTEM:-Zeilen.
+func liveDocuments(ctx context.Context, db sqlitedb.Querier, collection, prefix string) ([]Document, error) {
 	var rows *sql.Rows
+	var err error
 	if prefix == "" {
-		rows, err = s.db.QueryContext(ctx, q(queries.DocumentsAll), collection)
+		rows, err = db.QueryContext(ctx, q(queries.DocumentsAll), collection)
 	} else {
 		lo, hi := dirRange(prefix)
-		rows, err = s.db.QueryContext(ctx, q(queries.DocumentsInDir), collection, lo, hi)
+		rows, err = db.QueryContext(ctx, q(queries.DocumentsInDir), collection, lo, hi)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Dokumente lesen: %w", err)

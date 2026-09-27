@@ -124,6 +124,40 @@ func TestMCPWriteThroughServe(t *testing.T) {
 		mcpTool(t, endpoint, bob, "changes", mcpnode.ChangesInput{Collection: "eigen:team-x", Cursor: now.Cursor}, &got)
 		return len(got.Changes) == 1 && got.Changes[0].Name == "neu.md" && got.Changes[0].Revision == doc.Revision
 	})
+	// Umbenennen: die Replica ist sofort richtig, ohne Abgleich; ein
+	// Verzeichnis als Ganzes, delete mit recursive ebenso.
+	moved := write("rename", mcpnode.RenameInput{Collection: "eigen:team-x", Name: "neu.md", NewName: "ordner/neu.md",
+		BaseRevision: &doc.Revision})
+	if moved.Error != nil || moved.ID != doc.ID || moved.Name != "ordner/neu.md" || moved.Revision <= doc.Revision {
+		t.Fatalf("rename: %+v", moved)
+	}
+	if old, _ := read("eigen:team-x", "neu.md"); old.Kind != mcpnode.KindNone {
+		t.Errorf("alter Name: %+v", old)
+	}
+	if doc, text := read("eigen:team-x", "ordner/neu.md"); doc.ID != moved.ID || text != "drei" {
+		t.Errorf("neuer Name: %+v, %q", doc, text)
+	}
+	write("create", mcpnode.CreateInput{Collection: "eigen:team-x", Name: "ordner/zwei.md", Content: "zwei"})
+	dir := write("rename", mcpnode.RenameInput{Collection: "eigen:team-x", Name: "ordner", NewName: "mappe"})
+	if dir.Error != nil || dir.Kind != mcpnode.KindDirectory || dir.Count != 2 {
+		t.Fatalf("rename Verzeichnis: %+v", dir)
+	}
+	if got, text := read("eigen:team-x", "mappe/neu.md"); got.ID != doc.ID || text != "drei" {
+		t.Errorf("im neuen Verzeichnis: %+v, %q", got, text)
+	}
+	e.run(t, "hub", "doc", "get", "team-x", "mappe/zwei.md").want(t, 0, "zwei")
+	e.run(t, "hub", "doc", "get", "team-x", "ordner/neu.md").want(t, 1)
+	wantWriteCode(t, "Verzeichnis ohne recursive", write("delete", mcpnode.DeleteInput{Collection: "eigen:team-x",
+		Name: "mappe"}), "invalid", "löschen nur mit recursive")
+	gone := write("delete", mcpnode.DeleteInput{Collection: "eigen:team-x", Name: "mappe", Recursive: true})
+	if gone.Error != nil || gone.Kind != mcpnode.KindDirectory || gone.Count != 2 || !gone.Deleted {
+		t.Fatalf("delete Verzeichnis: %+v", gone)
+	}
+	if got, _ := read("eigen:team-x", "mappe"); got.Kind != mcpnode.KindNone {
+		t.Errorf("gelöschtes Verzeichnis: %+v", got)
+	}
+	e.run(t, "hub", "doc", "get", "team-x", "mappe/neu.md").want(t, 1)
+
 	// Ein fremdes Dokument ohne supersede: forbidden, vom Hub.
 	e.runIn(t, "admin", "hub", "doc", "put", "team-x", "admin.md").want(t, 0)
 	e.run(t, "node", "sync", "eigen").want(t, 0)
@@ -142,8 +176,20 @@ func TestMCPWriteThroughServe(t *testing.T) {
 	}
 	e.run(t, "hub", "doc", "get", "team-x", "weg.md").want(t, 1)
 
-	// Unklarer Ausgang: Der Hub hat geschrieben, die Antwort ging verloren.
+	// Umbenennen über http, der Hub ist wieder da.
 	e.run(t, "node", "hub", "set", "fern", "--address", e.url).want(t, 0)
+	if out := write("rename", mcpnode.RenameInput{Collection: "fern:team-x", Name: "fern.md", NewName: "fern/da.md"}); out.Error != nil ||
+		out.Kind != mcpnode.KindDocument {
+		t.Fatalf("rename über http: %+v", out)
+	}
+	if doc, text := read("fern:team-x", "fern/da.md"); doc.Kind != mcpnode.KindDocument || text != "fern" {
+		t.Errorf("nach rename über http: %+v, %q", doc, text)
+	}
+	if doc, _ := read("fern:team-x", "fern.md"); doc.Kind != mcpnode.KindNone {
+		t.Errorf("alter Name über http: %+v", doc)
+	}
+
+	// Unklarer Ausgang: Der Hub hat geschrieben, die Antwort ging verloren.
 	hookHTTP(t, func(address string) (contract.Hub, error) {
 		c, err := httpapi.NewClient(address)
 		return lostWrite{c}, err
@@ -156,7 +202,7 @@ func TestMCPWriteThroughServe(t *testing.T) {
 
 	srv.stop(t)
 	log := srv.log.String()
-	for _, want := range []string{"op=create", "hub=eigen node=laptop", "hub=fern node=laptop-http",
+	for _, want := range []string{"op=create", "op=rename", "op=delete", "hub=eigen node=laptop", "hub=fern node=laptop-http",
 		"account=bob", "code=unreachable", "code=outcome_unknown", "code=forbidden"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)

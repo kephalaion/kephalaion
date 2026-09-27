@@ -10,7 +10,8 @@ import (
 	"github.com/kephalaion/kephalaion/internal/ident"
 )
 
-// Die Schreibvorgänge (docs/vertrag.md, „Schreibvorgänge“). Reihenfolge wie
+// Die Schreibvorgänge create, write, delete und rename (docs/vertrag.md,
+// „Schreibvorgänge“). Reihenfolge wie
 // bei rotate: Fassung, Form der Anfrage (invalid), Anmeldung des Nodes; den
 // Rest — Account, Lesbarkeit, Recht, Name und Vorbedingung — prüft der Store
 // in der Transaktion des Vorgangs, deren erste Anweisung die Zeile des
@@ -113,13 +114,29 @@ func (h *Hub) Write(ctx context.Context, req contract.WriteRequest) (contract.Wr
 	})
 }
 
-// Delete setzt eine Löschmarke auf ein lebendes Dokument; Rechte und
-// base_revision wie bei Write.
+// Delete setzt eine Löschmarke auf ein lebendes Dokument, mit recursive auf
+// alle Dokumente unter einem Verzeichnis; Rechte wie bei Write, je Dokument,
+// base_revision nur für ein Dokument.
 func (h *Hub) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
 	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision); err != nil {
 		return contract.WriteResponse{}, err
 	}
 	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
-		return h.st.DeleteDocumentAs(ctx, auth, req.Collection, req.Name, req.BaseRevision)
+		return h.st.DeleteDocumentAs(ctx, auth, req.Collection, req.Name, req.BaseRevision, req.Recursive)
+	})
+}
+
+// Rename gibt einem Dokument oder allen Dokumenten unter einem Verzeichnis
+// einen neuen Namen; Rechte und base_revision wie bei Delete. Der neue Name
+// gehört zur Form: gültig, weder gleich dem alten noch darunter.
+func (h *Hub) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
+	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	if err := ident.CheckRename(req.Name, req.NewName); err != nil {
+		return contract.WriteResponse{}, contract.Invalid(err.Error())
+	}
+	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
+		return h.st.RenameDocumentAs(ctx, auth, req.Collection, req.Name, req.NewName, req.BaseRevision)
 	})
 }

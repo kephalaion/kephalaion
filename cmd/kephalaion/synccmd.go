@@ -126,25 +126,41 @@ var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(
 // Schreibvorgang, der kein Fehler des Vertrags ist (Datenbank, Abbruch),
 // lässt offen, ob der Hub ausgeführt hat — der neue Hash schon gilt, das
 // Dokument schon geschrieben ist: Er kommt als contract.ErrOutcomeUnknown
-// an, wie über HTTP ein 500.
+// an, wie über HTTP ein 500. Der Hub steht in einem Feld, nicht eingebettet:
+// So muss jeder neue Vorgang hier ausdrücklich stehen und kann nicht ohne
+// outcome durchrutschen.
 type localHub struct {
-	contract.Hub
+	hub contract.Hub
+}
+
+var _ contract.Hub = localHub{}
+
+func (l localHub) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
+	return l.hub.Whoami(ctx, req)
+}
+
+func (l localHub) Sync(ctx context.Context, req contract.SyncRequest) (contract.SyncResponse, error) {
+	return l.hub.Sync(ctx, req)
 }
 
 func (l localHub) Rotate(ctx context.Context, req contract.RotateRequest) (contract.RotateResponse, error) {
-	return outcome(l.Hub.Rotate(ctx, req))
+	return outcome(l.hub.Rotate(ctx, req))
 }
 
 func (l localHub) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
-	return outcome(l.Hub.Create(ctx, req))
+	return outcome(l.hub.Create(ctx, req))
 }
 
 func (l localHub) Write(ctx context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
-	return outcome(l.Hub.Write(ctx, req))
+	return outcome(l.hub.Write(ctx, req))
 }
 
 func (l localHub) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
-	return outcome(l.Hub.Delete(ctx, req))
+	return outcome(l.hub.Delete(ctx, req))
+}
+
+func (l localHub) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
+	return outcome(l.hub.Rename(ctx, req))
 }
 
 // outcome hüllt einen Fehler, der kein Fehler des Vertrags ist, in

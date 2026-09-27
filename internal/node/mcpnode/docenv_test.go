@@ -30,8 +30,8 @@ import (
 
 // docHub ist eine Attrappe von contract.Hub für die Werkzeuge des Nodes:
 // Zeilen im Speicher, eine Revision je Schreibvorgang, eine Seite je Abgleich,
-// dazu create, write und delete mit Anmeldung, Recht und Vorbedingung wie am
-// Hub. Die Zeit des Hubs (ms) setzt der Test über clock. Die Werkzeuge rufen
+// dazu create, write, delete und rename mit Anmeldung, Recht und
+// Vorbedingung wie am Hub, auch für Verzeichnisse. Die Zeit des Hubs (ms) setzt der Test über clock. Die Werkzeuge rufen
 // sie aus dem Handler, der Test aus seiner Goroutine: mu schützt Zeilen und
 // Zähler.
 type docHub struct {
@@ -42,7 +42,7 @@ type docHub struct {
 	docs  map[string]contract.Row
 	// allowed sind die Collections, die der Node abgleichen darf.
 	allowed map[string]bool
-	// writes zählt die Aufrufe von create, write und delete.
+	// writes zählt die Aufrufe von create, write, delete und rename.
 	writes int
 	// fail lässt jeden Schreibvorgang mit diesem Fehler scheitern; mit
 	// failAfter erst, nachdem er geschrieben hat (Antwort verloren).
@@ -264,9 +264,41 @@ func checkBase(doc contract.Row, base *int64) error {
 	return nil
 }
 
+// under liefert die lebenden Dokumente unter dem Verzeichnis name, nach Name.
+func (f *docHub) under(coll, name string) []contract.Row {
+	var out []contract.Row
+	for _, r := range f.docs {
+		if r.Collection == coll && !r.Deleted && strings.HasPrefix(r.Name, name+"/") {
+			out = append(out, r)
+		}
+	}
+	slices.SortFunc(out, func(a, b contract.Row) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// pathConflict sagt, ob name zugleich Datei und Verzeichnis wäre: ein
+// lebendes Dokument darüber oder darunter.
+func (f *docHub) pathConflict(coll, name string) bool {
+	for _, r := range f.docs {
+		if r.Collection == coll && !r.Deleted && (strings.HasPrefix(name, r.Name+"/") ||
+			strings.HasPrefix(r.Name, name+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func conflict() error {
+	return &contract.Error{Code: contract.CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
+}
+
+func notFound(name string) error {
+	return &contract.Error{Code: contract.CodeNotFound, Message: name + " gibt es weder als Dokument noch als Verzeichnis"}
+}
+
 // do führt einen Schreibvorgang aus: fn prüft und schreibt und liefert die
-// Zeile; fail und answerID wirken danach.
-func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contract.AccountContent) (contract.Row, error)) (contract.WriteResponse, error) {
+// Zeilen; fail und answerID wirken danach.
+func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contract.AccountContent) ([]contract.Row, error)) (contract.WriteResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes++
@@ -280,7 +312,7 @@ func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contr
 	if err != nil {
 		return contract.WriteResponse{}, err
 	}
-	row, err := fn(c)
+	rows, err := fn(c)
 	if err != nil {
 		return contract.WriteResponse{}, err
 	}
@@ -291,26 +323,22 @@ func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contr
 	if f.answerID != "" {
 		id = f.answerID
 	}
-	return contract.WriteResponse{HubID: id, Version: contract.Version, Revision: row.Revision,
-		Rows: []contract.Row{row}}, nil
+	return contract.WriteResponse{HubID: id, Version: contract.Version, Revision: rows[0].Revision, Rows: rows}, nil
 }
 
 func (f *docHub) Create(_ context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
 		if !c.Rights.Write {
-			return contract.Row{}, &contract.Error{Code: contract.CodeForbidden, Message: "anlegen: write fehlt"}
+			return nil, &contract.Error{Code: contract.CodeForbidden, Message: "anlegen: write fehlt"}
 		}
 		if len(req.Content) > contract.MaxDocumentBytes {
-			return contract.Row{}, contract.Invalid("Inhalt zu groß")
+			return nil, contract.Invalid("Inhalt zu groß")
 		}
 		if _, ok := f.live(req.Collection, req.Name); ok {
-			return contract.Row{}, &contract.Error{Code: contract.CodeNameTaken, Message: "Dokument " + req.Name + " gibt es schon"}
+			return nil, &contract.Error{Code: contract.CodeNameTaken, Message: "Dokument " + req.Name + " gibt es schon"}
 		}
-		for _, r := range f.docs {
-			if r.Collection == req.Collection && !r.Deleted && (strings.HasPrefix(req.Name, r.Name+"/") ||
-				strings.HasPrefix(r.Name, req.Name+"/")) {
-				return contract.Row{}, &contract.Error{Code: contract.CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
-			}
+		if f.pathConflict(req.Collection, req.Name) {
+			return nil, conflict()
 		}
 		var row contract.Row
 		f.write(func(rev, at int64) {
@@ -319,51 +347,106 @@ func (f *docHub) Create(_ context.Context, req contract.CreateRequest) (contract
 				Revision: rev, CreatedAt: at, CreatedBy: c.User, UpdatedAt: at, UpdatedBy: c.User}
 			f.docs[row.ID] = row
 		})
-		return row, nil
+		return []contract.Row{row}, nil
 	})
 }
 
 func (f *docHub) Write(_ context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
 		doc, ok := f.live(req.Collection, req.Name)
 		if !ok {
-			return contract.Row{}, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
+			return nil, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
 		}
 		if err := may(c, doc); err != nil {
-			return contract.Row{}, err
+			return nil, err
 		}
 		if err := checkBase(doc, req.BaseRevision); err != nil {
-			return contract.Row{}, err
+			return nil, err
 		}
 		if *doc.Content == req.Content {
-			return doc, nil
+			return []contract.Row{doc}, nil
 		}
 		f.write(func(rev, at int64) {
 			content := req.Content
 			doc.Content, doc.Revision, doc.UpdatedAt, doc.UpdatedBy = &content, rev, at, c.User
 			f.docs[doc.ID] = doc
 		})
-		return doc, nil
+		return []contract.Row{doc}, nil
 	})
 }
 
-func (f *docHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
-		doc, ok := f.live(req.Collection, req.Name)
-		if !ok {
-			return contract.Row{}, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
-		}
+// source liefert, was name bezeichnet, wie der Hub: ein Dokument oder die
+// Dokumente unter einem Verzeichnis. Ein Verzeichnis nimmt keine Vorbedingung;
+// das Recht gilt je Dokument.
+func (f *docHub) source(c contract.AccountContent, coll, name string, base *int64) (docs []contract.Row, dir bool, err error) {
+	if doc, ok := f.live(coll, name); ok {
 		if err := may(c, doc); err != nil {
-			return contract.Row{}, err
+			return nil, false, err
 		}
-		if err := checkBase(doc, req.BaseRevision); err != nil {
-			return contract.Row{}, err
+		return []contract.Row{doc}, false, checkBase(doc, base)
+	}
+	docs = f.under(coll, name)
+	if len(docs) == 0 {
+		return nil, false, notFound(name)
+	}
+	if base != nil {
+		return nil, true, contract.Invalid(name + " ist ein Verzeichnis; base_revision gilt nur für Dokumente")
+	}
+	for _, d := range docs {
+		if err := may(c, d); err != nil {
+			return nil, true, err
+		}
+	}
+	return docs, true, nil
+}
+
+func (f *docHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+		if !req.Recursive {
+			if _, ok := f.live(req.Collection, req.Name); !ok && len(f.under(req.Collection, req.Name)) > 0 {
+				return nil, contract.Invalid(req.Name + " ist ein Verzeichnis; löschen nur mit recursive")
+			}
+		}
+		docs, _, err := f.source(c, req.Collection, req.Name, req.BaseRevision)
+		if err != nil {
+			return nil, err
 		}
 		f.write(func(rev, at int64) {
-			doc.Content, doc.Deleted, doc.Revision, doc.UpdatedAt, doc.UpdatedBy = nil, true, rev, at, c.User
-			f.docs[doc.ID] = doc
+			for i := range docs {
+				docs[i].Content, docs[i].Deleted, docs[i].Revision, docs[i].UpdatedAt, docs[i].UpdatedBy = nil, true, rev, at, c.User
+				f.docs[docs[i].ID] = docs[i]
+			}
 		})
-		return doc, nil
+		return docs, nil
+	})
+}
+
+func (f *docHub) Rename(_ context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
+	if err := ident.CheckRename(req.Name, req.NewName); err != nil {
+		return contract.WriteResponse{}, contract.Invalid(err.Error())
+	}
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+		docs, dir, err := f.source(c, req.Collection, req.Name, req.BaseRevision)
+		if err != nil {
+			return nil, err
+		}
+		_, taken := f.live(req.Collection, req.NewName)
+		switch {
+		case !dir && taken:
+			return nil, &contract.Error{Code: contract.CodeNameTaken, Message: "Dokument " + req.NewName + " gibt es schon"}
+		case dir && !taken && len(f.under(req.Collection, req.NewName)) > 0:
+			return nil, &contract.Error{Code: contract.CodeNameTaken, Message: "Verzeichnis " + req.NewName + " gibt es schon"}
+		case taken || f.pathConflict(req.Collection, req.NewName):
+			return nil, conflict()
+		}
+		f.write(func(rev, at int64) {
+			for i := range docs {
+				docs[i].Name, _ = ident.DocRenamed(docs[i].Name, req.Name, req.NewName)
+				docs[i].Revision, docs[i].UpdatedAt, docs[i].UpdatedBy = rev, at, c.User
+				f.docs[docs[i].ID] = docs[i]
+			}
+		})
+		return docs, nil
 	})
 }
 

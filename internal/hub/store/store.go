@@ -172,9 +172,25 @@ type Store interface {
 	// Vorbedingung. Unveränderter Inhalt schreibt nichts, das Ergebnis trägt
 	// dann die bestehende Zeile und ihre Revision.
 	WriteDocumentAs(ctx context.Context, auth WriteAuth, collection, name, content string, base *int64) (WriteResult, error)
-	// DeleteDocumentAs setzt eine Löschmarke auf ein lebendes Dokument (sonst
-	// ErrNotFound); base wie bei WriteDocumentAs.
-	DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64) (WriteResult, error)
+	// DeleteDocumentAs setzt eine Löschmarke auf ein lebendes Dokument; base
+	// wie bei WriteDocumentAs, recursive gilt für ein Dokument nicht. Ist name
+	// ein Verzeichnis (lebende Dokumente darunter), nur mit recursive, sonst
+	// ErrInvalid: dann alle Dokumente darunter, unter einer Revision, alles
+	// oder nichts — das Recht je Dokument; base ist bei einem Verzeichnis
+	// ErrInvalid. Weder Dokument noch Verzeichnis: ErrNotFound. Das Ergebnis
+	// trägt die Löschmarken, nach Name.
+	DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64, recursive bool) (WriteResult, error)
+	// RenameDocumentAs gibt einem Dokument oder allen Dokumenten unter einem
+	// Verzeichnis einen neuen Namen (newName bzw. newName/…); id, Inhalt und
+	// created_by bleiben. Eine Revision, alles oder nichts, das Recht je
+	// Dokument wie bei WriteDocumentAs. Name und neuer Name nach
+	// ident.CheckRename, jeder neue Name nach ident.CheckDocName (ErrInvalid).
+	// Ziel belegt — ein Dokument auf ein lebendes Dokument, ein Verzeichnis auf
+	// ein Verzeichnis —: ErrNameTaken, nichts wird überschrieben oder
+	// zusammengelegt. Wäre ein neuer Name zugleich Datei und Verzeichnis:
+	// ErrPathConflict. base wie bei DeleteDocumentAs. Das Ergebnis trägt die
+	// Zeilen unter den neuen Namen, nach Name.
+	RenameDocumentAs(ctx context.Context, auth WriteAuth, collection, name, newName string, base *int64) (WriteResult, error)
 
 	// SyncRows liest für den Abgleich die Zeilen der Collections in since
 	// mit revision > Since der jeweiligen Collection und revision ≤ upTo,
@@ -204,6 +220,7 @@ var queries = struct {
 	DocumentInsert     string
 	DocumentReplace    string
 	DocumentDelete     string
+	DocumentRename     string
 
 	SyncRowsHead   string
 	SyncRowsClause string
@@ -303,6 +320,9 @@ var queries = struct {
 	// Die Löschmarke behält id, Collection und Name, verliert Inhalt und meta.
 	DocumentDelete: `UPDATE documents SET content = NULL, meta = NULL, deleted = 1,
 		revision = $2, updated_at = $3, updated_by = $4
+		WHERE id = $1`,
+	// Umbenennen behält id, Inhalt und created_by.
+	DocumentRename: `UPDATE documents SET name = $2, revision = $3, updated_at = $4, updated_by = $5
 		WHERE id = $1`,
 
 	// SyncRows… setzen die Abfrage des Abgleichs zusammen (syncRowsQuery):
