@@ -116,6 +116,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   Hub fortlaufend nummeriert. Ersetzt den früheren Gedanken der „Reihen“ (`series_*`).
 - **mask** (Maske) — Glob auf das letzte Segment eines Namens (`*.md`, `0*-*.md`), etwa bei
   `list`; kein regulärer Ausdruck.
+- **frontmatter** — *geplant, Task 015.* Block am Anfang einer `.md`-Datei zwischen zwei
+  Zeilen `---`, darin YAML. Er bleibt Teil des Inhalts; `list` und `read` liefern ihn mit dem
+  Parameter `frontmatter` als JSON-Objekt (Feld `frontmatter`, bei einem Fehler
+  `frontmatter_error`). Ein Verzeichnis und eine Collection haben das Frontmatter ihrer
+  **README.md** (`<verzeichnis>/README.md` bzw. `README.md` auf oberster Ebene).
 - **directory** (Verzeichnis) — ein Präfix von Namen bis zu einem `/`; es gibt es, solange ein
   lebendes Dokument darunter liegt. `list` zeigt die Verzeichnisse der nächsten Ebene als
   eigene Einträge (Art `directory`), `read` erkennt eines an seinem Namen.

@@ -1246,9 +1246,15 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
 
 - **Nur Text, kein Typ.** Solange nur Texte gespeichert werden, braucht es keine Typspalte.
 - **Metadaten: ein freies Feld `meta` (JSON), vom Hub nicht gedeutet**, nur gespeichert und
-  mit abgeglichen. Was hineingehört, entscheidet der nutzende Dienst. Das Frontmatter bleibt
-  vorerst im Text; dieselbe Angabe steht nicht an beiden Stellen. SQLite kann JSON-Felder
-  abfragen (`json_extract`) und über Ausdrücke indizieren, falls später gefiltert werden soll.
+  mit abgeglichen. Was hineingehört, entscheidet der nutzende Dienst — gedacht für Angaben der
+  Maschine, die kein Mensch bearbeitet. SQLite kann JSON-Felder abfragen (`json_extract`) und
+  über Ausdrücke indizieren, falls später gefiltert werden soll.
+- **Das Frontmatter steht im Text — entschieden am 2026-09-27**, nicht in `meta`, nicht in
+  einer eigenen Spalte, nicht in einer Datei daneben: So sieht und ändert man es in VS Code, es
+  bleibt beim Kopieren und beim Export erhalten, und Dateien aus einem Repository (etwa die
+  `SKILL.md` von k-playbook) kommen unverändert hinein. Dieselbe Angabe steht nicht an zwei
+  Stellen. Der Hub deutet es nicht; der Node liest es auf Wunsch aus und liefert es strukturiert
+  (`list` und `read` mit `frontmatter`, siehe „Werkzeuge“ → „Allgemein — lesen“).
 - **Der Name ist ein Pfad — entschieden am 2026-09-25**, eindeutig je Collection. Früher
   stand hier „frei“; eine Verzeichnisstruktur macht aber Vieles einfacher: Verzeichnisse
   auflisten, fortlaufend nummerierte Namen, das Ersetzen eines ganzen Verzeichnisses, den
@@ -1527,6 +1533,30 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
 - **Grenze von `path` in `changes`:** Wer ein Dokument aus dem Verzeichnis heraus umbenennt,
   erscheint dort nicht mehr — `changes` kennt keinen alten Namen. Lückenlos über Umbenennungen
   hinweg ist nur `changes` ohne `path`.
+
+**Frontmatter in `list` und `read` — entschieden am 2026-09-27, nicht gebaut (Task 015).**
+Damit die KI eine Übersicht — etwa alle Skills mit ihrer Beschreibung — in einem Aufruf
+bekommt, statt jede Datei zu lesen:
+
+- **Parameter `frontmatter`** (Standard aus) bei `list` und `read`. Mit ihm trägt jeder passende
+  Eintrag das Feld `frontmatter`, ein JSON-Objekt, oder `frontmatter_error` mit kurzem Grund;
+  ohne ihn bleiben die Antworten, wie sie sind.
+- **Nur `.md`-Dateien** (Endung ohne Unterscheidung von Groß- und Kleinschreibung). Frontmatter
+  ist ein Block ganz am Anfang des Inhalts: eine Zeile genau `---`, darin YAML, bis zur nächsten
+  Zeile genau `---` (UTF-8-BOM davor und `\r\n` erlaubt). Steht er nicht am Anfang, gibt es
+  keines. Andere Schreibweisen (TOML, JSON) nicht. Die Datei bleibt eine gewöhnliche
+  Markdown-Datei; YAML ist nur die Schreibweise im Block, die Antwort ist JSON.
+- **Verzeichnisse und Collections** bekommen das Frontmatter ihrer `README.md` — ein Verzeichnis
+  das von `<verzeichnis>/README.md`, eine Collection das von `README.md` auf ihrer obersten
+  Ebene. Ein README beschreibt ohnehin sein Verzeichnis und ist für Menschen sichtbar; gibt es
+  keines oder hat es kein Frontmatter, fehlt das Feld. Die `README.md` selbst erscheint weiter
+  als Dokument.
+- **Fehler machen nichts unlesbar:** nicht geschlossen, ungültiges YAML, oben kein Objekt oder
+  länger als 64 KiB — der Eintrag kommt mit `frontmatter_error`. Gelesen wird nur der Anfang des
+  Inhalts und nur für die Einträge der Seite.
+- Mit `recursive: true` gibt es keine Einträge für Verzeichnisse und damit kein Frontmatter von
+  Verzeichnissen; die README-Dateien erscheinen als Dokumente. `read` liefert den Inhalt
+  unverändert, einschließlich Frontmatter.
 
 **`whoami` — festgelegt am 2026-09-26.** Ein Werkzeug für „wer bin ich“ und „wie steht der
 Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:

@@ -140,6 +140,10 @@ Nichts.
   `replace_directory` auf `vendor/<name>/` mit Scope `vendor/<name>` (Account-Zeile, `hub
   account grant`, Exportformat). Das Update macht k-playbook in seiner Projekt-Collection, das
   Überlagern ebenso (`konzept.md`, „vendor/“).
+- **Task 015 — Frontmatter in list und read** (angelegt 2026-09-27, nach Task 014): Parameter
+  `frontmatter` bei `list` und `read`, nur `.md`, Block am Anfang in YAML, Antwort als
+  JSON-Objekt; Verzeichnisse und Collections über ihre `README.md`; nur Node, kein Vertrag,
+  kein Schema (`konzept.md`, „Datenmodell“, „Allgemein — lesen“).
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
