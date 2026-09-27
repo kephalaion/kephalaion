@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 offen)
+Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 mit allen Etappen erledigt)
 
 ## So wird diese Datei aktualisiert
 
@@ -94,7 +94,7 @@ Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 offen)
   `tokens/<hub>/<account>.token`, Account je Hub wählbar (`kephalaion.accounts`); Collections
   als Ordner über `list`/`read`, Änderungen über `changes`. Im echten VS Code geprüft:
   „Collection einbinden“, Dokument öffnen; Account-Wahl nur mit Ersatz für `vscode`
-  (`docs/vscode.md`, „Umsetzung“; README „VS Code“). Schreiben folgt, wenn der Node es kann.
+  (`docs/vscode.md`, „Umsetzung“; README „VS Code“). Schreiben seit 0.0.5 (Task 014).
 
 - **Task 011 — Installation pro User und global** (2026-09-26, Etappen 1–7):
   - config-Suche `--config` > `KEPHALAION_CONFIG` > User > `/etc/kephalaion/config.yaml` > Ort
@@ -124,17 +124,28 @@ Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 offen)
   - `release` verlangt den neuesten vollständigen Lauf auf `dev` für `HEAD`, stößt ihn bei
     Bedarf an, wartet darauf und prüft danach `origin` erneut.
 
+- **Task 014 — Schreiben über MCP** (2026-09-27, Etappen 1–6):
+  - Hub-Store schreibt mit Urheber — User in `created_by`/`updated_by`, `actions` je Dokument
+    mit Account und Node; die CLI bleibt `admin` ohne Träger — und Rechten: `write` für Neues
+    und Eigenes, `supersede` für Fremdes; Account-Zeile zuerst gesperrt;
+  - Vertrag um `create`, `write`, `delete`, `rename` (Fassung 1, `/v1/…`), Codes
+    `not_readable`, `forbidden`, `not_found`, `name_taken`, `path_conflict`,
+    `stale_revision`; nie wiederholt, unklarer Ausgang über HTTP und `local`; Body der
+    Schreibvorgänge 7 MiB, ungültiges UTF-8 abgelehnt (`vertrag.md`, „Schreibvorgänge“);
+  - Werkzeuge am Node mit Code (dazu `unreachable`, `outcome_unknown`, `unsupported`,
+    `internal`); die Zeilen der Antwort sofort in der Replica (`replica.WriteRows`), Anstoß des
+    Abgleichs auch bei `sync_interval` `0`; `delete` mit `recursive` und `rename` nehmen
+    Verzeichnisse als Ganzes, Ziel nach der Art (`name_taken` bzw. `path_conflict`);
+  - Erweiterung für VS Code 0.0.5 schreibt (Tabelle `id` → Name, Fehler nach Code), geprüft
+    mit Ersatz für `vscode`; Durchlauf mit zwei Nodes als `TestMCPWriteTwoNodes`
+    (`konzept.md`, „Allgemein — schreiben“; `vscode.md`, „Umsetzung: Schreiben“).
+
 ## In Arbeit
 
 Nichts.
 
 ## Zu tun
 
-- **Task 014 — Schreiben über MCP** (angelegt 2026-09-26, nicht begonnen): Vertrag und
-  Werkzeuge `create`, `write`, `delete`, `rename` mit Rechten (`write`/`supersede`), Revision
-  als Vorbedingung, eigene Fehlercodes, Verzeichnisse als Ganzes, eigene Änderung sofort in der
-  Replica, nie wiederholt; danach die Erweiterung für VS Code (`konzept.md`, „Allgemein —
-  schreiben“, „Transport, Token und Fehlschläge“).
 - **`vendor/` und Verzeichnis-Update** (entschieden 2026-09-27, nach Task 014): `vendor/` auf
   oberster Ebene jeder Collection über den Node schreibgeschützt; einziger Weg hinein ist
   `replace_directory` auf `vendor/<name>/` mit Scope `vendor/<name>` (Account-Zeile, `hub
@@ -254,7 +265,17 @@ Nichts.
 - **`upgrade`-Abbruch:** nur per httptest belegt, nicht durch einen echten Abbruch.
 - **PostgreSQL:** Tauglichkeit der Hub-Abfragen nur per Check auf verbotene Konstrukte;
   Eindeutigkeit bei gleichzeitigen Schreibern liefert dort rohe Treiberfehler (Task 003).
-- **Großer Import:** eine Revision = eine unbegrenzte Seite; Verhalten über HTTP prüfen.
+- **Großer Import:** eine Revision = eine unbegrenzte Seite; Verhalten über HTTP prüfen. Ebenso
+  `delete` und `rename` eines großen Verzeichnisses: eine Revision, die Antwort trägt jede Zeile
+  (`vertrag.md`, „Bekannte Grenzen“; Task 014).
+- **Task 014, im echten VS Code:** die Handgriffe aus `docs/vscode.md`, „Im echten VS Code noch
+  zu prüfen“ — speichern, neue Datei und Ordner, Drag & Drop (auch mit Binärdatei), umbenennen,
+  verschieben mit „Ersetzen“ und in eine andere Collection, löschen, „Datei ist neuer“,
+  fremdes Dokument; dabei klären, wie der `FileService` den Provider ruft (Befund
+  `material/befunde/vscode-schreiben.md`, offen).
+- **Task 014, PostgreSQL:** `rename` eines Verzeichnisses kommt zeilenweise ohne Zwischennamen
+  aus — nur mit SQLite geprüft, für PostgreSQL aus der Überlegung (Befund
+  `material/befunde/rename-verzeichnisse.md`, unbestätigt).
 - **Ranking mit FTS5:** Korrektur aus k-playbook Task 056 (Zeiger vor Zielen) neu nachweisen,
   sobald die Suche steht.
 
