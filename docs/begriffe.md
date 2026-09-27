@@ -130,7 +130,9 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **read** — Werkzeug des Nodes: ein Dokument aus der Replica, per Name oder `id`; Art
   `document`, `directory` oder `none` (kein Fehler). Mit `content: false` nur die Angaben —
   so beantwortet die Erweiterung für VS Code `stat`. Löschmarken sind `none`.
-- **writable** (schreibbar) — Angabe von `read`: Der Account hat `write` in der Collection.
+- **writable** (schreibbar) — Angabe von `read`: Der Account hat `write` in der Collection. Ob
+  er ein fremdes Dokument ändern darf (`supersede`), sagt sie nicht; das entscheidet der Hub
+  beim Schreiben.
 - **changes** — Werkzeug des Nodes: je Dokument, das sich seit dem `cursor` (oder seit einem
   Zeitpunkt, `since`) geändert hat, einmal der aktuelle Stand, Löschmarken eingeschlossen, ohne
   alten Namen. Ohne beides nur der `cursor` für „ab jetzt“. Dazu **reset** — Hubs, deren
@@ -140,31 +142,39 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **cursor** — undurchsichtige Angabe in der Antwort von `list` und `changes`, mit der der
   nächste Aufruf weiterfragt; der Client gibt sie unverändert zurück. Bei `list` die Stelle
   nach dem letzten Eintrag, bei `changes` der Stand je Collection und die `generation` je Hub.
-- **create** / **write** / **delete** / **rename** — *geplant, Task 014.* Werkzeuge des Nodes
-  und Vorgänge des Vertrags, die schreiben: anlegen (scheitert an einem lebenden Namen),
-  ersetzen, löschen (Löschmarke) und umbenennen (`id` bleibt; der neue Name heißt
-  **new_name**, in derselben Collection; ein belegtes Ziel wird nicht überschrieben, zwei
-  Verzeichnisse werden nicht zusammengelegt). `delete` und `rename` nehmen auch ein
-  Verzeichnis, als Ganzes: eine Revision, alles oder nichts; die Werkzeuge antworten dann mit
-  Art `directory` und der Zahl der Dokumente (**count**). Der Node prüft Anmeldung und
-  Lesbarkeit und reicht an den Hub; der Hub prüft `write`/`supersede` und die Vorbedingung.
-  Nie wiederholt.
-- **base_revision** — *geplant, Task 014.* Die Revision, auf der ein `write`, `delete` oder
-  `rename` beruht. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`). Nur für
-  Dokumente; bei einem Verzeichnis ist sie `invalid`.
-- **recursive** — *geplant, Task 014.* Angabe bei `delete`: ein Verzeichnis mit allen
-  Dokumenten darunter löschen; ohne sie ist ein Verzeichnis kein Ziel von `delete`
-  (`invalid`). Für ein Dokument ohne Belang.
-- **write error codes** (Fehlercodes beim Schreiben) — *geplant, Task 014.* `name_taken`
-  (Name vergeben), `stale_revision` (Revision veraltet), `path_conflict` (Name wäre zugleich
-  Datei und Verzeichnis), `not_found`, `forbidden` (Recht fehlt), `not_readable` (Collection
-  für diesen Account oder Node nicht lesbar). Am Node dazu `unreachable` (Hub nicht erreicht,
-  nichts gespeichert) und `outcome_unknown` (**Ausgang unklar**: abgeschickt, keine brauchbare
+- **create** / **write** / **delete** / **rename** — Werkzeuge des Nodes und Vorgänge des
+  Vertrags, die schreiben (Task 014): anlegen (scheitert an einem lebenden Namen), ersetzen,
+  löschen (Löschmarke) und umbenennen (`id` bleibt; der neue Name heißt **new_name**, in
+  derselben Collection). Ziel von `rename`, geprüft im Stand davor: von derselben Art belegt
+  (Dokument auf ein lebendes Dokument, Verzeichnis auf ein bestehendes) ist `name_taken` —
+  nichts wird überschrieben, zwei Verzeichnisse werden nicht zusammengelegt —, von der anderen
+  Art `path_conflict`. `delete` und `rename` nehmen auch ein Verzeichnis, als Ganzes: eine
+  Revision, alles oder nichts; die Werkzeuge antworten dann mit Art `directory` und der Zahl
+  der Dokumente (**count**). Der Node prüft Anmeldung und Lesbarkeit gegen seine Replica und
+  reicht an den Hub; der Hub prüft das Recht — `write` für Neues und Eigenes, `supersede` für
+  Fremdes, `write` ist dafür nicht nötig — und die Vorbedingung. Die Zeilen der Antwort
+  schreibt der Node in die Replica, bevor er antwortet, und stößt den Abgleich an. Nie
+  wiederholt. `hub doc put|rm` und `hub import` sind Vorgänge des Admins am Hub, keine davon.
+- **base_revision** — Die Revision, auf der ein `write`, `delete` oder `rename` beruht,
+  wahlweise, mindestens 1. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`),
+  geprüft vor dem Vergleich des Inhalts. Nur für Dokumente; bei einem Verzeichnis ist sie
+  `invalid`.
+- **recursive** — Angabe bei `delete`: ein Verzeichnis mit allen Dokumenten darunter löschen;
+  ohne sie ist ein Verzeichnis kein Ziel von `delete` (`invalid`). Für ein Dokument ohne
+  Belang.
+- **write error codes** (Fehlercodes beim Schreiben) — `name_taken` (Name vergeben),
+  `stale_revision` (Revision veraltet), `path_conflict` (Name wäre zugleich Datei und
+  Verzeichnis), `not_found`, `forbidden` (Recht fehlt), `not_readable` (Collection für diesen
+  Account oder Node nicht lesbar). Am Node dazu `unreachable` (Hub nicht erreicht, nichts
+  gespeichert) und `outcome_unknown` (**Ausgang unklar**: abgeschickt, keine brauchbare
   Antwort — kann gespeichert sein; wie bei `rotate`, `contract.ErrOutcomeUnknown`),
   `unsupported` (**noch nicht unterstützt**: der Hub kennt den Vorgang nicht, oder der Node
   erreicht ihn über einen Transport, den er noch nicht kann — nichts gespeichert) und
   `internal` (ein Fehler des Nodes selbst, etwa `node.db` oder eine Replica nicht lesbar —
-  nichts abgeschickt). Die Werkzeuge melden den Code strukturiert neben der Meldung.
+  nichts abgeschickt). `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
+  `unauthenticated` und `unsupported_version` reicht er durch. Die Werkzeuge melden einen
+  Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
+  `message`; Clients entscheiden nach dem Code, nicht nach der Meldung.
 - **tool** (Werkzeug) — ein MCP-Werkzeug des Nodes für Clients. Gesammelt in `konzept.md`,
   „Werkzeuge“.
 - **id** (Kennung) — stabile Kennung eines Dokuments, vom Hub vergeben.
@@ -197,7 +207,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   Kommando: `kephalaion node sync [<alias>]`, über `transport local` oder `http`; scheitert ein
   Hub-Eintrag, laufen die übrigen weiter, der Exit-Code ist 1. **Im Hintergrund** gleicht
   `serve` selbst ab: beim Start je Hub-Eintrag, danach je `sync_interval`, jeder Eintrag für
-  sich, `https`/`ssh` übergangen. Beide halten das Ergebnis in `hub_sync` fest.
+  sich, `https`/`ssh` übergangen; dazu außer der Reihe, wenn ein Schreibvorgang über MCP ihn
+  für seinen Hub **anstößt** (nach Erfolg und nach unklarem Ausgang, auch bei `sync_interval`
+  `0`; läuft schon einer, folgt genau einer). Beide halten das Ergebnis in `hub_sync` fest.
 - **hub_sync** (Stand des Abgleichs) — Tabelle in `node.db`: je Hub-Eintrag letzter Erfolg und
   letzter Fehler mit Zeit und Art (`error_kind`: `connect`, `unreachable`,
   `unauthenticated`, `unsupported_version`, `hub`, `protocol`, `replica`); ein Erfolg leert
@@ -238,7 +250,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   - `read` — hat jeder in der Collection eingetragene Account.
   - `write` — anlegen; Eigenes (`created_by` = eigener User) ändern und löschen; gelöschte
     Namen neu anlegen.
-  - `supersede` — Fremdes ändern, ablösen, löschen.
+  - `supersede` — Fremdes ändern, ablösen, umbenennen, löschen; `write` ist dafür nicht nötig.
   - `replicate` — kein Scope eines Accounts, sondern das Recht eines Nodes: Inhalt und
     Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections`.
 - **node entry** (Node-Eintrag) — ein Node am Hub: Zeile in `nodes`, Name vom Admin, Token
@@ -272,7 +284,10 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **admin** — Account und User, als die die CLI am Hub handelt; steht in `created_by` und in
   `actions`. Als Account- und Node-Name reserviert (`ident.CheckPrincipalName`).
 - **actions** (Protokoll) — Tabelle des Hubs: wer (Account, nicht User) wann was getan hat. `subject` nennt das
-  Ziel einer Handlung ohne Dokument — Collection, Node oder `<node>:<collection>`.
+  Ziel einer Handlung ohne Dokument — Collection, Node oder `<node>:<collection>`. Ein
+  Schreibvorgang über einen Node trägt je Dokument eine Zeile mit `account`, `carrier` (der
+  Node) und `action` (`create`, `update`, `delete`, `rename`) unter der Revision des Vorgangs;
+  die CLI am Hub schreibt `admin` ohne Träger.
 - **--token-stdin** — liest ein Token als eine Zeile von der Standardeingabe. Ein Token wird
   nie als Argument übergeben und nur gekürzt angezeigt (`keph_…` und die letzten vier
   Zeichen).

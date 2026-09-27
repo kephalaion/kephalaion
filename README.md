@@ -22,10 +22,12 @@ Collections. Der Hub nimmt Dokumente auf (`hub doc`, `hub import`), der Node gle
 seine Replica ab (`node sync`) und zeigt sie an (`node doc`), über `transport local` oder
 `http` auf diesem Rechner. `kephalaion serve` lauscht je Rolle: der Hub für Nodes, der Node als
 MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read` und `changes` — gelesen
-wird aus der Replica, ohne Netz —, und gleicht als Node im Hintergrund ab. Accounts tauschen
-ihr Token am Node (`node account rotate`); `node whoami` zeigt, wen der Node kennt. Eine
-Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner ein. Noch nicht
-gebaut: `https` und `ssh`, Suche, Schreiben über MCP, weitere Werkzeuge.
+wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und `rename` — geschrieben
+wird über den Hub, mit Rechten je Collection —, und gleicht als Node im Hintergrund ab.
+Accounts tauschen ihr Token am Node (`node account rotate`); `node whoami` zeigt, wen der Node
+kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
+ein, zum Lesen und Schreiben. Noch nicht gebaut: `https` und `ssh`, Suche, weitere Werkzeuge
+(`create_numbered`, `append`, `replace_section`, `supersede`, `replace_directory`).
 
 ## Was gebraucht wird (grob)
 
@@ -251,11 +253,12 @@ gibt das neue einmal aus. `rotate` wird nie wiederholt: Danach gilt das alte Tok
 ### serve und MCP
 
 `kephalaion serve` startet je eingerichteter Rolle einen Listener auf ihrem `listen`: den Hub
-für Nodes (`POST /v1/whoami|rotate|sync`, siehe [`docs/vertrag.md`](docs/vertrag.md)), den
-Node als MCP-Server für Clients unter `/mcp`. Als Dienst startet ihn
-`kephalaion service install` (siehe „Installation“); von Hand läuft er im Vordergrund, schreibt je Anfrage
-eine Zeile nach stderr (Methode, Pfad, Status, Dauer, Node- und Account-Namen, nie ein Token)
-und endet mit SIGINT oder SIGTERM. Eine Sperre auf `<db>.lock` neben jeder Datenbank verhindert
+für Nodes (`POST /v1/whoami|rotate|sync` und `/v1/create|write|delete|rename`, siehe
+[`docs/vertrag.md`](docs/vertrag.md)), den Node als MCP-Server für Clients unter `/mcp`. Als
+Dienst startet ihn `kephalaion service install` (siehe „Installation“); von Hand läuft er im
+Vordergrund, schreibt je Anfrage eine Zeile nach stderr (Methode, Pfad, Status, Dauer, Node- und
+Account-Namen, bei einem Schreibvorgang über MCP Vorgang, Hub und Fehlercode — nie ein Token,
+nie ein Inhalt) und endet mit SIGINT oder SIGTERM. Eine Sperre auf `<db>.lock` neben jeder Datenbank verhindert
 einen zweiten `serve` auf derselben Rolle; alle anderen Kommandos laufen daneben, auch
 `node sync`, `node hub rm|add` und `config import`. Beide Rollen beantworten nur
 Anfragen, deren `Host` dieser Rechner mit dem eigenen Port ist, sonst 403; ein SSH-Tunnel zum
@@ -353,6 +356,55 @@ Löschmarken erscheinen nur in `changes`, `SYSTEM:`-Namen nie. Eine Replica, die
 lesen lässt, betrifft nur ihren Hub (`unreadable_hubs`).
 Der Node lehnt Anfragen mit fremdem `Host` oder fremder `Origin` mit 403 ab (Schutz gegen
 DNS-Rebinding aus dem Browser).
+
+Geschrieben wird über vier Werkzeuge, mit derselben Adresse wie beim Lesen, immer über den
+Hub — der Node beschreibt seine Replica nur mit dem, was der Hub antwortet:
+
+- **`create`** — ein Dokument anlegen (`collection`, `name`, `content`, auch leer).
+- **`write`** — den Inhalt ersetzen; mit `base_revision` (aus `read`) nur, wenn das Dokument
+  noch diese Revision hat.
+- **`delete`** — löschen, es bleibt eine Löschmarke; ein Verzeichnis nur mit `recursive: true`,
+  dann alle Dokumente darunter.
+- **`rename`** — umbenennen oder verschieben (`new_name`) in derselben Collection, die `id`
+  bleibt; auch ein Verzeichnis.
+
+Der Node prüft vorher wie beim Lesen Anmeldung und Lesbarkeit gegen seine Replica und reicht
+Account und Token an den Hub; ob geschrieben werden darf, entscheidet allein der Hub — eine
+Sperre wirkt beim Schreiben sofort. `write` braucht, wer anlegt oder Eigenes ändert (angelegt
+vom eigenen User, auch über einen anderen seiner Accounts), `supersede`, wer Fremdes ändert,
+umbenennt oder löscht. Ein Verzeichnis geht als Ganzes: das Recht je Dokument darunter, alles
+oder nichts, eine Revision. `created_by`/`updated_by` ist der User des Accounts; welcher
+Account über welchen Node schrieb, steht im Protokoll des Hubs (`actions`). Die Antwort nennt
+Adresse, Name, `id`, Revision, angelegt, geändert und Größe, bei einem Verzeichnis
+`kind: directory` und die Zahl der Dokumente (`count`). Die eigene Änderung steht schon in der
+Replica, wenn die Antwort kommt — `read` liefert sofort die neue Revision, zweimal hintereinander
+speichern geht —, und der Node stößt den Abgleich dieses Hubs an, auch bei `sync_interval` `0`.
+`changes` meldet die eigene Änderung erst nach diesem Abgleich.
+
+Nichts wird still überschrieben, und kein Schreibvorgang wird wiederholt. Ein Fehler hat
+`isError`, die Meldung als Text und in der Struktur `error.code` — ein Client entscheidet nach
+dem Code, nicht nach der Meldung:
+
+| Code | Bedeutung |
+|---|---|
+| `name_taken` | der Name ist vergeben (`create`, Ziel von `rename`); nichts wird überschrieben, zwei Verzeichnisse werden nicht zusammengelegt |
+| `stale_revision` | das Dokument hat nicht mehr die Revision `base_revision`; die Meldung nennt die aktuelle |
+| `path_conflict` | der Name wäre zugleich Datei und Verzeichnis |
+| `not_found` | kein solches Dokument, bei `delete` und `rename` auch kein Verzeichnis |
+| `forbidden` | das Recht fehlt; die Meldung nennt den Grund („gehört admin, supersede fehlt“) |
+| `not_readable` | nicht lesbar, wie beim Lesen — auch ein Account, den der Hub nicht (mehr) annimmt |
+| `invalid` | ungültig: Name, Inhalt (kein UTF-8, ein NUL-Byte, über 1 MiB), ein Verzeichnis ohne `recursive` |
+| `unreachable` | der Hub ist nicht erreicht worden, nichts gespeichert; gelesen wird weiter |
+| `outcome_unknown` | abgeschickt, aber keine brauchbare Antwort — gespeichert sein kann es; nicht wiederholen, nach dem angestoßenen Abgleich mit `read` nachsehen |
+| `unsupported` | der Hub kann noch nicht schreiben, oder sein Transport (`https`, `ssh`) ist noch nicht gebaut; nichts gespeichert |
+| `internal` | ein Fehler des Nodes selbst (`node.db`, Replica nicht lesbar); nichts abgeschickt |
+
+Dazu reicht der Node `unauthenticated` (der Hub nimmt den Node nicht an) und
+`unsupported_version` vom Hub durch. **Grenze:** Schreiben setzt voraus, dass die Replica die
+Collection und die Zeile des Accounts schon trägt — nach `hub account grant` erst nach dem
+nächsten Abgleich; hat der Node den Hub noch nie abgeglichen, nennt die Meldung
+`kephalaion node sync <hub>` als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
+Admins am Hub, ohne Node.
 
 ### Dokumente einspielen und abgleichen
 
@@ -472,7 +524,7 @@ muss (`extensionKind: workspace`):
 
 ```sh
 cd vscode && npx --yes @vscode/vsce package --skip-license
-code --install-extension kephalaion-0.0.4.vsix
+code --install-extension kephalaion-0.0.5.vsix
 ```
 
 Danach „Developer: Reload Window“.
@@ -492,7 +544,16 @@ Danach „Developer: Reload Window“.
 - **„Kephalaion: Collection einbinden“** bietet die lesbaren Collections zur Auswahl an und
   fügt die gewählte als Ordner in den Workspace ein. Verzeichnisse und Dokumente kommen über
   `list` und `read` aus der Replica; Änderungen erscheinen nach dem Abgleich des Nodes von
-  selbst (`changes`, alle 3 s). Nur lesen — Schreiben kommt mit dem Schreiben über MCP.
+  selbst (`changes`, alle 3 s), ein Umbenennen als alter Name weg, neuer da.
+- **Schreiben** (0.0.5) über die Werkzeuge oben: speichern, neue Datei und neuer Ordner,
+  löschen, umbenennen und verschieben im Explorer, auch ganze Ordner und per Drag & Drop.
+  Schreibbar ist eine Collection mit `write`; ein fremdes Dokument ohne `supersede` scheitert
+  erst beim Speichern, ein Account mit `supersede`, aber ohne `write` sieht die Collection
+  schreibgeschützt. Nur Text (UTF-8 ohne NUL-Byte) bis 1 MiB; umbenennen und verschieben nur
+  innerhalb einer Collection, ohne ein belegtes Ziel zu überschreiben; ein leerer Ordner besteht
+  nur in diesem Fenster, bis darin etwas liegt. Ein Konflikt wird abgelehnt; ist der Hub nicht
+  erreichbar, wird nichts gespeichert. Einzelheiten und was im echten VS Code noch zu prüfen
+  ist: [`docs/vscode.md`](docs/vscode.md), „Umsetzung: Schreiben“.
 
 ## Bauen
 
