@@ -386,7 +386,8 @@ nichts geändert.
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
 `sync` versucht der Node es später wieder; `rotate` und die Schreibvorgänge wiederholt niemand,
 ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP antwortet der Hub mit
-500 und dem Code `internal`, der kein Code des Vertrags ist.
+500 und dem Code `internal`, der kein Code des Vertrags ist — hat der Node die Anfrage
+abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 
 ## HTTP
 
