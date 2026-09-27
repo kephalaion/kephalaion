@@ -28,12 +28,21 @@ var syncIdle = nodestore.DefaultSyncInterval
 // Die Umsetzung des Vertrags wählt wie bei node sync der connector; local
 // bekommt den Hub-Store desselben serve, wenn es ihn gibt.
 //
+// Außer der Reihe gleicht ein Eintrag ab, wenn ein Werkzeug über MCP
+// geschrieben hat (kick) — auch bei sync_interval 0: Die Replica soll die
+// eigene Änderung vom Hub bestätigt bekommen, und nach unklarem Ausgang sieht
+// der Aufrufer erst danach, ob gespeichert ist. Läuft der Abgleich des
+// Eintrags schon, folgt ihm ein weiterer: Der laufende hat den Schreibvorgang
+// vielleicht nicht mehr gesehen.
+//
 // Log: keine Zeile für einen Abgleich ohne Änderung; eine, wenn Zeilen kamen
 // (Hub, Anzahl, Revision). Ein Fehler beim ersten Fehlschlag je Eintrag nach
 // dem Start, beim Übergang von Erfolg zu Fehler und wenn sich die Art des
 // Fehlers ändert, sonst still; eine Zeile, wenn es danach wieder geht. Nie
 // ein Token — die Fehler nennen keins.
 type backgroundSync struct {
+	// ctx ist der Kontext von run; endet er, beginnt kein Abgleich mehr.
+	ctx   context.Context
 	nodes nodestore.Store
 	cfg   config.Config
 	// hub ist der Store des Hubs, wenn derselbe serve ihn trägt, sonst nil.
@@ -43,6 +52,12 @@ type backgroundSync struct {
 	mu sync.Mutex
 	// running hält die Einträge, deren Abgleich läuft, nach entry_id.
 	running map[string]bool
+	// again hält die Einträge, die angestoßen wurden, während ihr Abgleich
+	// lief, nach entry_id: Nach dem laufenden gleichen sie noch einmal ab.
+	again map[string]nodestore.Hub
+	// stopped: run endet; danach startet nichts mehr, damit wg.Wait nicht
+	// neben einem wg.Add läuft.
+	stopped bool
 	// outcome ist das letzte Ergebnis je Eintrag, nach entry_id; fehlt es,
 	// gab es seit dem Start noch keins.
 	outcome map[string]syncOutcome
@@ -61,15 +76,24 @@ type syncOutcome struct {
 	kind   replica.ErrorKind
 }
 
-func newBackgroundSync(nodes nodestore.Store, cfg config.Config, hub hubstore.Store, log *reqlog.Logger) *backgroundSync {
-	return &backgroundSync{nodes: nodes, cfg: cfg, hub: hub, log: log,
-		running: map[string]bool{}, outcome: map[string]syncOutcome{}, skipped: map[string]bool{}}
+// newBackgroundSync bereitet den Abgleich im Hintergrund vor; er gilt, bis
+// ctx endet. Angestoßen werden kann er gleich, die Runden beginnen mit run.
+func newBackgroundSync(ctx context.Context, nodes nodestore.Store, cfg config.Config, hub hubstore.Store,
+	log *reqlog.Logger) *backgroundSync {
+	return &backgroundSync{ctx: ctx, nodes: nodes, cfg: cfg, hub: hub, log: log, running: map[string]bool{},
+		again: map[string]nodestore.Hub{}, outcome: map[string]syncOutcome{}, skipped: map[string]bool{}}
 }
 
-// run läuft, bis ctx endet; dann bricht es laufende Abgleiche ab — jede
-// Seite ist eine Transaktion — und wartet auf sie.
-func (b *backgroundSync) run(ctx context.Context) {
-	defer b.wg.Wait()
+// run läuft, bis der ctx des Abgleichs endet; dann bricht es laufende
+// Abgleiche ab — jede Seite ist eine Transaktion — und wartet auf sie.
+func (b *backgroundSync) run() {
+	ctx := b.ctx
+	defer func() {
+		b.mu.Lock()
+		b.stopped = true
+		b.mu.Unlock()
+		b.wg.Wait()
+	}()
 	for {
 		wait := syncIdle
 		if d := b.readInterval(ctx); d > 0 {
@@ -139,17 +163,46 @@ func (b *backgroundSync) round(ctx context.Context) {
 		if b.running[h.EntryID] {
 			continue
 		}
-		b.running[h.EntryID] = true
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			b.syncOne(ctx, h)
-		}()
+		b.start(h)
 	}
 }
 
-// syncOne gleicht einen Eintrag ab und meldet das Ergebnis.
-func (b *backgroundSync) syncOne(ctx context.Context, h nodestore.Hub) {
+// kick stößt den Abgleich eines Eintrags an, ohne zu warten — nach einem
+// Schreibvorgang über MCP. Läuft er schon, folgt ihm einer. https und ssh
+// übergeht er wie die Runden.
+func (b *backgroundSync) kick(h nodestore.Hub) {
+	if h.Transport == nodestore.TransportHTTPS || h.Transport == nodestore.TransportSSH {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch {
+	case b.stopped || b.ctx.Err() != nil:
+	case b.running[h.EntryID]:
+		b.again[h.EntryID] = h
+	default:
+		b.start(h)
+	}
+}
+
+// start gleicht einen Eintrag in einer eigenen Goroutine ab; b.mu ist
+// gehalten.
+func (b *backgroundSync) start(h nodestore.Hub) {
+	if b.stopped {
+		return
+	}
+	b.running[h.EntryID] = true
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		b.syncOne(h)
+	}()
+}
+
+// syncOne gleicht einen Eintrag ab und meldet das Ergebnis. Wurde er
+// angestoßen, während er lief, gleicht er danach noch einmal ab.
+func (b *backgroundSync) syncOne(h nodestore.Hub) {
+	ctx := b.ctx
 	conn := &connector{ctx: ctx, cfg: b.cfg, hub: b.hub}
 	defer conn.close()
 	res := (&replica.Syncer{Nodes: b.nodes}).SyncEntry(ctx, h, conn.connect)
@@ -157,6 +210,12 @@ func (b *backgroundSync) syncOne(ctx context.Context, h nodestore.Hub) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.running, h.EntryID)
+	if next, ok := b.again[h.EntryID]; ok {
+		delete(b.again, h.EntryID)
+		if ctx.Err() == nil && !res.Gone {
+			defer b.start(next)
+		}
+	}
 	if ctx.Err() != nil {
 		return
 	}

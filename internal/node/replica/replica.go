@@ -435,6 +435,9 @@ type page struct {
 	// drop sind Collections, die ganz aus der Replica verschwinden.
 	drop []string
 	now  int64
+	// known lässt nur Zeilen aus Collections zu, die die Replica schon führt
+	// (Stand in sync_state); die übrigen übergeht apply.
+	known bool
 }
 
 // dropped ist das Ergebnis des Entfernens einer Collection: wie viele
@@ -445,6 +448,7 @@ type dropped struct {
 
 // apply wendet eine Seite in einer Transaktion an: Collections entfernen,
 // Zeilen per id einfügen oder ersetzen, Stände fortschreiben — nie zurück.
+// Mit known nur Zeilen aus Collections, die einen Stand haben.
 //
 // Zuerst prüft sie, dass die Seite noch passt: Die Replica gehört noch zum
 // selben Eintrag und Hub (checkOwner), und keine Collection steht unter dem
@@ -476,7 +480,22 @@ func (r *Replica) apply(ctx context.Context, p page) (map[string]dropped, error)
 			}
 			out[c] = d
 		}
+		carried := map[string]bool{}
 		for _, row := range p.rows {
+			if p.known {
+				ok, seen := carried[row.Collection]
+				if !seen {
+					var n int
+					if err := tx.QueryRowContext(ctx, qStateGet, row.Collection).Scan(&n); err != nil {
+						return fmt.Errorf("sync_state lesen: %w", err)
+					}
+					ok = n > 0
+					carried[row.Collection] = ok
+				}
+				if !ok {
+					continue
+				}
+			}
 			deleted := 0
 			if row.Deleted {
 				deleted = 1

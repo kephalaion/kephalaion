@@ -5,15 +5,19 @@
 // Replica dieses Hubs — ohne Cache, die Datenbank ist die einzige Wahrheit.
 //
 // Werkzeuge: whoami (Version, alle Hubs mit Anmeldung, Node-Name und Stand
-// des Abgleichs; bei gültiger Anmeldung Account, User, Collections) und zum
+// des Abgleichs; bei gültiger Anmeldung Account, User, Collections), zum
 // Lesen aus der Replica list, read und changes (access.go: gemeinsamer
-// Schritt aus Anmeldung, Adresse und Recht). Transport und initialize gehen
-// ohne Anmeldung; list, read und changes liefern Inhalte nur aus Collections,
-// in denen der gültig angemeldete Account read hat. Die Anmeldung über alle Hubs prüft Authenticate, einmal je
-// Anfrage. Kein Token und kein Hash steht je in einer Antwort, auch nicht
-// Adresse, Transport oder hub_id eines Hubs.
+// Schritt aus Anmeldung, Adresse und Recht) und zum Schreiben über den Hub
+// create, write und delete (write.go, auf demselben Schritt). Transport und
+// initialize gehen ohne Anmeldung; list, read und changes liefern Inhalte nur
+// aus Collections, in denen der gültig angemeldete Account read hat, und nur
+// dort reichen create, write und delete an den Hub weiter. Die Anmeldung über
+// alle Hubs prüft Authenticate, einmal je Anfrage. Kein Token und kein Hash
+// steht je in einer Antwort, auch nicht Adresse, Transport oder hub_id eines
+// Hubs.
 //
-// Wie jedes Paket unter internal/node kennt es den Hub nicht.
+// Wie jedes Paket unter internal/node kennt es den Hub nicht: Den Weg zu ihm
+// und den Anstoß des Abgleichs bekommt es als HubLink.
 package mcpnode
 
 import (
@@ -48,14 +52,17 @@ type Node struct {
 	nodes   store.Store
 	version string
 	update  func() upgrade.Report
+	link    HubLink
 }
 
 // NewHandler liefert den Handler des Nodes: /mcp mit Prüfung von Host und
 // Origin, alles andere 404. version steht in der Antwort auf initialize;
 // update liefert für whoami die letzte Antwort auf die Frage nach einer
-// neuen Version — ohne selbst GitHub zu fragen.
-func NewHandler(nodes store.Store, version string, update func() upgrade.Report) http.Handler {
-	n := &Node{nodes: nodes, version: version, update: update}
+// neuen Version — ohne selbst GitHub zu fragen. link ist der Weg zum Hub für
+// create, write und delete. Der Body einer Anfrage darf MaxRequestBytes groß
+// sein.
+func NewHandler(nodes store.Store, version string, update func() upgrade.Report, link HubLink) http.Handler {
+	n := &Node{nodes: nodes, version: version, update: update, link: link}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "kephalaion", Version: version}, nil)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "whoami",
@@ -66,8 +73,11 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list", Description: listDescription}, n.list)
 	mcp.AddTool(srv, &mcp.Tool{Name: "read", Description: readDescription}, n.read)
 	mcp.AddTool(srv, &mcp.Tool{Name: "changes", Description: changesDescription}, n.changes)
+	mcp.AddTool(srv, &mcp.Tool{Name: "create", Description: createDescription}, n.create)
+	mcp.AddTool(srv, &mcp.Tool{Name: "write", Description: writeDescription}, n.replace)
+	mcp.AddTool(srv, &mcp.Tool{Name: "delete", Description: deleteDescription}, n.remove)
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBytes})
 	mux := http.NewServeMux()
 	mux.Handle(Path, guard(h))
 	return mux

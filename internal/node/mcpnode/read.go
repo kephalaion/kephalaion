@@ -56,10 +56,10 @@ func (n *Node) read(ctx context.Context, req *mcp.CallToolRequest, in ReadInput)
 func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInput) (ReadOutput, *string, error) {
 	withContent := in.Content == nil || *in.Content
 	if in.ID != "" && in.Name != "" {
-		return ReadOutput{}, nil, &toolError{"name oder id, nicht beides"}
+		return ReadOutput{}, nil, &toolError{msg: "name oder id, nicht beides"}
 	}
 	if in.ID == "" && in.Collection == "" {
-		return ReadOutput{}, nil, &toolError{"collection fehlt; ohne collection nur mit id"}
+		return ReadOutput{}, nil, &toolError{msg: "collection fehlt; ohne collection nur mit id"}
 	}
 	r, err := n.begin(ctx, req)
 	if err != nil {
@@ -80,7 +80,7 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 	}
 	if t.Collection == "" {
 		if in.Name != "" {
-			return ReadOutput{}, nil, &toolError{"name nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
+			return ReadOutput{}, nil, &toolError{msg: "name nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
 		}
 		return ReadOutput{Kind: KindDirectory, Address: t.Address()}, nil, nil
 	}
@@ -100,7 +100,7 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 		return out, nil, nil
 	}
 	if err := ident.CheckDocName(name); err != nil {
-		return ReadOutput{}, nil, &toolError{"name: " + err.Error()}
+		return ReadOutput{}, nil, &toolError{msg: "name: " + err.Error()}
 	}
 	out.Name = name
 	e, ok, err := a.rep.EntryByName(ctx, t.Collection, name, withContent)

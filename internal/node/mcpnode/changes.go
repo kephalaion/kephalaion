@@ -194,13 +194,13 @@ func newChangesRun(in ChangesInput) (*changesRun, error) {
 		return nil, err
 	}
 	if run.prefix, err = ident.DocDirPrefix(in.Path); err != nil {
-		return nil, &toolError{"path: " + err.Error()}
+		return nil, &toolError{msg: "path: " + err.Error()}
 	}
 	fp := fingerprint("changes", in.Collection, in.Path)
 	run.next = changesCursor{V: cursorVersion, Q: fp, Hubs: map[string]hubCursor{}}
 	switch {
 	case in.Cursor != "" && in.Since != "":
-		return nil, &toolError{"cursor oder since, nicht beides"}
+		return nil, &toolError{msg: "cursor oder since, nicht beides"}
 	case in.Cursor != "":
 		run.prev = &changesCursor{}
 		if err := decodeCursor(in.Cursor, run.prev); err != nil {
@@ -213,7 +213,7 @@ func newChangesRun(in ChangesInput) (*changesRun, error) {
 	case in.Since != "":
 		ts, err := time.Parse(time.RFC3339Nano, in.Since)
 		if err != nil {
-			return nil, &toolError{"since: erwartet einen Zeitpunkt in RFC 3339, etwa 2026-09-26T10:00:00Z"}
+			return nil, &toolError{msg: "since: erwartet einen Zeitpunkt in RFC 3339, etwa 2026-09-26T10:00:00Z"}
 		}
 		run.mode, run.since = fromSince, ts.UnixMilli()
 	}

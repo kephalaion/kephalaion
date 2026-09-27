@@ -46,7 +46,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   gesetzt.
 - **sync_interval** — Schlüssel der `settings` des Nodes: Abstand des Abgleichs im
   Hintergrund, eine Go-Dauer (`30s`, `2m`), mindestens `1s`; `0` schaltet ihn ab, auch den
-  beim Start. Standard 30 s. `serve` liest ihn je Runde, ein Neustart ist nicht nötig.
+  beim Start — nicht aber den Abgleich, den ein Schreibvorgang über MCP für seinen Hub
+  anstößt. Standard 30 s. `serve` liest ihn je Runde, ein Neustart ist nicht nötig.
 - **db_info** — Tabelle `db_info (key, value)` in der Datenbank jeder Rolle und in jeder
   Replica. Hält die Schemafassung (`schema_version`), die Rolle (`role`: `hub`, `node` oder
   `replica`), die Anlagezeit (`created_at`), am Hub auch die Revision (`revision`), in der
@@ -148,7 +149,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   Datei und Verzeichnis), `not_found`, `forbidden` (Recht fehlt), `not_readable` (Collection
   für diesen Account oder Node nicht lesbar). Am Node dazu `unreachable` (Hub nicht erreicht,
   nichts gespeichert) und `outcome_unknown` (**Ausgang unklar**: abgeschickt, keine brauchbare
-  Antwort — kann gespeichert sein; wie bei `rotate`, `contract.ErrOutcomeUnknown`).
+  Antwort — kann gespeichert sein; wie bei `rotate`, `contract.ErrOutcomeUnknown`),
+  `unsupported` (**noch nicht unterstützt**: der Hub kennt den Vorgang nicht, oder der Node
+  erreicht ihn über einen Transport, den er noch nicht kann — nichts gespeichert) und
+  `internal` (ein Fehler des Nodes selbst, etwa `node.db` oder eine Replica nicht lesbar —
+  nichts abgeschickt). Die Werkzeuge melden den Code strukturiert neben der Meldung.
 - **tool** (Werkzeug) — ein MCP-Werkzeug des Nodes für Clients. Gesammelt in `konzept.md`,
   „Werkzeuge“.
 - **id** (Kennung) — stabile Kennung eines Dokuments, vom Hub vergeben.

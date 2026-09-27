@@ -3,6 +3,8 @@ package replica
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -139,5 +141,85 @@ func TestAdoptHubID(t *testing.T) {
 	reset, err = AdoptHubID(ctx, e.nodes, e.hubEntry(), other)
 	if err != nil || !strings.Contains(reset, "hub_id gewechselt") || e.countRows(t) != 0 || e.hubEntry().HubID != other {
 		t.Errorf("andere hub_id: %q, %v", reset, err)
+	}
+}
+
+// docRow ist eine Zeile, wie ein Schreibvorgang sie liefert.
+func docRow(id, collection, name string, content *string, rev int64) contract.Row {
+	return contract.Row{ID: id, Collection: collection, Name: name, Content: content, Deleted: content == nil,
+		Revision: rev, CreatedAt: 1, CreatedBy: "kleist", UpdatedAt: rev, UpdatedBy: "kleist"}
+}
+
+// Die Zeilen eines Schreibvorgangs kommen sofort in die Replica: nur
+// gewünschte Collections, die die Replica schon führt, nie zurück, ohne den
+// Stand zu ändern. Fehlt die Replica oder passt die hub_id nicht, schreibt es
+// nichts (ErrChanged); SYSTEM:-Zeilen nimmt es nicht an.
+func TestWriteRows(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t, "a", "b")
+	h := e.hubEntry()
+	id := ulid.Make().String()
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{docRow(id, "a", "x.md", str("eins"), 5)}); !errors.Is(err, ErrChanged) {
+		t.Fatalf("ohne Replica: %v", err)
+	}
+	e.hub.allowed = map[string]bool{"a": true}
+	e.put(t)
+	h = e.hubEntry()
+	before := e.states()
+
+	rows := []contract.Row{docRow(id, "a", "x.md", str("eins"), 5), docRow(ulid.Make().String(), "c", "y.md", str("fremd"), 5)}
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.names("a"); got["x.md"] != "eins" || got["doc.md"] != "x" {
+		t.Errorf("nach create: %v", got)
+	}
+	if after := e.states(); !reflect.DeepEqual(after, before) {
+		t.Errorf("Stand geändert: %v → %v", before, after)
+	}
+	if _, ok := e.allRows()[rows[1].ID]; ok {
+		t.Error("Zeile einer nicht gewünschten Collection geschrieben")
+	}
+	// b ist gewünscht, aber die Replica führt sie nicht (der Hub erlaubt sie
+	// nicht): übergangen.
+	other := docRow(ulid.Make().String(), "b", "z.md", str("z"), 6)
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{other}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.allRows()[other.ID]; ok {
+		t.Error("Zeile einer Collection ohne Stand geschrieben")
+	}
+	// Nie zurück: eine ältere Revision ersetzt die neuere nicht; die
+	// Löschmarke mit neuerer schon.
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{docRow(id, "a", "x.md", str("alt"), 4)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.names("a"); got["x.md"] != "eins" {
+		t.Errorf("ältere Revision geschrieben: %v", got)
+	}
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{docRow(id, "a", "x.md", nil, 7)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.names("a"); len(got) != 1 {
+		t.Errorf("nach delete: %v", got)
+	}
+	// Andere hub_id: nichts geschrieben.
+	late := docRow(ulid.Make().String(), "a", "w.md", str("w"), 8)
+	if err := WriteRows(ctx, e.nodes, h, ulid.Make().String(), []contract.Row{late}); !errors.Is(err, ErrChanged) {
+		t.Errorf("andere hub_id: %v", err)
+	}
+	// Ein anderer Eintrag gleichen Namens: nichts geschrieben.
+	stale := h
+	stale.EntryID = ulid.Make().String()
+	if err := WriteRows(ctx, e.nodes, stale, e.hub.id, []contract.Row{late}); !errors.Is(err, ErrChanged) {
+		t.Errorf("anderer Eintrag: %v", err)
+	}
+	// Eine SYSTEM:-Zeile ist kein Dokument.
+	acc := accountRow(t, "a", "bob", "keph_x", 9, contract.Rights{})
+	if err := WriteRows(ctx, e.nodes, h, e.hub.id, []contract.Row{acc}); err == nil {
+		t.Error("Account-Zeile als Dokument angenommen")
+	}
+	if _, ok := e.allRows()[late.ID]; ok {
+		t.Error("abgelehnte Zeile geschrieben")
 	}
 }

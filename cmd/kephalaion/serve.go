@@ -15,6 +15,7 @@ import (
 
 	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/hub/replication"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
@@ -52,7 +53,9 @@ liest jede Runde neu, node hub add|rm wirkt ohne Neustart; ein langsamer Hub
 hält die anderen nicht auf. Transport local nimmt den Hub desselben serve,
 http den Hub unter seiner Adresse; https und ssh werden noch übergangen.
 Erfolg und letzter Fehler je Hub stehen in node.db (kephalaion status).
-kephalaion node sync läuft daneben wie immer.
+kephalaion node sync läuft daneben wie immer. Nach einem Schreibvorgang über
+MCP (create, write, delete) gleicht serve den Hub außer der Reihe ab, auch
+bei sync_interval 0.
 
 Als Node fragt serve außerdem höchstens einmal am Tag bei GitHub nach dem
 neuesten Release (nach einem Fehler frühestens nach einer Stunde) und gibt
@@ -176,6 +179,30 @@ func serve(ctx context.Context, cfg config.Config, system bool, log *reqlog.Logg
 		}
 		roles = append(roles, rl)
 	}
+	// Der Abgleich im Hintergrund, wenn serve den Node trägt; local nimmt
+	// den Hub desselben serve. Die Werkzeuge des Nodes, die schreiben, stoßen
+	// ihn an; sie erreichen den Hub über denselben connector.
+	bgCtx, stopBg := context.WithCancel(ctx)
+	defer stopBg()
+	var hub hubstore.Store
+	var nodes nodestore.Store
+	for _, rl := range roles {
+		if rl.hub != nil {
+			hub = rl.hub
+		}
+		if rl.nodes != nil {
+			nodes = rl.nodes
+		}
+	}
+	var bg *backgroundSync
+	if nodes != nil {
+		bg = newBackgroundSync(bgCtx, nodes, cfg, hub, log)
+		for _, rl := range roles {
+			if rl.nodes != nil {
+				rl.server.Handler = newNodeHandler(rl.nodes, updates.Report, nodeHubLink(cfg, hub, bg.kick))
+			}
+		}
+	}
 	addrs := map[config.Role]string{}
 	for _, rl := range roles {
 		ln, err := net.Listen("tcp", cfg.Listen(rl.name))
@@ -204,23 +231,8 @@ func serve(ctx context.Context, cfg config.Config, system bool, log *reqlog.Logg
 			}
 		}()
 	}
-	// Der Abgleich im Hintergrund, wenn serve den Node trägt; local nimmt
-	// den Hub desselben serve.
-	bgCtx, stopBg := context.WithCancel(ctx)
-	defer stopBg()
 	bgDone := make(chan struct{})
-	var hub hubstore.Store
-	var nodes nodestore.Store
-	for _, rl := range roles {
-		if rl.hub != nil {
-			hub = rl.hub
-		}
-		if rl.nodes != nil {
-			nodes = rl.nodes
-		}
-	}
-	if nodes != nil {
-		bg := newBackgroundSync(nodes, cfg, hub, log)
+	if bg != nil {
 		go func() {
 			defer close(bgDone)
 			var wg sync.WaitGroup
@@ -229,7 +241,7 @@ func serve(ctx context.Context, cfg config.Config, system bool, log *reqlog.Logg
 				defer wg.Done()
 				updates.Run(bgCtx)
 			}()
-			bg.run(bgCtx)
+			bg.run()
 			wg.Wait()
 		}()
 	} else {
@@ -316,8 +328,8 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 		}
 		rl.close = func() { _ = st.Close() }
 		rl.nodes = st
+		// Den Handler setzt serve, wenn der Abgleich im Hintergrund steht.
 		rl.server = &http.Server{
-			Handler:           newNodeHandler(st, updates.Report),
 			ReadHeaderTimeout: httpapi.ReadHeaderTimeout,
 			IdleTimeout:       httpapi.IdleTimeout,
 		}
@@ -326,8 +338,32 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 }
 
 // newNodeHandler ist der Eingang des Nodes für Clients: MCP unter /mcp.
-func newNodeHandler(st nodestore.Store, update func() upgrade.Report) http.Handler {
-	return mcpnode.NewHandler(st, buildinfo.Get().Version, update)
+func newNodeHandler(st nodestore.Store, update func() upgrade.Report, link mcpnode.HubLink) http.Handler {
+	return mcpnode.NewHandler(st, buildinfo.Get().Version, update, link)
+}
+
+// nodeHubLink ist der Weg der Werkzeuge des Nodes, die schreiben, zum Hub:
+// derselbe connector wie beim Abgleich — local nimmt hub, den Hub desselben
+// serve, wenn er ihn trägt —, und kick stößt den Abgleich eines Eintrags an.
+// Ein Transport, den der connector noch nicht kann, kommt als
+// mcpnode.ErrUnsupported an; jeder andere Fehler beim Verbinden heißt für
+// das Werkzeug: Hub nicht erreichbar.
+func nodeHubLink(cfg config.Config, hub hubstore.Store, kick func(nodestore.Hub)) mcpnode.HubLink {
+	return mcpnode.HubLink{
+		Connect: func(ctx context.Context, h nodestore.Hub) (contract.Hub, func(), error) {
+			conn := &connector{ctx: ctx, cfg: cfg, hub: hub}
+			c, err := conn.connect(h)
+			if err != nil {
+				conn.close()
+				if errors.Is(err, errTransportUnsupported) {
+					err = fmt.Errorf("%w: %v", mcpnode.ErrUnsupported, err)
+				}
+				return nil, nil, err
+			}
+			return c, conn.close, nil
+		},
+		Sync: kick,
+	}
 }
 
 // lockPath ist die Sperrdatei neben einer Datenbank: <db>.lock.

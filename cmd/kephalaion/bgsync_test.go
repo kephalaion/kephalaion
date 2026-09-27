@@ -7,14 +7,17 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
 	nodestore "github.com/kephalaion/kephalaion/internal/node/store"
+	"github.com/kephalaion/kephalaion/internal/reqlog"
 )
 
 // eventually wartet, bis cond gilt, höchstens 15 s.
@@ -482,5 +485,70 @@ func TestServeShutdownDeafHub(t *testing.T) {
 	}
 	if strings.Contains(srv.log.String(), "Abgleich fern gescheitert") {
 		t.Errorf("Log:\n%s", srv.log.String())
+	}
+}
+
+// syncCounter zählt die Anfragen des Abgleichs.
+type syncCounter struct {
+	contract.Hub
+	n *atomic.Int32
+}
+
+func (c syncCounter) Sync(ctx context.Context, req contract.SyncRequest) (contract.SyncResponse, error) {
+	c.n.Add(1)
+	return c.Hub.Sync(ctx, req)
+}
+
+// Der Anstoß nach einem Schreibvorgang gleicht einen Eintrag außer der Reihe
+// ab, auch ohne Runden (sync_interval 0). Kommt er, während der Abgleich
+// läuft, folgt genau einer — mehrere Anstöße fallen zusammen. https wird
+// übergangen; nach dem Ende startet nichts mehr.
+func TestBackgroundSyncKick(t *testing.T) {
+	e := newCommEnv(t)
+	var calls atomic.Int32
+	h := holdHTTP(t)
+	hookHTTP(t, func(address string) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address)
+		if err != nil {
+			return nil, err
+		}
+		held := h
+		held.Hub = syncCounter{c, &calls}
+		return held, nil
+	})
+	ns := nodeStore(t, e.cfg)
+	cfg, _, err := config.Load(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncBuffer
+	bg := newBackgroundSync(ctx, ns, cfg, nil, reqlog.New(&log))
+	fern, err := ns.Hub(ctx, "fern")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bg.kick(fern)
+	<-h.entered
+	bg.kick(fern)
+	bg.kick(fern)
+	close(h.release)
+	eventually(t, "zwei Abgleiche von fern", func() bool {
+		bg.mu.Lock()
+		defer bg.mu.Unlock()
+		return calls.Load() == 2 && !bg.running[fern.EntryID]
+	})
+	if st := syncStatus(t, ns, "fern"); st.OKAt == 0 {
+		t.Errorf("hub_sync: %+v", st)
+	}
+	extern := fern
+	extern.EntryID, extern.Transport = "01ANDERER", nodestore.TransportHTTPS
+	bg.kick(extern)
+	cancel()
+	bg.kick(fern)
+	bg.wg.Wait()
+	if n := calls.Load(); n != 2 || len(bg.running) != 0 {
+		t.Errorf("%d Abgleiche, laufend %v", n, bg.running)
 	}
 }

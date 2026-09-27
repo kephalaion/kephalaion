@@ -99,14 +99,14 @@ func checkListInput(in ListInput) (listParams, error) {
 		p.sort = replica.SortName
 	}
 	if p.sort != replica.SortName && p.sort != replica.SortCreated && p.sort != replica.SortUpdated {
-		return p, &toolError{fmt.Sprintf("sort %q: erwartet name, created oder updated", in.Sort)}
+		return p, &toolError{msg: fmt.Sprintf("sort %q: erwartet name, created oder updated", in.Sort)}
 	}
 	switch in.Order {
 	case "", "asc":
 	case "desc":
 		p.desc = true
 	default:
-		return p, &toolError{fmt.Sprintf("order %q: erwartet asc oder desc", in.Order)}
+		return p, &toolError{msg: fmt.Sprintf("order %q: erwartet asc oder desc", in.Order)}
 	}
 	var err error
 	if p.limit, err = checkLimit(in.Limit); err != nil {
@@ -114,7 +114,7 @@ func checkListInput(in ListInput) (listParams, error) {
 	}
 	if in.Mask != "" {
 		if _, err := path.Match(in.Mask, ""); err != nil || strings.Contains(in.Mask, "/") {
-			return p, &toolError{fmt.Sprintf("mask %q: kein gültiger Glob für ein Segment", in.Mask)}
+			return p, &toolError{msg: fmt.Sprintf("mask %q: kein gültiger Glob für ein Segment", in.Mask)}
 		}
 	}
 	p.fp = fingerprint("list", in.Collection, in.Path, strconv.FormatBool(in.Recursive), p.sort,
@@ -137,7 +137,7 @@ func checkListInput(in ListInput) (listParams, error) {
 func checkLimit(limit int) (int, error) {
 	switch {
 	case limit < 0:
-		return 0, &toolError{fmt.Sprintf("limit %d: erwartet eine Zahl ab 1", limit)}
+		return 0, &toolError{msg: fmt.Sprintf("limit %d: erwartet eine Zahl ab 1", limit)}
 	case limit == 0:
 		return DefaultLimit, nil
 	case limit > MaxLimit:
@@ -194,7 +194,7 @@ func (n *Node) doList(ctx context.Context, req *mcp.CallToolRequest, in ListInpu
 	pg := &listPage{p: p, out: ListOutput{Entries: []ListEntry{}}}
 	if in.Collection == "" {
 		if in.Path != "" {
-			return ListOutput{}, &toolError{"path nur zusammen mit collection"}
+			return ListOutput{}, &toolError{msg: "path nur zusammen mit collection"}
 		}
 		var colls []ListEntry
 		unread, err := r.eachValid(ctx, func(a *hubAccess) error {
@@ -222,14 +222,14 @@ func (n *Node) doList(ctx context.Context, req *mcp.CallToolRequest, in ListInpu
 	defer a.Close()
 	if t.Collection == "" {
 		if in.Path != "" {
-			return ListOutput{}, &toolError{"path nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
+			return ListOutput{}, &toolError{msg: "path nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
 		}
 		pageCollections(pg, collectionEntries(a))
 		return pg.finish(), nil
 	}
 	prefix, err := ident.DocDirPrefix(in.Path)
 	if err != nil {
-		return ListOutput{}, &toolError{"path: " + err.Error()}
+		return ListOutput{}, &toolError{msg: "path: " + err.Error()}
 	}
 	if err := a.wrap(ctx, listDocuments(ctx, a, t, prefix, pg)); err != nil {
 		return ListOutput{}, err

@@ -36,13 +36,13 @@ func decodeCursor(s string, v any) error {
 		err = json.Unmarshal(b, v)
 	}
 	if err != nil {
-		return &toolError{"cursor ungültig: nicht aus einer Antwort dieses Werkzeugs"}
+		return &toolError{msg: "cursor ungültig: nicht aus einer Antwort dieses Werkzeugs"}
 	}
 	return nil
 }
 
 // errCursorMismatch meldet einen Cursor, der zu einer anderen Anfrage gehört.
-var errCursorMismatch = &toolError{"cursor gehört zu einer anderen Anfrage: collection, path und die übrigen " +
+var errCursorMismatch = &toolError{msg: "cursor gehört zu einer anderen Anfrage: collection, path und die übrigen " +
 	"Angaben müssen gleich bleiben"}
 
 // fingerprint fasst die Angaben einer Anfrage zusammen, die ein Cursor

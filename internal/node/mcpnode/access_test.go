@@ -103,7 +103,7 @@ func TestAccessNeverSynced(t *testing.T) {
 		Address: "https://hub.example.org", Token: token(t)}, false); err != nil {
 		t.Fatal(err)
 	}
-	want := "Hub neu: noch nie abgeglichen, der Node hat keine Replica"
+	want := "Hub neu: noch nie abgeglichen, der Node hat keine Replica; zuerst: kephalaion node sync neu"
 	for _, h := range []http.Header{nil, pair("neu", "bob", e.tokens["keph/bob"])} {
 		for _, addr := range []string{"neu:team-x", "neu:"} {
 			if _, err := e.access(t, h, addr); err == nil || err.Error() != want {

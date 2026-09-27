@@ -2,11 +2,14 @@ package replica
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/store"
+	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
 
 // qAccountRows liest die lebenden Zeilen eines Accounts, nach Collection. Die
@@ -97,23 +100,49 @@ func AdoptHubID(ctx context.Context, nodes store.Store, h store.Hub, hubID strin
 	return reset, nil
 }
 
+// Zeilen aus der Antwort eines Vorgangs, der schreibt, übernimmt der Node in
+// die Replica, bevor er antwortet: nach rotate die Account-Zeilen
+// (WriteAccountRows), nach create, write und delete die Dokumente
+// (WriteRows). Beide schreiben wie eine Seite des Abgleichs: nur Zeilen der
+// gewünschten Collections, per id und nie durch eine ältere Revision, in einer
+// Transaktion, die zuerst entry_id und hub_id prüft (apply). Der Stand des
+// Abgleichs (sync_state) bleibt: Der nächste Abgleich liefert die Zeilen noch
+// einmal, per id ersetzt — und changes, das bis sync_state liest, meldet sie
+// erst danach.
+
+// wantedRows sind die Zeilen aus Collections, die der Eintrag will, und ihre
+// Collections in der Reihenfolge der Zeilen.
+func wantedRows(h store.Hub, rows []contract.Row) (keep []contract.Row, collections []string) {
+	for _, row := range rows {
+		if slices.Contains(h.Collections, row.Collection) {
+			keep = append(keep, row)
+			if !slices.Contains(collections, row.Collection) {
+				collections = append(collections, row.Collection)
+			}
+		}
+	}
+	return keep, collections
+}
+
+// putRows schreibt Zeilen aus einer Antwort des Hubs wie eine Seite ohne
+// Stand; known siehe page.
+func (r *Replica) putRows(ctx context.Context, rows []contract.Row, known bool) error {
+	_, err := r.apply(ctx, page{rows: rows, advance: map[string]int64{}, known: known})
+	return err
+}
+
 // WriteAccountRows schreibt die Zeilen, die ein rotate geliefert hat, in die
 // Replica eines Hub-Eintrags — nur die der gewünschten Collections. Fehlt die
 // Replica, legt es sie an; nennt sie eine andere hub_id, wird sie zuerst
-// geleert (wie beim Abgleich). Der Stand des Abgleichs (sync_state) bleibt:
-// Der nächste Abgleich liefert die Zeilen noch einmal, per id ersetzt.
-// written sind die Collections, deren Zeile geschrieben wurde.
+// geleert (wie beim Abgleich). written sind die Collections, deren Zeile
+// geschrieben wurde.
 func WriteAccountRows(ctx context.Context, nodes store.Store, h store.Hub, hubID string, rows []contract.Row) (written []string, reset string, err error) {
-	var keep []contract.Row
 	for _, row := range rows {
 		if _, ok := contract.AccountOfRow(row.Name); !ok {
 			return nil, "", fmt.Errorf("der Hub liefert %q, keine Account-Zeile", row.Name)
 		}
-		if slices.Contains(h.Collections, row.Collection) {
-			keep = append(keep, row)
-			written = append(written, row.Collection)
-		}
 	}
+	keep, written := wantedRows(h, rows)
 	if len(keep) == 0 {
 		return nil, "", nil
 	}
@@ -136,7 +165,7 @@ func WriteAccountRows(ctx context.Context, nodes store.Store, h store.Hub, hubID
 		}
 	}
 	defer rep.Close()
-	if _, err := rep.apply(ctx, page{rows: keep, advance: map[string]int64{}}); err != nil {
+	if err := rep.putRows(ctx, keep, false); err != nil {
 		return nil, reset, err
 	}
 	if h.HubID != hubID {
@@ -145,4 +174,41 @@ func WriteAccountRows(ctx context.Context, nodes store.Store, h store.Hub, hubID
 		}
 	}
 	return written, reset, nil
+}
+
+// WriteRows schreibt die Zeilen, die ein Schreibvorgang (create, write,
+// delete) geliefert hat, in die Replica eines Hub-Eintrags — so liefert read
+// die eigene Änderung sofort, und ein zweites Speichern beruht auf der neuen
+// Revision. Anders als WriteAccountRows legt es keine Replica an und leert
+// keine, und es schreibt nur in Collections, die die Replica schon führt
+// (Stand in sync_state). Fehlt die Replica, gehört sie zu einem anderen
+// Eintrag oder nennt sie eine andere hub_id, ist nichts geschrieben und der
+// Fehler ErrChanged: Der Abgleich holt nach. Nur Dokumente — eine Zeile, deren
+// Name kein gültiger Dokumentname ist (etwa SYSTEM:), lehnt es ab.
+func WriteRows(ctx context.Context, nodes store.Store, h store.Hub, hubID string, rows []contract.Row) error {
+	for _, row := range rows {
+		if err := ident.CheckDocName(row.Name); err != nil {
+			return fmt.Errorf("der Hub liefert %q, kein Dokument: %w", row.Name, err)
+		}
+	}
+	keep, _ := wantedRows(h, rows)
+	if len(keep) == 0 {
+		return nil
+	}
+	rep, err := Open(ctx, nodes.ReplicaPath(h.Name))
+	if errors.Is(err, sqlitedb.ErrNotFound) {
+		return fmt.Errorf("Hub %s: keine Replica: %w", h.Name, ErrChanged)
+	}
+	if err != nil {
+		return err
+	}
+	defer rep.Close()
+	switch {
+	case rep.EntryID() != h.EntryID:
+		return fmt.Errorf("Hub %s: die Replica gehört zu einem anderen Eintrag: %w", h.Name, ErrChanged)
+	case rep.HubID() != hubID:
+		return fmt.Errorf("Hub %s: die Replica gehört zu hub_id %s, die Antwort zu %s: %w", h.Name, rep.HubID(), hubID,
+			ErrChanged)
+	}
+	return rep.putRows(ctx, keep, true)
 }

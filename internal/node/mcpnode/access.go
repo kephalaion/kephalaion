@@ -25,8 +25,13 @@ import (
 // nur Collections, die der Node führt.
 
 // toolError ist ein Fehler, dessen Meldung der Client sieht. Sie nennt nie
-// einen Pfad, ein Token oder einen Hash.
-type toolError struct{ msg string }
+// einen Pfad, ein Token oder einen Hash. code ist der Code, den die
+// Werkzeuge, die schreiben, neben der Meldung liefern (write.go); leer heißt
+// invalid. Die Werkzeuge, die lesen, melden nur die Meldung.
+type toolError struct {
+	msg  string
+	code string
+}
 
 func (e *toolError) Error() string { return e.msg }
 
@@ -35,23 +40,26 @@ func (e *toolError) Error() string { return e.msg }
 // Node nicht führt, keine gültige Anmeldung, kein read. Sie unterscheidet die
 // Fälle nicht.
 func notReadable(addr string) error {
-	return &toolError{addr + " nicht lesbar: unbekannt, nicht auf diesem Node oder ohne gültige Anmeldung mit read"}
+	return &toolError{msg: addr + " nicht lesbar: unbekannt, nicht auf diesem Node oder ohne gültige Anmeldung mit read",
+		code: string(contract.CodeNotReadable)}
 }
 
 // neverSynced meldet einen Hub-Eintrag ohne Replica — wie never_synced in
-// whoami.
+// whoami — und nennt den Ausweg. Für die Werkzeuge, die schreiben, ist das
+// nicht lesbar: Der Node prüft vor dem Schreiben gegen die Replica.
 func neverSynced(hub string) error {
-	return &toolError{"Hub " + hub + ": noch nie abgeglichen, der Node hat keine Replica"}
+	return &toolError{msg: "Hub " + hub + ": noch nie abgeglichen, der Node hat keine Replica; zuerst: kephalaion node sync " +
+		hub, code: string(contract.CodeNotReadable)}
 }
 
 // replicaUnreadable ist die Meldung zu einem Hub, dessen Replica sich nicht
 // lesen lässt — ohne Pfad; die volle Meldung geht ins Log.
 func replicaUnreadable(hub string) error {
-	return &toolError{"Hub " + hub + ": " + ReplicaUnreadable}
+	return &toolError{msg: "Hub " + hub + ": " + ReplicaUnreadable, code: CodeInternal}
 }
 
 // errNodeDB ist die Meldung zu einem Fehler von node.db.
-var errNodeDB = &toolError{"Datenbank des Nodes nicht lesbar"}
+var errNodeDB = &toolError{msg: "Datenbank des Nodes nicht lesbar", code: CodeInternal}
 
 // toolFailure macht aus einem Fehler das, was der Client sieht: Ein
 // toolError bleibt, ein abgebrochener ctx ist ein Fehler der Anfrage, eine
@@ -158,18 +166,18 @@ func (r *request) resolve(addr string) (target, error) {
 				hub = h
 			}
 		case len(valid) == 0:
-			return target{}, &toolError{what + " ohne Hub: an keinem Hub gültig angemeldet; erwartet <hub>:<collection>"}
+			return target{}, &toolError{msg: what + " ohne Hub: an keinem Hub gültig angemeldet; erwartet <hub>:<collection>"}
 		default:
-			return target{}, &toolError{fmt.Sprintf("%s ohne Hub: angemeldet an %s; erwartet <hub>:<collection>",
+			return target{}, &toolError{msg: fmt.Sprintf("%s ohne Hub: angemeldet an %s; erwartet <hub>:<collection>",
 				what, strings.Join(valid, ", "))}
 		}
 	}
 	if err := ident.CheckName("Hub", hub); err != nil {
-		return target{}, &toolError{fmt.Sprintf("%s: %v", what, err)}
+		return target{}, &toolError{msg: fmt.Sprintf("%s: %v", what, err)}
 	}
 	if coll != "" || (!withHub && addr != "") {
 		if err := ident.CheckName("Collection", coll); err != nil {
-			return target{}, &toolError{fmt.Sprintf("%s: %v", what, err)}
+			return target{}, &toolError{msg: fmt.Sprintf("%s: %v", what, err)}
 		}
 	}
 	return target{Hub: hub, Collection: coll}, nil

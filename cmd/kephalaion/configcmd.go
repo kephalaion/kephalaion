@@ -159,8 +159,8 @@ ist nicht nötig. config show zeigt sie.
 
 Schlüssel am Node:
   sync_interval   Abstand des Abgleichs im Hintergrund (serve), eine Dauer
-                  wie 30s oder 2m, mindestens 1s; 0 schaltet ihn ab.
-                  Standard 30s.
+                  wie 30s oder 2m, mindestens 1s; 0 schaltet ihn ab —
+                  außer nach einem Schreibvorgang über MCP. Standard 30s.
 Am Hub gibt es noch keine.
 
 Optionen:

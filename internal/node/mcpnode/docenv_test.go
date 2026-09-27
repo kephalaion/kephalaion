@@ -1,15 +1,19 @@
 package mcpnode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,19 +24,33 @@ import (
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
 	"github.com/kephalaion/kephalaion/internal/node/store"
+	"github.com/kephalaion/kephalaion/internal/reqlog"
 	"github.com/kephalaion/kephalaion/internal/upgrade"
 )
 
-// docHub ist eine Attrappe von contract.Hub für die Werkzeuge, die lesen:
-// Zeilen im Speicher, eine Revision je Schreibvorgang, eine Seite je Abgleich.
-// Die Zeit des Hubs (ms) setzt der Test über clock.
+// docHub ist eine Attrappe von contract.Hub für die Werkzeuge des Nodes:
+// Zeilen im Speicher, eine Revision je Schreibvorgang, eine Seite je Abgleich,
+// dazu create, write und delete mit Anmeldung, Recht und Vorbedingung wie am
+// Hub. Die Zeit des Hubs (ms) setzt der Test über clock. Die Werkzeuge rufen
+// sie aus dem Handler, der Test aus seiner Goroutine: mu schützt Zeilen und
+// Zähler.
 type docHub struct {
+	mu    sync.Mutex
 	id    string
 	rev   int64
 	clock int64
 	docs  map[string]contract.Row
 	// allowed sind die Collections, die der Node abgleichen darf.
 	allowed map[string]bool
+	// writes zählt die Aufrufe von create, write und delete.
+	writes int
+	// fail lässt jeden Schreibvorgang mit diesem Fehler scheitern; mit
+	// failAfter erst, nachdem er geschrieben hat (Antwort verloren).
+	fail      error
+	failAfter bool
+	// answerID ist, wenn gesetzt, die hub_id in der Antwort eines
+	// Schreibvorgangs — wie ein Hub, der inzwischen ein anderer ist.
+	answerID string
 }
 
 func newDocHub(allowed ...string) *docHub {
@@ -55,6 +73,8 @@ func (f *docHub) write(fn func(rev, at int64)) int64 {
 // put legt ein Dokument an oder ersetzt das lebende gleichen Namens; es
 // liefert die id.
 func (f *docHub) put(coll, name, content string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var id string
 	f.write(func(rev, at int64) {
 		for _, r := range f.docs {
@@ -75,6 +95,13 @@ func (f *docHub) put(coll, name, content string) string {
 
 // change ändert eine Zeile per id in einem eigenen Schreibvorgang.
 func (f *docHub) change(id string, fn func(r *contract.Row)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.changeRow(id, fn)
+}
+
+// changeRow ist change ohne Sperre.
+func (f *docHub) changeRow(id string, fn func(r *contract.Row)) {
 	f.write(func(rev, at int64) {
 		r := f.docs[id]
 		fn(&r)
@@ -90,10 +117,12 @@ func (f *docHub) rm(id string) {
 // grant schreibt die Zeile eines Accounts in einer Collection; ohne tok wird
 // sie zur Löschmarke (revoke).
 func (f *docHub) grant(account, coll, tok string, rights contract.Rights) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	name := contract.AccountRowName(account)
 	for id, r := range f.docs {
 		if r.Collection == coll && r.Name == name {
-			f.change(id, func(r *contract.Row) { setAccount(r, account, tok, rights) })
+			f.changeRow(id, func(r *contract.Row) { setAccount(r, account, tok, rights) })
 			return
 		}
 	}
@@ -119,6 +148,8 @@ func setAccount(r *contract.Row, account, tok string, rights contract.Rights) {
 }
 
 func (f *docHub) Sync(_ context.Context, req contract.SyncRequest) (contract.SyncResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	resp := contract.SyncResponse{HubID: f.id, Version: contract.Version, HubRevision: f.rev, Until: f.rev,
 		Collections: []contract.CollectionStatus{}, Allowed: []string{}, Rows: []contract.Row{}}
 	for c := range f.allowed {
@@ -158,16 +189,182 @@ func (f *docHub) Rotate(context.Context, contract.RotateRequest) (contract.Rotat
 	return contract.RotateResponse{}, errors.New("rotate: in der Attrappe nicht umgesetzt")
 }
 
-func (f *docHub) Create(context.Context, contract.CreateRequest) (contract.WriteResponse, error) {
-	return contract.WriteResponse{}, errors.New("create: in der Attrappe nicht umgesetzt")
+// writeCalls liefert, wie oft create, write oder delete ankam.
+func (f *docHub) writeCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writes
 }
 
-func (f *docHub) Write(context.Context, contract.WriteRequest) (contract.WriteResponse, error) {
-	return contract.WriteResponse{}, errors.New("write: in der Attrappe nicht umgesetzt")
+// failWith lässt die folgenden Schreibvorgänge mit err scheitern; after:
+// erst nachdem sie geschrieben haben.
+func (f *docHub) failWith(err error, after bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail, f.failAfter = err, after
 }
 
-func (f *docHub) Delete(context.Context, contract.DeleteRequest) (contract.WriteResponse, error) {
-	return contract.WriteResponse{}, errors.New("delete: in der Attrappe nicht umgesetzt")
+// live liefert das lebende Dokument eines Namens.
+func (f *docHub) live(coll, name string) (contract.Row, bool) {
+	for _, r := range f.docs {
+		if r.Collection == coll && r.Name == name && !r.Deleted {
+			return r, true
+		}
+	}
+	return contract.Row{}, false
+}
+
+// account prüft einen Account wie der Hub: Ohne Zeile mit passendem Hash ist
+// er nicht angemeldet; ohne lebende Zeile in der Collection, oder wenn der
+// Node sie nicht abgleichen darf, ist sie nicht lesbar.
+func (f *docHub) account(acc contract.AccountAuth, coll string) (contract.AccountContent, error) {
+	known := false
+	var out *contract.AccountContent
+	for _, r := range f.docs {
+		if r.Name != contract.AccountRowName(acc.Account) || r.Deleted || r.Content == nil {
+			continue
+		}
+		c, err := contract.DecodeAccountContent(*r.Content)
+		if err != nil || c.Hash != ident.HashToken(acc.Token) {
+			continue
+		}
+		known = true
+		if r.Collection == coll {
+			out = &c
+		}
+	}
+	switch {
+	case !known:
+		return contract.AccountContent{}, contract.ErrAccountUnauthenticated
+	case out == nil || !f.allowed[coll]:
+		return contract.AccountContent{}, &contract.Error{Code: contract.CodeNotReadable,
+			Message: "Collection " + coll + " ist nicht lesbar"}
+	}
+	return *out, nil
+}
+
+// may prüft das Recht an einem lebenden Dokument: write für Eigenes,
+// supersede für Fremdes.
+func may(c contract.AccountContent, doc contract.Row) error {
+	if doc.CreatedBy == c.User && !c.Rights.Write {
+		return &contract.Error{Code: contract.CodeForbidden, Message: fmt.Sprintf("Dokument %s: write fehlt", doc.Name)}
+	}
+	if doc.CreatedBy != c.User && !c.Rights.Supersede {
+		return &contract.Error{Code: contract.CodeForbidden,
+			Message: fmt.Sprintf("Dokument %s: gehört %s, supersede fehlt", doc.Name, doc.CreatedBy)}
+	}
+	return nil
+}
+
+func checkBase(doc contract.Row, base *int64) error {
+	if base != nil && *base != doc.Revision {
+		return &contract.Error{Code: contract.CodeStaleRevision,
+			Message: fmt.Sprintf("Dokument %s hat Revision %d, der Vorgang beruht auf %d", doc.Name, doc.Revision, *base)}
+	}
+	return nil
+}
+
+// do führt einen Schreibvorgang aus: fn prüft und schreibt und liefert die
+// Zeile; fail und answerID wirken danach.
+func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contract.AccountContent) (contract.Row, error)) (contract.WriteResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writes++
+	if f.fail != nil && !f.failAfter {
+		return contract.WriteResponse{}, f.fail
+	}
+	if err := ident.CheckDocName(name); err != nil {
+		return contract.WriteResponse{}, contract.Invalid(err.Error())
+	}
+	c, err := f.account(acc, coll)
+	if err != nil {
+		return contract.WriteResponse{}, err
+	}
+	row, err := fn(c)
+	if err != nil {
+		return contract.WriteResponse{}, err
+	}
+	if f.fail != nil {
+		return contract.WriteResponse{}, f.fail
+	}
+	id := f.id
+	if f.answerID != "" {
+		id = f.answerID
+	}
+	return contract.WriteResponse{HubID: id, Version: contract.Version, Revision: row.Revision,
+		Rows: []contract.Row{row}}, nil
+}
+
+func (f *docHub) Create(_ context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
+		if !c.Rights.Write {
+			return contract.Row{}, &contract.Error{Code: contract.CodeForbidden, Message: "anlegen: write fehlt"}
+		}
+		if len(req.Content) > contract.MaxDocumentBytes {
+			return contract.Row{}, contract.Invalid("Inhalt zu groß")
+		}
+		if _, ok := f.live(req.Collection, req.Name); ok {
+			return contract.Row{}, &contract.Error{Code: contract.CodeNameTaken, Message: "Dokument " + req.Name + " gibt es schon"}
+		}
+		for _, r := range f.docs {
+			if r.Collection == req.Collection && !r.Deleted && (strings.HasPrefix(req.Name, r.Name+"/") ||
+				strings.HasPrefix(r.Name, req.Name+"/")) {
+				return contract.Row{}, &contract.Error{Code: contract.CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
+			}
+		}
+		var row contract.Row
+		f.write(func(rev, at int64) {
+			content := req.Content
+			row = contract.Row{ID: ulid.Make().String(), Collection: req.Collection, Name: req.Name, Content: &content,
+				Revision: rev, CreatedAt: at, CreatedBy: c.User, UpdatedAt: at, UpdatedBy: c.User}
+			f.docs[row.ID] = row
+		})
+		return row, nil
+	})
+}
+
+func (f *docHub) Write(_ context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
+		doc, ok := f.live(req.Collection, req.Name)
+		if !ok {
+			return contract.Row{}, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
+		}
+		if err := may(c, doc); err != nil {
+			return contract.Row{}, err
+		}
+		if err := checkBase(doc, req.BaseRevision); err != nil {
+			return contract.Row{}, err
+		}
+		if *doc.Content == req.Content {
+			return doc, nil
+		}
+		f.write(func(rev, at int64) {
+			content := req.Content
+			doc.Content, doc.Revision, doc.UpdatedAt, doc.UpdatedBy = &content, rev, at, c.User
+			f.docs[doc.ID] = doc
+		})
+		return doc, nil
+	})
+}
+
+func (f *docHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) (contract.Row, error) {
+		doc, ok := f.live(req.Collection, req.Name)
+		if !ok {
+			return contract.Row{}, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
+		}
+		if err := may(c, doc); err != nil {
+			return contract.Row{}, err
+		}
+		if err := checkBase(doc, req.BaseRevision); err != nil {
+			return contract.Row{}, err
+		}
+		f.write(func(rev, at int64) {
+			doc.Content, doc.Deleted, doc.Revision, doc.UpdatedAt, doc.UpdatedBy = nil, true, rev, at, c.User
+			f.docs[doc.ID] = doc
+		})
+		return doc, nil
+	})
 }
 
 // docEnv ist ein Node mit Hubs aus Attrappen: keph mit wissen und privat,
@@ -178,6 +375,61 @@ type docEnv struct {
 	url    string
 	hubs   map[string]*docHub
 	tokens map[string]string
+	// connect ist der Weg zum Hub der Werkzeuge, die schreiben; ohne ihn
+	// die Attrappe des Hubs.
+	connect func(h store.Hub) (contract.Hub, error)
+	// log ist das Log der Anfragen an den Node.
+	log *lockedBuffer
+
+	mu sync.Mutex
+	// kicks sind die angestoßenen Abgleiche, nach Alias.
+	kicks []string
+}
+
+// lockedBuffer ist ein Puffer für das Log, sicher über Goroutinen.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// link ist der Weg zum Hub, wie cmd/kephalaion ihn gibt: die Attrappe (oder
+// connect) und ein Anstoß, der sich merkt, welcher Hub abgleichen soll.
+func (e *docEnv) link() HubLink {
+	return HubLink{
+		Connect: func(_ context.Context, h store.Hub) (contract.Hub, func(), error) {
+			if e.connect != nil {
+				hub, err := e.connect(h)
+				return hub, func() {}, err
+			}
+			return e.hubs[h.Name], func() {}, nil
+		},
+		Sync: func(h store.Hub) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.kicks = append(e.kicks, h.Name)
+		},
+	}
+}
+
+// takeKicks liefert die angestoßenen Abgleiche seit dem letzten Aufruf.
+func (e *docEnv) takeKicks() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := e.kicks
+	e.kicks = nil
+	return out
 }
 
 func newDocEnv(t *testing.T) *docEnv {
@@ -206,7 +458,9 @@ func newDocEnv(t *testing.T) *docEnv {
 	e.hubs["keph"].grant("otto", "wissen", e.tokens["keph/otto"], contract.Rights{})
 	e.hubs["team"].grant("anna", "notizen", e.tokens["team/anna"], contract.Rights{})
 	e.sync(t)
-	srv := httptest.NewServer(NewHandler(nodes, "test", func() upgrade.Report { return testUpdate }))
+	e.log = &lockedBuffer{}
+	srv := httptest.NewServer(reqlog.New(e.log).Middleware("node",
+		NewHandler(nodes, "test", func() upgrade.Report { return testUpdate }, e.link())))
 	t.Cleanup(srv.Close)
 	e.url = srv.URL
 	return e

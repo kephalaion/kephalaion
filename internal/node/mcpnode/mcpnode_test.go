@@ -95,7 +95,7 @@ func newEnv(t *testing.T) *env {
 			t.Fatal(err)
 		}
 	}
-	srv := httptest.NewServer(NewHandler(nodes, "test", func() upgrade.Report { return testUpdate }))
+	srv := httptest.NewServer(NewHandler(nodes, "test", func() upgrade.Report { return testUpdate }, HubLink{}))
 	t.Cleanup(srv.Close)
 	e.url = srv.URL
 	return e
@@ -155,7 +155,7 @@ func (e *env) whoami(t *testing.T, header http.Header) (WhoamiOutput, string) {
 }
 
 // wantTools sind die Werkzeuge des Nodes, nach Name.
-var wantTools = []string{"changes", "list", "read", "whoami"}
+var wantTools = []string{"changes", "create", "delete", "list", "read", "whoami", "write"}
 
 func pair(alias, account, tok string) http.Header {
 	h := http.Header{}

@@ -79,6 +79,10 @@ type connector struct {
 	err error
 }
 
+// errTransportUnsupported meldet einen Transport, den der connector noch
+// nicht kann (https, ssh).
+var errTransportUnsupported = errors.New("noch nicht unterstützt")
+
 // connectHTTP liefert die Umsetzung über HTTP; Tests ersetzen sie, etwa um
 // einen unklaren Ausgang herbeizuführen.
 var connectHTTP = func(address string) (contract.Hub, error) {
@@ -95,7 +99,7 @@ func (l *connector) connect(h nodestore.Hub) (contract.Hub, error) {
 		}
 		return connectHTTP(h.Address)
 	default:
-		return nil, fmt.Errorf("Transport %s wird noch nicht unterstützt; bisher gehen local und http", h.Transport)
+		return nil, fmt.Errorf("Transport %s wird %w; bisher gehen local und http", h.Transport, errTransportUnsupported)
 	}
 	if l.cfg.Section(config.Hub) == nil {
 		return nil, errors.New("Transport local verlangt einen Hub in derselben config, dort ist keiner " +
