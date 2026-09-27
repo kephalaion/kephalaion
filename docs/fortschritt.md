@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-09-26 (Tasks 001–012 abgeschlossen, in `done/`; Task 013 Etappen 1–5 erledigt; Task 014 offen)
+Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 offen)
 
 ## So wird diese Datei aktualisiert
 
@@ -158,6 +158,15 @@ Nichts.
   - `config.Location.System()` erkennt die globale config nur am bereinigten Pfad; über einen
     Symlink gilt sie nicht als global (Weg des Upgrades, Dienstzeile) (4);
   - `make dev-install` wiederholt Unit-Name und Label aus `internal/service` (5).
+- **Kleinere Punkte aus dem Review von Task 013** (`done/013-…`, „Code-Review“, Punkte 1, 2, 5, 6):
+  - der Ausdruck für die Suite steht in `ci.yml` zweimal (`run-name`, `env.SUITE`); laufen
+    sie auseinander, zählt `release` womöglich einen schnellen Lauf als vollständig (1);
+  - `release` liest die URL nur aus stdout von `gh workflow run`; steht sie woanders, greift
+    der Rückfall über die Kennung, bis zu 60 s später (2);
+  - `TestServe` ist nur langsam, weil das Beenden 5 s auf eine ungenutzte Verbindung wartet;
+    mit `CloseIdleConnections` vor dem Beenden wieder schnell (5, Befund
+    `material/befunde/test-laufzeiten.md`);
+  - `make check` gibt `go test  ./...` mit doppeltem Leerzeichen aus (6).
 
 - **VS-Code-Erweiterung in die Installation:** heute nur aus `vscode/` von Hand gebaut und
   mit `code --install-extension` installiert. Gehört ins gemeinsame Release und in die
