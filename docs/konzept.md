@@ -17,15 +17,19 @@ rotate`), und `kephalaion serve`: der Hub für Nodes, der Node als MCP-Server mi
 `whoami` (Task 005), dazu der User je Account (Task 006). Seit Task 008 gleicht `serve` die
 Replicas im Hintergrund selbst ab (`sync_interval`, `config set`), `whoami` zeigt Version,
 alle Hubs, Anmeldung und Stand des Abgleichs, `kephalaion node whoami` dasselbe auf der
-Kommandozeile. Task 009 brachte das Lesen über MCP (`list`, `read`, `changes`). Seit Task 011
-gibt es beide Arten der Installation ([`installation.md`](installation.md)): pro User mit
+Kommandozeile. Task 009 brachte das Lesen über MCP (`list`, `read`, `changes`), Task 014 das
+Schreiben: `create`, `write`, `delete` und `rename` als Vorgänge des Vertrags und Werkzeuge des
+Nodes, mit Rechten je Collection, Urheber und Revision als Vorbedingung, Verzeichnisse als
+Ganzes; die Erweiterung für VS Code speichert damit (Stufe 2 bis auf `create_numbered`). Seit
+Task 011 gibt es beide Arten der Installation ([`installation.md`](installation.md)): pro User mit
 Dienst (`kephalaion service install`, systemd `--user` bzw. LaunchAgent) und global für alle
 User eines Linux-Rechners (System-Unit aus `service unit --system`, von Hand oder per
 Ansible) — global bisher nur für User auf dem Rechner selbst, ohne Devcontainer. Die config
 wird ohne Angabe gefunden, `upgrade --check [--json]` und `whoami` sagen, ob es eine neue
 Version gibt und wie das Upgrade geht; ein CI-Job für macOS ist gebaut, derzeit aber
 abgeschaltet. Noch nicht gebaut: `https`
-und `ssh`, Suche, Schreiben über den Node und das Lauschen auf der Docker-Bridge. Die Überlegungen
+und `ssh`, Suche, die übrigen Werkzeuge zum Schreiben (`create_numbered`, Stufe 3) und das
+Lauschen auf der Docker-Bridge. Die Überlegungen
 entstanden in k-playbook und sind am 2026-09-25 hierher umgezogen.
 Begriffe nach [`begriffe.md`](begriffe.md): Sie sind englisch, die Dokumentation ist deutsch.
 
@@ -284,7 +288,8 @@ derselbe Eingang.
 **Node ↔ Hub: ein Protokoll, zwei Transportwege** — dazu der Funktionsaufruf im selben
 Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung im Pfad, kein
 MCP; es ist zustandslos, die Revision trägt der Node. Gebaut ist es als `POST /v1/whoami`,
-`/v1/rotate`, `/v1/sync` (Einzelheiten in [`vertrag.md`](vertrag.md), „HTTP“), der Node meldet
+`/v1/rotate`, `/v1/sync` und — seit Task 014 — `/v1/create`, `/v1/write`, `/v1/delete`,
+`/v1/rename` (Einzelheiten in [`vertrag.md`](vertrag.md), „HTTP“), der Node meldet
 sich mit `X-Keph-Node` und `Authorization: Bearer <token>` an. Benutzbar ist es bisher nur als
 Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs auf einem Rechner.
 
@@ -373,6 +378,9 @@ anderer beigetragen hat.
 Accounts (`created_by`, `updated_by`). Welcher Account es war und über welchen Node, steht im
 Protokoll (`actions`: `account`, `carrier`); das genügt. Die Herkunft (`origin`) bleibt davon
 unberührt — sie sagt, woher der Inhalt stammt, der Urheber sagt, wer ihn abgelegt hat.
+Umgesetzt in Task 014: Ein Schreibvorgang über einen Node schreibt je Dokument eine Zeile in
+`actions` mit Account, Node als `carrier` und `action` (`create`, `update`, `delete`,
+`rename`); die CLI am Hub schreibt `admin` ohne Träger.
 
 ### vendor/ — Vorlagen, die nur ein Update ändert (entschieden am 2026-09-27)
 
@@ -467,7 +475,9 @@ geändert“. Er bekommt geänderte Dokumente, Umzüge und Löschmarken, und zie
 nach — genau der Vorgang, den der lokale Index heute beim Dateiwechsel schon macht.
 
 Angestoßen wird das beim Start und danach regelmäßig, sowie unmittelbar nach einem eigenen
-Schreibvorgang.
+Schreibvorgang — gebaut in Task 014: nach Erfolg und nach unklarem Ausgang, ohne dass der
+Aufrufer darauf wartet, auch bei `sync_interval` `0`; läuft der Abgleich des Hubs schon, folgt
+genau einer.
 
 **Im Hintergrund — entschieden am 2026-09-26.** `serve` gleicht jeden Hub-Eintrag beim Start
 ab und danach in festem Abstand, Standard 30 s, änderbar in den `settings` des Nodes. Der
@@ -681,7 +691,7 @@ verwaltet sie: ausstellen, Rechte je Collection hinterlegen, zurückziehen. Loka
 Token in der Nutzerkonfiguration mit engen Rechten, nie im Repository.
 
 **Ein Schreibvorgang scheitert auf drei Arten, und jede wird gemeldet — entschieden am
-2026-09-26 (Task 014):**
+2026-09-26, umgesetzt in Task 014:**
 
 - **Abgelehnt** — fehlendes Recht, unbrauchbare Eingabe, unbekannte Collection, Name
   vergeben, veraltete Revision. Das ist endgültig; der Aufrufer erfährt den Grund und kann
@@ -731,8 +741,16 @@ Generalschlüssel.
 | Vorgang | Node | Hub |
 |---|---|---|
 | Lesen | prüft gegen die Account-Zeilen seiner Replica | — |
-| Schreiben | reicht durch | prüft |
+| Schreiben | prüft vorher Anmeldung und Lesbarkeit gegen die Account-Zeilen seiner Replica, reicht dann durch | prüft Anmeldung, Lesbarkeit, Recht, Form und Vorbedingung — maßgeblich |
 | `rotate` | reicht durch, muss den Account nicht kennen | prüft, liefert den Account-Eintrag |
+
+**Grenze beim Schreiben (Task 014):** Weil der Node vorher gegen seine Replica prüft, setzt
+Schreiben voraus, dass sie die Collection und die `SYSTEM:A:`-Zeile des Accounts schon trägt —
+nach `grant` also erst nach dem nächsten Abgleich; hat der Node den Hub noch nie abgeglichen,
+geht nichts, und die Meldung nennt `kephalaion node sync <hub>` als Ausweg. Nicht angemeldet
+oder nicht lesbar ist dieselbe Meldung „nicht lesbar“, ohne den Hub zu fragen. Ob geschrieben
+werden darf, entscheidet trotzdem allein der Hub, gegen `accounts` — so wirkt eine Sperre beim
+Schreiben sofort, auch wenn die Replica sie noch nicht kennt.
 
 **Einrichtung.** Collections und Accounts legt der Admin am Hub per Kommandozeile an; sie
 liegen in der Datenbank des Hubs, die Konfigurationsdatei enthält nur, was der Dienst zum
@@ -1242,7 +1260,8 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
 - **Das Token des Nodes steht im Klartext in `node.db`**, denn der Node muss es vorzeigen.
   Das Verzeichnis hat `0700`, die Datei `0600`.
 - **Die CLI am Hub handelt als `admin`** — Account und User heißen so. So steht es in
-  `created_by` und im Protokoll.
+  `created_by` und im Protokoll, ohne Träger. Schreibt ein Account über einen Node, steht sein
+  User in `created_by`/`updated_by`, Account und Node im Protokoll (Task 014).
 
 - **Nur Text, kein Typ.** Solange nur Texte gespeichert werden, braucht es keine Typspalte.
 - **Metadaten: ein freies Feld `meta` (JSON), vom Hub nicht gedeutet**, nur gespeichert und
@@ -1331,10 +1350,11 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   erste die Zeilen mit dem alten Hash — der Node lehnte das neue Token ab. Deshalb sperrt jeder
   Schreibvorgang an einem Account **zuerst seine Zeile in `accounts`** (`UPDATE accounts SET
   name = name WHERE name = $1`, wie bei der Revision; `SELECT … FOR UPDATE` versteht SQLite
-  nicht) und liest erst danach. `rotate` beginnt mit dem bedingten Schreiben (`… WHERE name =
-  $1 AND token_hash = <alter Hash> AND locked = 0`) — das ist zugleich die Sperre; trifft es
-  keine Zeile, scheitert es ohne weitere Änderung. Der Import sperrt vor dem Lesen alle Zeilen
-  von `accounts`.
+  nicht) und liest erst danach — ebenso `create`, `write`, `delete` und `rename` über einen
+  Node (Task 014), bevor sie Hash, Sperre und User lesen. `rotate` beginnt mit dem bedingten
+  Schreiben (`… WHERE name = $1 AND token_hash = <alter Hash> AND locked = 0`) — das ist
+  zugleich die Sperre; trifft es keine Zeile, scheitert es ohne weitere Änderung. Der Import
+  sperrt vor dem Lesen alle Zeilen von `accounts`.
 - **Der Hub hat eine Identität.** `hub init` vergibt eine `hub_id` (ULID, in `db_info`); jede
   Antwort an einen Node trägt sie, der Node speichert sie in `db_info` seiner Replica —
   maßgeblich — und danach als Kopie in `hubs`. Weicht sie ab — etwa
@@ -1419,7 +1439,7 @@ MCP-Werkzeuge des Nodes für Clients; die Kommandozeile und der Vertrag zwischen
 sind eigene Listen.
 
 **Eine Oberfläche in VS Code** über dieselben Werkzeuge — Collections als Ordner im Explorer —
-ist als Idee in [`vscode.md`](vscode.md) festgehalten.
+steht in [`vscode.md`](vscode.md); gebaut sind Lesen und, seit Task 014, Schreiben.
 
 **Allgemein und für k-playbook.** Kephalaion ist ein allgemeiner Store. Trotzdem braucht es
 Werkzeuge eigens für k-playbook, dem ersten und wichtigsten Nutzer. Grundsatz: Ein
@@ -1634,26 +1654,28 @@ Erweiterung ist ein Client wie jeder andere ([`vscode.md`](vscode.md)).
 
 | Werkzeug | Zweck | Anmerkungen |
 |---|---|---|
-| `create` | Dokument anlegen | scheitert, wenn der Name vergeben ist (eigener Fehlercode) |
+| `create` | Dokument anlegen | scheitert, wenn der Name vergeben ist (eigener Fehlercode). Gebaut in Task 014 |
 | `create_numbered` | Dokument mit fortlaufender Nummer anlegen | siehe „Zwei Arten von Eingaben“; liefert den erzeugten Namen |
-| `write` | Dokument ersetzen | wahlweise mit der Revision, auf der es beruht |
+| `write` | Dokument ersetzen | wahlweise mit der Revision, auf der es beruht. Gebaut in Task 014 |
 | `append` | an ein Dokument anhängen | der Hub serialisiert |
 | `replace_section` | einen Abschnitt ersetzen | Abschnitt über die Zerlegung, Anker |
-| `rename` | umbenennen, verschieben | Änderung am Namen, `id` bleibt |
+| `rename` | umbenennen, verschieben | Änderung am Namen, `id` bleibt; auch ein Verzeichnis. Gebaut in Task 014 |
 | `supersede` | ablösen | mit Nachfolger und Grund |
-| `delete` | löschen | Löschmarke; Eigenes mit `write`, Fremdes mit `supersede` |
+| `delete` | löschen | Löschmarke; Eigenes mit `write`, Fremdes mit `supersede`; ein Verzeichnis mit `recursive`. Gebaut in Task 014 |
 | `replace_directory` | ein ganzes Verzeichnis ersetzen | für Generatoren, in k-playbook heute `publish` |
 
-**Festgelegt am 2026-09-26 für `create`, `write`, `delete` und `rename` (Task 014)** —
-`rename` ist dafür aus Stufe 3 in Stufe 2 vorgezogen, weil Umbenennen und Verschieben im
-Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und Löschen die `id` verlöre:
+**Festgelegt am 2026-09-26 für `create`, `write`, `delete` und `rename`, umgesetzt in Task 014
+(2026-09-27)** — `rename` ist dafür aus Stufe 3 in Stufe 2 vorgezogen, weil Umbenennen und
+Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und Löschen die
+`id` verlöre. Vertrag in [`vertrag.md`](vertrag.md), „Schreibvorgänge“:
 
 - **Vier Vorgänge des Vertrags**, je einer je Werkzeug, in Fassung 1 (sie kommen nur hinzu).
   Der Node prüft Anmeldung und Lesbarkeit wie beim Lesen und reicht dann Account und Token an
   den Hub; ob geschrieben werden darf, entscheidet allein der Hub — so wirkt eine Sperre beim
   Schreiben sofort.
 - **Rechte am Hub:** `write` für `create` und für Eigenes (`created_by` ist der User des
-  Accounts), `supersede` zusätzlich für Fremdes — bei Verzeichnissen für jedes Dokument darunter.
+  Accounts), `supersede` für Fremdes, `write` ist dafür nicht nötig — bei Verzeichnissen für
+  jedes Dokument darunter; ein einziges verbotenes lässt den ganzen Vorgang scheitern.
   Collection unbekannt, nicht für den Node erlaubt oder nicht für den Account: eine Antwort.
   `created_by`/`updated_by` ist der User; `actions` nennt Account und Node.
 - **Revision als Vorbedingung:** `write`, `delete` und `rename` nehmen wahlweise die Revision,
@@ -1661,17 +1683,34 @@ Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und Löschen die `
   Code ab. Weil die Revision global ist und nur steigt, genügt der Vergleich auf Gleichheit.
 - **Fehlercodes:** Name vergeben (`name_taken`), Revision veraltet (`stale_revision`), Datei
   und Verzeichnis zugleich (`path_conflict`), nicht gefunden (`not_found`), Recht fehlt
-  (`forbidden`), nicht lesbar (`not_readable`).
+  (`forbidden`), nicht lesbar (`not_readable`). Die Werkzeuge melden dazu `unreachable` (Hub
+  nicht erreicht, nichts gespeichert), `outcome_unknown` (Ausgang unklar), `unsupported` (der
+  Hub kennt den Vorgang nicht, oder `https`/`ssh`; nichts gespeichert) und `internal` (ein
+  Fehler des Nodes selbst — `node.db`, Replica nicht lesbar; nichts abgeschickt).
+  `account_unauthenticated` des Hubs wird am Node `not_readable`, `unauthenticated` und
+  `unsupported_version` gehen durch. Form: `isError`, die Meldung als Text und
+  `structuredContent.error` mit `code` und `message` — Clients entscheiden nach dem Code.
 - **Verzeichnisse als Ganzes:** `delete` mit `recursive` und `rename` eines Verzeichnisses
-  wirken auf alle Dokumente darunter, alles oder nichts, eine Revision. `rename` überschreibt
-  kein belegtes Ziel und bleibt in seiner Collection.
+  wirken auf alle Dokumente darunter, alles oder nichts, eine Revision. `recursive` bei einem
+  Dokument ist ohne Belang; ein Verzeichnis ohne `recursive` ist `invalid`.
+- **Ziel von `rename`**, geprüft im Stand davor, das Recht vor dem Ziel: von derselben Art
+  belegt — ein Dokument auf ein lebendes Dokument, ein Verzeichnis auf ein bestehendes
+  Verzeichnis — ist `name_taken`; nichts wird überschrieben, nichts zusammengelegt. Von der
+  anderen Art belegt — ein Dokument auf ein Verzeichnis oder umgekehrt — ist `path_conflict`.
+  Das Ziel unter der Quelle (`x` nach `x/y`) und derselbe Name sind `invalid`. `rename` bleibt
+  in seiner Collection.
 - **Die eigene Änderung steht sofort in der Replica:** Die Antwort des Hubs trägt die
   geschriebenen Zeilen; der Node schreibt sie in die Replica, bevor er antwortet, und stößt
   danach den Abgleich an. Sonst lieferte `read` nach dem Speichern noch die alte Revision, und
   schon das zweite Speichern scheiterte an der eigenen Vorbedingung.
-- **Nie wiederholt**, siehe „Transport, Token und Fehlschläge“.
+- **Nie wiederholt**, siehe „Transport, Token und Fehlschläge“. Nach Erfolg und nach
+  unklarem Ausgang stößt der Node den Abgleich an, auch bei `sync_interval` `0`.
 - **Leere Verzeichnisse** gibt es am Hub weiter nicht; die Erweiterung für VS Code merkt sich
   ein neu angelegtes, bis darin etwas liegt.
+- **Grenzen:** Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB, leer erlaubt; über HTTP trägt ein
+  Schreibvorgang bis 7 MiB, ebenso der MCP-Eingang des Nodes — so passt jedes Dokument auch in
+  der größten Form, die JSON daraus macht. Schreiben setzt voraus, dass die Replica Collection
+  und Account-Zeile trägt (siehe „Authentifizierung“, „Wer wann prüft“).
 
 ### Verwaltung über MCP (vorgemerkt am 2026-09-25)
 
@@ -1732,7 +1771,8 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 1. **Nur lesen.** Node liefert Suchen, Lesen, Abgleich; eine Collection, ein Token, ein Recht.
 2. **Schreiben mit Rechten, ohne KI.** Dateien werden deterministisch abgelegt, der Hub prüft
    Recht und Form. Accounts, `rotate`, Ablehnungen, Fehlschläge; dazu Umbenennen, vorgezogen
-   aus Stufe 3 (Task 014).
+   aus Stufe 3. Gebaut bis auf `create_numbered`: Accounts und `rotate` in Tasks 005–007,
+   `create`, `write`, `delete` und `rename` in Task 014.
 3. **Vorgänge auf Dateien.** Anhängen, Abschnitt ändern, abschließen, Verzeichnis ersetzen —
    damit auch `vendor/` mit Scope `vendor/<name>`.
 4. **Schnipsel und Einordnen durch den Hub** (zurückgestellt). Zuerst Regeln. Erst danach, und
