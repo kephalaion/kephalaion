@@ -5,13 +5,17 @@ description: Erweiterung, die Collections über einen FileSystemProvider als Ord
 
 # Kephalaion in VS Code
 
-**Stand: Lesen gebaut** (2026-09-26, Version 0.0.4, siehe „Umsetzung“ unten): Statusleiste
-aus `whoami`, Collections als Ordner mit Inhalt über `list` und `read`, Änderungen über
-`changes`. Schreiben fehlt. Was die Erweiterung zum Lesen braucht, gibt es am Node: `whoami` in der Form,
-die die Statusleiste braucht — Version, alle Hubs mit `login`, Node-Name und Stand des
-Abgleichs (Task 008) —, dazu `list`, `read` und `changes` (Task 009, Festlegungen in
-[`konzept.md`](konzept.md), „Allgemein — lesen“), und `serve` gleicht im Hintergrund ab. Begriffe nach [`begriffe.md`](begriffe.md), Hintergrund in
-[`konzept.md`](konzept.md).
+**Stand: Lesen und Schreiben gebaut** (2026-09-27, Version 0.0.5, siehe „Umsetzung: Lesen“ und
+„Umsetzung: Schreiben“ unten): Statusleiste aus `whoami`, Collections als Ordner mit Inhalt über
+`list` und `read`, Änderungen über `changes`; speichern, neue Datei, neuer Ordner, löschen,
+umbenennen und verschieben über `create`, `write`, `delete` und `rename` (Task 014). Was die
+Erweiterung braucht, gibt es am Node: `whoami` in der Form, die die Statusleiste braucht —
+Version, alle Hubs mit `login`, Node-Name und Stand des Abgleichs (Task 008) —, dazu `list`,
+`read` und `changes` (Task 009, Festlegungen in [`konzept.md`](konzept.md), „Allgemein —
+lesen“) und die Werkzeuge, die schreiben (Task 014, „Allgemein — schreiben“); `serve` gleicht im
+Hintergrund ab. Das Schreiben ist mit einem Ersatz für `vscode` gegen den echten Node geprüft,
+im echten VS Code noch nicht — die Handgriffe dafür stehen unter „Umsetzung: Schreiben“.
+Begriffe nach [`begriffe.md`](begriffe.md), Hintergrund in [`konzept.md`](konzept.md).
 
 ## Wozu
 
@@ -65,23 +69,30 @@ Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS 
 
 | `FileSystemProvider` | Kephalaion (MCP-Werkzeug des Nodes) |
 |---|---|
-| `stat(uri)` | `read` mit `content: false`: Dokument, Verzeichnis oder nichts; `updated` als `mtime`, Größe als `size`, schreibbar ja/nein |
+| `stat(uri)` | `read` mit `content: false`: Dokument, Verzeichnis oder nichts; `updated` als `mtime`, Größe als `size`; ohne `writable` (Recht `write` der Collection) `FilePermission.Readonly` |
 | `readDirectory(uri)` | `list` mit `path`, ohne Unterverzeichnisse, Verzeichnisse als eigene Einträge, mit Cursor bis zum Ende |
 | `readFile(uri)` | `read` — aus der Replica, lokal und schnell, auch offline |
-| `writeFile(uri, …)` | gibt es das Dokument noch nicht (`read` mit `content: false`), `create`; sonst `write` mit der Revision aus diesem `read`. Was die Replica schon kennt, fängt VS Code über `mtime` selbst ab („Datei ist neuer“); was noch nicht abgeglichen ist, lehnt der Hub an der Revision ab |
-| `rename(alt, neu)` | `rename`, `id` bleibt; ein Verzeichnis als Ganzes. Nur innerhalb einer Collection, kein Überschreiben eines belegten Ziels |
-| `delete(uri)` | `delete` (Löschmarke) — Eigenes mit `write`, Fremdes nur mit `supersede`; ein Verzeichnis als Ganzes (`recursive`) |
-| `createDirectory(uri)` | nichts am Hub — Verzeichnisse sind nur Präfixe von Namen; die Erweiterung merkt sich das leere Verzeichnis, bis darin etwas angelegt wird |
-| `watch` / Event `onDidChangeFile` | `changes` mit dem Cursor der letzten Antwort, abgefragt alle paar Sekunden — aus der Replica, ohne Netz. Ein Umbenennen erkennt die Erweiterung an der `id` (alter Name gelöscht, neuer angelegt); `changes` nennt keinen alten Namen. Bei `reset` liest sie den Hub neu mit `list`, bei `dropped` entfernt sie die Collection |
+| `writeFile(uri, …)` | gibt es das Dokument noch nicht (`read` mit `content: false`), `create` (ohne `options.create`: `FileNotFound`); sonst `write` mit der Revision aus diesem `read` (ohne `options.overwrite`: `FileExists`); ein Verzeichnis ist `FileIsADirectory`. Was die Replica schon kennt, fängt VS Code über `mtime` selbst ab („Datei ist neuer“); was noch nicht abgeglichen ist, lehnt der Hub an der Revision ab |
+| `rename(alt, neu)` | `rename`, `id` bleibt; ein Verzeichnis als Ganzes, ohne `base_revision`. Nur innerhalb einer Collection, sonst eine Meldung; ein belegtes Ziel `FileExists`, mit `overwrite` eine Meldung — überschrieben wird nie |
+| `delete(uri)` | `delete` (Löschmarke) — Eigenes mit `write`, Fremdes nur mit `supersede`; ein Verzeichnis als Ganzes, `recursive` aus den Optionen; ohne `base_revision` |
+| `createDirectory(uri)` | nichts am Hub — Verzeichnisse sind nur Präfixe von Namen; die Erweiterung merkt sich das leere Verzeichnis in diesem Fenster, bis darin etwas angelegt oder es gelöscht wird |
+| `watch` / Event `onDidChangeFile` | `changes` mit dem Cursor der letzten Antwort, abgefragt alle 3 s — aus der Replica, ohne Netz. Ein Umbenennen erkennt die Erweiterung an der `id` — seit 0.0.5 über eine Tabelle `id` → Name je Collection (alter Name gelöscht, neuer angelegt); `changes` nennt keinen alten Namen. Bei `reset` liest sie den Hub neu mit `list`, bei `dropped` entfernt sie die Collection; beide verwerfen die Tabelle. Nach eigenen Schreibvorgängen feuert sie die Ereignisse selbst |
 
 - **Konflikte:** VS Code vergleicht `mtime` beim Speichern selbst und fragt nach, wenn die
   Datei inzwischen neuer ist. Zusätzlich lehnt der Hub ab, wenn die mitgeschickte Revision
   veraltet ist (siehe [`konzept.md`](konzept.md), „Zwei Arten von Eingaben“). Die
-  Erweiterung meldet das als Fehler; nichts wird still überschrieben.
-- **Offline wird gelesen, nicht geschrieben.** Ist der Hub nicht erreichbar, wirft
-  `writeFile` `FileSystemError.Unavailable` mit der Meldung des Nodes. Lesen läuft weiter.
+  Erweiterung meldet das als gewöhnlichen Fehler mit der Meldung des Nodes (`stale_revision`)
+  — ein Fehler des Providers löst in VS Code nie „Datei ist neuer“ aus; nichts wird still
+  überschrieben.
+- **Offline wird gelesen, nicht geschrieben.** Ist der Hub nicht erreichbar, werfen
+  `writeFile`, `delete` und `rename` `FileSystemError.Unavailable` mit der Meldung des Nodes.
+  Lesen läuft weiter.
 - **Rechte:** Collections ohne Schreibrecht meldet `stat` als schreibgeschützt
-  (`FilePermission.Readonly`); VS Code öffnet sie dann nur zum Lesen.
+  (`FilePermission.Readonly`); VS Code öffnet sie dann nur zum Lesen. Das Recht gilt je
+  Collection (`write`, aus `writable`): Ein fremdes Dokument ohne `supersede` erscheint
+  schreibbar und scheitert erst beim Speichern mit `NoPermissions` („gehört admin, supersede
+  fehlt“). Bewusste Grenze: Ein Account mit `supersede`, aber ohne `write`, sieht die
+  Collection schreibgeschützt, obwohl der Hub ihm das Ändern fremder Dokumente erlaubte.
 - **Verbindung und Stand:** `whoami` — Account, Hubs, lesbare Collections und
   Rechte, Stand des Abgleichs, Version.
 - **Die Replica bleibt unberührt.** Die Erweiterung schreibt nie in sie; jeder
@@ -91,7 +102,7 @@ Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS 
 ### Welche Werkzeuge — keine eigens für VS Code
 
 Entschieden am 2026-09-26: Die Erweiterung braucht **`whoami`, `list`, `read` und
-`changes`**, zum Schreiben später `create`, `write`, `rename`, `delete`. Alle taugen auch für
+`changes`**, zum Schreiben `create`, `write`, `rename`, `delete` (gebaut in Task 014). Alle taugen auch für
 die KI; es gibt keine Werkzeuge nur für VS Code, kein eigenes Profil, keine Schnittstelle
 neben MCP. Dafür wurden drei Werkzeuge im Konzept erweitert bzw. neu aufgenommen
 ([`konzept.md`](konzept.md), „Allgemein — lesen“):
@@ -261,6 +272,9 @@ Treffer (mit etwas Verzögerung, erst nach einer weiteren Suche). Das ist in Ord
   ist.
 - Leere Verzeichnisse: vorerst nur in der Erweiterung gemerkt (Task 014); ob später als
   `SYSTEM:D:`-Zeile am Hub, bleibt offen (vgl. „Persönliche Verzeichnisse“ im Konzept).
+- Das Schreiben im echten VS Code: die Handgriffe unter „Umsetzung: Schreiben“, „Im echten
+  VS Code noch zu prüfen“ — vor allem, ob der `FileService` den Provider so ruft wie
+  angenommen.
 - Wie die Erweiterung mit `personal`-Verzeichnissen umgeht (nur Eigenes zeigen, Schalter für
   alles).
 - Ob eine TreeView zusätzlich zum Dateisystem sinnvoll ist, etwa für Status und Abgleich.
@@ -295,14 +309,18 @@ ohne Sitzung — das SDK braucht es dafür nicht.
   blättert mit `cursor`), `readFile` über `read` — der Inhalt ist der Text des Ergebnisses.
   `changes` alle 3 s mit dem Cursor der letzten Antwort; je Eintrag `Changed` bzw. `Deleted`
   für das Dokument und `Changed` für jedes Verzeichnis darüber bis zur Collection, damit der
-  Explorer neue und leer gewordene Verzeichnisse sieht. Ein Umbenennen kommt so als
-  gelöscht und neu an; die `id` wertet die Erweiterung dafür nicht aus. `reset` und
+  Explorer neue und leer gewordene Verzeichnisse sieht. Ein Umbenennen kam so als
+  gelöscht und neu an, die `id` wertete die Erweiterung dafür nicht aus — *überholt mit 0.0.5:*
+  Sie wird jetzt ausgewertet, siehe „Umsetzung: Schreiben“. `reset` und
   `dropped` lassen die Wurzel des Hubs neu lesen. Dazu „Kephalaion: Status anzeigen“ — der
   Inhalt des Tooltips im Output „Kephalaion“, weil der Tooltip schwer zu finden ist (der
   Tooltip eines Ordners im Explorer zeigt nur den Pfad, etwa `\eins`).
-- **Fehler:** Eine Antwort des Werkzeugs mit Fehler („nicht lesbar“) wird zu
-  `FileNotFound`, ein Fehler der Verbindung zu `Unavailable`.
-- **Alles schreibgeschützt**, auch mit `writable: true`, bis Schreiben gebaut ist.
+- **Fehler beim Lesen:** Eine Antwort des Werkzeugs mit Fehler („nicht lesbar“) wird zu
+  `FileNotFound`, ein Fehler der Verbindung zu `Unavailable` — gilt weiter für `stat`,
+  `readDirectory` und `readFile`; beim Schreiben entscheidet seit 0.0.5 der Code (siehe
+  „Umsetzung: Schreiben“).
+- ~~**Alles schreibgeschützt**, auch mit `writable: true`, bis Schreiben gebaut ist.~~
+  *Überholt mit 0.0.5:* schreibgeschützt nur ohne `writable`, `isReadonly` ist `false`.
 - **Geprüft** mit einem Ersatz für das Modul `vscode` gegen den laufenden Node (`home:eins`,
   Dokumente unter `test/`): Verzeichnisse, Metadaten, Inhalt, „nicht gefunden“, fremde
   Collection, Ereignisse nach `hub doc put` und `node sync`. Im echten VS Code: ein Dokument
@@ -314,6 +332,114 @@ ohne Sitzung — das SDK braucht es dafür nicht.
   „Status anzeigen“ nennen die Accounts eines Hubs und welcher gewählt ist. Geprüft mit dem
   Ersatz für `vscode` und Kopien der Token-Dateien samt einem erfundenen zweiten Account:
   ohne Wahl, gewählt, gewählt ohne Datei, falscher Account gewählt; `.pending` übergangen.
+
+## Umsetzung: Schreiben (2026-09-27, 0.0.5)
+
+Mit Task 014 gebaut, weiter reines JavaScript ohne Abhängigkeiten
+([`vscode/extension.js`](../vscode/extension.js), [`vscode/README.md`](../vscode/README.md)).
+Jeder Schreibvorgang geht über die Werkzeuge des Nodes zum Hub (`create`, `write`, `delete`,
+`rename`), wird nie wiederholt, und nach Erfolg feuert die Erweiterung die Ereignisse selbst.
+
+- **`stat` und Schreibschutz:** schreibgeschützt nur ohne `writable` — ein Recht je
+  Collection (`write`); `isReadonly` ist `false`. Ein fremdes Dokument ohne `supersede`
+  scheitert erst beim Speichern mit `NoPermissions`; `supersede` ohne `write` bleibt
+  schreibgeschützt (bewusste Grenze, siehe „Rechte“ oben).
+- **`writeFile`:** zuerst `read` mit `content: false`; `none` → `create`, `document` →
+  `write` mit dessen Revision, `directory` → `FileIsADirectory`. Der Inhalt wird vorher streng
+  als UTF-8 geprüft — ein BOM bleibt erhalten —, ohne NUL-Byte und höchstens 1 MiB; sonst eine
+  klare Meldung („keine Textdatei“, „zu groß“), ohne dass etwas abgeschickt wird.
+- **`delete`** mit `recursive` aus den Optionen; ein nur gemerktes leeres Verzeichnis wird
+  vergessen, ohne den Hub zu fragen. **`rename`** nur innerhalb einer Collection; über
+  Collections oder Hubs eine Meldung („dafür kopieren und löschen“), ein belegtes Ziel
+  `FileExists`, mit `overwrite` die Meldung, dass Umbenennen nicht überschreibt. `delete` und
+  `rename` schicken kein `base_revision`.
+- **`createDirectory`** legt am Hub nichts an: Das leere Verzeichnis gilt nur in diesem
+  Fenster, bis darin etwas liegt oder es gelöscht wird; `stat` und `readDirectory` zeigen es.
+  Nach dem Neuladen des Fensters ist es weg — gewollt.
+- **Tabelle `id` → Name** je Collection, gespeist aus `list`, `read`, `changes` und den
+  Antworten eigener Schreibvorgänge; ein älterer Stand überschreibt keinen neueren. Meldet
+  `changes` eine bekannte `id` unter neuem Namen: `Deleted` für den alten Namen, `Created` für
+  den neuen (bzw. `Deleted`, wenn er danach gelöscht wurde), `Changed` für beide Elternpfade —
+  so sieht ein zweites VS Code das Umbenennen. `reset` verwirft die Tabellen des Hubs,
+  `dropped` die der Collection, ein anderer Account alle.
+- **Fehler nach dem Code** in `structuredContent.error.code`, nie nach der Meldung:
+
+  | Code des Nodes | `FileSystemError` |
+  |---|---|
+  | `name_taken` | `FileExists` |
+  | `not_found` | `FileNotFound` |
+  | `forbidden`, `not_readable` | `NoPermissions` |
+  | `unreachable`, `outcome_unknown` | `Unavailable`, mit der Meldung |
+  | alle anderen, auch `stale_revision` | ein Fehler mit der Meldung des Nodes |
+
+  Die Fehler von `read` (auch vor einem Schreibvorgang) tragen keinen Code; die Erweiterung gibt
+  dann die Meldung des Nodes weiter. Auf dem Weg zum Node unterscheidet sie drei Arten: nicht
+  erreichbar (nichts abgeschickt — „nichts gespeichert“), Ausgang unklar (Verbindung nach dem
+  Abschicken abgebrochen, 5xx, unlesbare Antwort — „gespeichert sein kann es, nicht
+  wiederholen“) und abgelehnt.
+- **Geprüft** mit dem Ersatz für `vscode` gegen den laufenden Node (`home:eins`, unter
+  `test/schreiben/…`, 118 Prüfungen): neue Datei leer, dann mit Inhalt; zweimal speichern;
+  Konflikt nach `hub doc put`; Löschen von Datei und Verzeichnis; Umbenennen von Datei und
+  Verzeichnis mit einem zweiten Client, der über `changes` den alten Namen verschwinden und den
+  neuen kommen sieht (auch umbenennen, dann löschen, ein Abgleich); leeres Verzeichnis anlegen
+  und befüllen; Binärdatei, NUL und Größe abgelehnt; fremdes Dokument erst beim Speichern
+  `NoPermissions`; Node nicht erreichbar. In einem isolierten Aufbau mit Node über `http`: Hub
+  gestoppt → `Unavailable`, Lesen geht weiter; `outcome_unknown` und abgebrochene Verbindung.
+  Der Weg darunter — zwei Nodes, Konflikt zwischen ihnen, Hub gestoppt — steht als Go-Test
+  `TestMCPWriteTwoNodes` in `cmd/kephalaion`. Befund dazu:
+  `k-playbook-local/material/befunde/vscode-schreiben.md`.
+
+### Im echten VS Code noch zu prüfen
+
+**Offen, Stand 2026-09-27** — der Nutzer geht die Handgriffe selbst durch, nur unter `test/`
+in `home:eins`. Im Output „Kephalaion“ (Menü → Log) steht jeder Aufruf mit Vorgang, Name und
+Ausgang; daran lässt sich ablesen, was VS Code wirklich aufruft.
+
+1. **Installieren**, aus einem Terminal der WSL:
+   `code --install-extension vscode/kephalaion-0.0.5.vsix` (im Repository; fehlt die Datei:
+   `cd vscode && npx --yes @vscode/vsce package --skip-license`), dann „Developer: Reload
+   Window“. Die Statusleiste zeigt `Keph home`, `keph://home/eins` ist eingebunden.
+2. **Speichern:** ein Dokument unter `test/` öffnen, ändern, Strg+S — und gleich noch einmal
+   ändern und speichern: kein Konflikt. `kephalaion hub doc get eins test/…` zeigt den Stand.
+3. **Neue Datei** im Explorer unter `test/`: erscheint leer (`create` mit leerem Inhalt),
+   dann Inhalt tippen und speichern (`write`).
+4. **Neuer Ordner** unter `test/`, darin eine neue Datei: danach besteht der Ordner am Hub.
+   Einen zweiten leeren Ordner anlegen und „Developer: Reload Window“: Er ist weg — gewollt,
+   leere Ordner gelten nur je Fenster.
+5. **Ordner per Drag & Drop** aus dem Projekt (Explorer von VS Code oder von Windows) nach
+   `keph://home/eins/test/`, mit Unterordnern: alles kommt an. Einmal mit einer Binärdatei
+   (etwa `.png`) darin: nur diese scheitert mit „keine Textdatei“, die übrigen kommen an.
+6. **Umbenennen** einer Datei und eines Ordners im Explorer (F2): Die `id` bleibt — im Log
+   nennt die Zeile `rename …` dieselbe `id` wie das `create` der Datei aus Punkt 3 —, und ein
+   zweites Fenster mit derselben Collection sieht den alten Namen verschwinden und den neuen
+   kommen.
+7. **Verschieben** per Drag & Drop innerhalb der Collection. Auf ein **belegtes Ziel** mit
+   „Ersetzen“: Was geschieht? Erwartet ist, dass VS Code das Ziel selbst löscht und dann
+   umbenennt (im Log `delete …`, dann `rename …`); sonst erscheint die Meldung „Umbenennen
+   überschreibt nicht“.
+8. **Verschieben in eine andere Collection** (oder einen anderen Hub; braucht eine zweite
+   eingebundene Collection mit `write`): die Meldung „Verschieben nur innerhalb einer
+   Collection … kopieren und löschen“; Strg+Drag kopiert dagegen.
+9. **Löschen** einer Datei und eines Ordners im Explorer (Entf), die Rückfrage bestätigen —
+   einen Papierkorb gibt es für `keph://` nicht; danach fehlen beide auch am Hub
+   (`kephalaion hub doc list eins test/`).
+10. **„Datei ist neuer“:** ein Dokument unter `test/` öffnen und ändern, ohne zu speichern; am
+    Hub `echo neu | kephalaion hub doc put eins test/…`; `kephalaion node sync home` (oder den
+    Abgleich abwarten, bis 30 s); dann in VS Code speichern: VS Code meldet, die Datei sei
+    neuer. „Vergleichen“ zeigt beide Stände, „Überschreiben“ speichert — danach am Hub den
+    eigenen Inhalt prüfen.
+11. **Konflikt vor dem Abgleich:** wie 10, aber sofort nach `hub doc put` speichern, bevor
+    abgeglichen ist: eine Fehlermeldung „… hat Revision …, der Vorgang beruht auf …“, am Hub
+    bleibt `neu`.
+12. **Fremdes Dokument:** `echo fremd | kephalaion hub doc put eins test/fremd.md` (gehört
+    `admin`), in VS Code öffnen — es ist nicht schreibgeschützt —, ändern und speichern: erst
+    jetzt „gehört admin, supersede fehlt“ (`NoPermissions`); am Hub bleibt `fremd`.
+13. **Noch unbestätigt** (Befund `vscode-schreiben.md`, „Wie VS Code den Provider beim Schreiben
+    ruft“), im Log nachsehen: ruft der `FileService` `writeFile` immer mit `create` und
+    `overwrite` auf (Speichern und neue Datei gelingen, kein `FileExists`/`FileNotFound`), legt
+    er fehlende Eltern über `createDirectory` an (beim Drop eines verschachtelten Ordners Zeilen
+    `createDirectory … nur hier gemerkt` vor den `create`), und löscht er bei „Ersetzen“ das Ziel
+    selbst vor `rename` (Punkt 7)?
 
 ## Fundstellen
 
