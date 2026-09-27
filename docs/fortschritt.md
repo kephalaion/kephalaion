@@ -135,6 +135,11 @@ Nichts.
   als Vorbedingung, eigene Fehlercodes, Verzeichnisse als Ganzes, eigene Änderung sofort in der
   Replica, nie wiederholt; danach die Erweiterung für VS Code (`konzept.md`, „Allgemein —
   schreiben“, „Transport, Token und Fehlschläge“).
+- **`vendor/` und Verzeichnis-Update** (entschieden 2026-09-27, nach Task 014): `vendor/` auf
+  oberster Ebene jeder Collection über den Node schreibgeschützt; einziger Weg hinein ist
+  `replace_directory` auf `vendor/<name>/` mit Scope `vendor/<name>` (Account-Zeile, `hub
+  account grant`, Exportformat). Das Update macht k-playbook in seiner Projekt-Collection, das
+  Überlagern ebenso (`konzept.md`, „vendor/“).
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:

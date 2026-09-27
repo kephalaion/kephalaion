@@ -351,6 +351,7 @@ Automatisierung, hat sechs Accounts und einen User.
 | `read` | Suchen, Lesen. Hat jeder Account, der in der Collection eingetragen ist. |
 | `write` | Neues anlegen; **Eigenes** ändern und löschen (`created_by` ist der eigene User — auch was ein anderer Account desselben Users angelegt hat). Einen gelöschten Namen neu anlegen darf jeder mit `write`. |
 | `supersede` | **Fremdes** ändern, ablösen und löschen. |
+| `vendor/<name>` | Das Verzeichnis `vendor/<name>/` als Ganzes ersetzen — sonst nichts; siehe „vendor/“ unten (entschieden am 2026-09-27, nicht gebaut). |
 | `replicate` | Kein Recht eines Accounts, sondern eines Nodes: Inhalt und Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections` (siehe „Datenmodell“). |
 
 Später, falls gebraucht: `write` als Liste von Namenspräfixen statt `true` (etwa `["eins/",
@@ -372,6 +373,40 @@ anderer beigetragen hat.
 Accounts (`created_by`, `updated_by`). Welcher Account es war und über welchen Node, steht im
 Protokoll (`actions`: `account`, `carrier`); das genügt. Die Herkunft (`origin`) bleibt davon
 unberührt — sie sagt, woher der Inhalt stammt, der Urheber sagt, wer ihn abgelegt hat.
+
+### vendor/ — Vorlagen, die nur ein Update ändert (entschieden am 2026-09-27)
+
+Nicht gebaut; kommt, wenn sich Verzeichnisse als Ganzes schreiben lassen (`replace_directory`).
+
+**Der Fall:** k-playbook liefert Regeln, Reviews, Commands und Ähnliches mit, die ein Projekt
+mit einer gleichnamigen eigenen Datei überschreibt. Die mitgelieferten ändert niemand von
+Hand; ein Update ersetzt sie in einem Rutsch. Liegen sie im Store, sollen sie dort ebenso fest
+sein — sonst verschwände eine Änderung beim nächsten Update still, ohne dass es jemand merkt.
+
+- **`vendor/` auf oberster Ebene jeder Collection ist schreibgeschützt.** Lesen darf, wer die
+  Collection lesen darf. Über einen Node schreibt dort niemand einzelne Dokumente: kein
+  `create`, `write`, `delete` oder `rename` unter `vendor/`, auch nicht hinein oder heraus —
+  gleich mit welchem Recht. Am Node ist dort deshalb nichts `writable`, und VS Code öffnet es
+  schreibgeschützt. Die CLI am Hub (`hub doc`, `hub import`) darf wie überall.
+- **Einziger Weg hinein: ein ganzes Verzeichnis `vendor/<name>/` ersetzen**, mit dem Scope
+  `vendor/<name>` des Accounts in dieser Collection (geschrieben `<collection>:vendor/<name>`).
+  `<name>` ist ein Segment, etwa `k-playbook`. Der Scope steht in der Account-Zeile neben
+  `write` und `supersede` und ist unabhängig von ihnen: Ein Account mit nur diesem Scope
+  aktualisiert seine Vorlagen und kann sonst nichts ändern.
+- **Das Ersetzen** ist ein Schreibvorgang mit einer Revision: Neues wird angelegt,
+  Geändertes ersetzt, Fehlendes gelöscht, Unverändertes bleibt. Ein Node sieht die Vorlagen nie
+  halb alt, halb neu, weil der Abgleich an Revisionsgrenzen endet.
+- **Das Update macht k-playbook**, nicht der Hub: in der Collection seines Projekts — jedes
+  Projekt hat seine eigene —, mit seinem eigenen Account, wenn es bei seiner gelegentlichen
+  Prüfung eine neue Version findet. Ein Hub, der selbst aktualisiert, müsste je Collection
+  wissen, was und wie; das ist zu speziell für ihn. Ein Zeitplan am Hub kann später für anderes
+  kommen.
+- **Das Überlagern ist nicht Sache von Kephalaion.** k-playbook stellt die Regeln der KI über
+  ein eigenes Werkzeug (Briefing) bereit: Es holt die mitgelieferten und die des Projekts —
+  aus Kephalaion oder anderswoher —, baut sie mit Frontmatter in seinem Cache zusammen und
+  liefert das Ergebnis. Kephalaion liefert nur die Daten.
+- **Faustregel erfüllt:** Wer lesen darf, ist derselbe; nur wer schreiben darf, unterscheidet
+  sich — deshalb ein Präfix, keine eigene Collection (siehe „Rechte“ oben).
 
 ### Persönliche Verzeichnisse (vorgemerkt am 2026-09-26)
 
@@ -1668,7 +1703,8 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 2. **Schreiben mit Rechten, ohne KI.** Dateien werden deterministisch abgelegt, der Hub prüft
    Recht und Form. Accounts, `rotate`, Ablehnungen, Fehlschläge; dazu Umbenennen, vorgezogen
    aus Stufe 3 (Task 014).
-3. **Vorgänge auf Dateien.** Anhängen, Abschnitt ändern, abschließen, Verzeichnis ersetzen.
+3. **Vorgänge auf Dateien.** Anhängen, Abschnitt ändern, abschließen, Verzeichnis ersetzen —
+   damit auch `vendor/` mit Scope `vendor/<name>`.
 4. **Schnipsel und Einordnen durch den Hub** (zurückgestellt). Zuerst Regeln. Erst danach, und
    getrennt entschieden, eine KI im Hub, mit Protokoll und Warteschlange.
 5. **Semantische Suche.** Einbettungen rechnet der Hub einmal für den Store und liefert
@@ -1694,7 +1730,9 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 - **k-playbook ↔ Kephalaion im Einzelnen:** Welche Werkzeuge eigens für k-playbook kommen
   (Kandidaten unter „Werkzeuge“)? Welche braucht k-playbook, die eine KI-Sitzung nicht sehen
   soll, und hängt das am Token? Das Ersetzen eines ganzen Verzeichnisses
-  (heute `publish`) muss in den Vertrag. Die Projektablage und das Briefing regelt k-playbook.
+  (heute `publish`, dazu das Update von `vendor/`) muss in den Vertrag. Die Projektablage und
+  das Briefing regelt k-playbook; das Überlagern von mitgelieferten und eigenen Regeln auch
+  (entschieden am 2026-09-27, „vendor/“).
 - **Token-Rotation (später):** Accounts von Menschen und KIs rotieren am Hub mit einer Frist,
   in der altes und neues Token gelten; der neue Hash gleicht sich zu den Nodes ab. Ein Node
   rotiert sein Token selbst: Er erzeugt ein neues und meldet dem Hub nur den Hash, ab da gilt
