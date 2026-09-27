@@ -23,16 +23,39 @@ import (
 // Bearer <token>.
 const HeaderNode = "X-Keph-Node"
 
-// Die Vorgänge, je ein Pfad /v<Fassung>/<Vorgang>.
+// Die Vorgänge, je ein Pfad /v<Fassung>/<Vorgang>. OpCreate, OpWrite und
+// OpDelete sind die Schreibvorgänge.
 const (
 	OpWhoami = "whoami"
 	OpRotate = "rotate"
 	OpSync   = "sync"
+	OpCreate = "create"
+	OpWrite  = "write"
+	OpDelete = "delete"
 )
 
-// MaxBodyBytes begrenzt den Body einer Anfrage: 1 MiB. Antworten sind nicht
-// begrenzt — eine Seite des Abgleichs kann eine große Revision ganz tragen.
+// MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate und sync:
+// 1 MiB. Antworten sind nicht begrenzt — eine Seite des Abgleichs kann eine
+// große Revision ganz tragen.
 const MaxBodyBytes = 1 << 20
+
+// MaxWriteBodyBytes begrenzt den Body eines Schreibvorgangs: 7 MiB. Er muss
+// jedes Dokument tragen, das der Hub annimmt, auch wenn JSON jedes Byte des
+// Inhalts als \u00XX schreibt (6 Byte je Byte): 6 × MaxDocumentBytes, dazu
+// MaxBodyBytes für alles andere.
+const MaxWriteBodyBytes = 6*contract.MaxDocumentBytes + MaxBodyBytes
+
+// bodyLimit liefert die Grenze des Bodys für einen Vorgang; ok ist false,
+// wenn der Hub den Vorgang nicht kennt.
+func bodyLimit(op string) (limit int64, ok bool) {
+	switch op {
+	case OpWhoami, OpRotate, OpSync:
+		return MaxBodyBytes, true
+	case OpCreate, OpWrite, OpDelete:
+		return MaxWriteBodyBytes, true
+	}
+	return 0, false
+}
 
 // Zeitlimits. Der Server liest Kopf und Body in kurzer Zeit, schreibt eine
 // Antwort aber so lange, wie eine große Seite braucht.
@@ -41,8 +64,8 @@ const (
 	ReadTimeout       = 60 * time.Second
 	WriteTimeout      = 10 * time.Minute
 	IdleTimeout       = 2 * time.Minute
-	// ShortTimeout gilt am Client für whoami und rotate, SyncTimeout für
-	// eine Seite des Abgleichs.
+	// ShortTimeout gilt am Client für whoami, rotate und die
+	// Schreibvorgänge, SyncTimeout für eine Seite des Abgleichs.
 	ShortTimeout = 30 * time.Second
 	SyncTimeout  = 10 * time.Minute
 )
@@ -57,11 +80,12 @@ func Status(c contract.Code) int {
 	switch c {
 	case contract.CodeUnauthenticated:
 		return http.StatusUnauthorized
-	case contract.CodeAccountUnauthenticated:
+	case contract.CodeAccountUnauthenticated, contract.CodeForbidden, contract.CodeNotReadable:
 		return http.StatusForbidden
-	case contract.CodeUnsupportedVersion:
+	case contract.CodeUnsupportedVersion, contract.CodeNotFound:
 		return http.StatusNotFound
-	case contract.CodeNoSharedCollection:
+	case contract.CodeNoSharedCollection, contract.CodeNameTaken, contract.CodePathConflict,
+		contract.CodeStaleRevision:
 		return http.StatusConflict
 	case contract.CodeInvalid:
 		return http.StatusBadRequest

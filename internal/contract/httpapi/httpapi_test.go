@@ -19,11 +19,36 @@ import (
 )
 
 // echoHub ist eine Attrappe von contract.Hub: Sie merkt sich die Anmeldung
-// und antwortet mit err, wenn gesetzt.
+// und die letzte Schreibanfrage und antwortet mit err, wenn gesetzt.
 type echoHub struct {
 	auth contract.NodeAuth
 	err  error
 	rows int
+	// last ist die letzte Schreibanfrage (CreateRequest, WriteRequest oder
+	// DeleteRequest).
+	last any
+}
+
+// written antwortet auf einen Schreibvorgang mit einer Zeile.
+func (e *echoHub) written(auth contract.NodeAuth, version int, req any) (contract.WriteResponse, error) {
+	e.auth, e.last = auth, req
+	if e.err != nil {
+		return contract.WriteResponse{}, e.err
+	}
+	return contract.WriteResponse{HubID: "01H", Version: version, Revision: 7,
+		Rows: []contract.Row{{ID: "01D", Collection: "a", Name: "n.md", Revision: 7}}}, nil
+}
+
+func (e *echoHub) Create(_ context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
+	return e.written(req.Auth, req.Version, req)
+}
+
+func (e *echoHub) Write(_ context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
+	return e.written(req.Auth, req.Version, req)
+}
+
+func (e *echoHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	return e.written(req.Auth, req.Version, req)
 }
 
 func (e *echoHub) Whoami(_ context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
@@ -130,6 +155,13 @@ func TestErrorCodes(t *testing.T) {
 		var ce *contract.Error
 		if !errors.As(err, &ce) || ce.Code != code || ce.Message != "m "+string(code) {
 			t.Errorf("%s: %v", code, err)
+		}
+		// Auch über einen Schreibvorgang; not_found (404) ist kein
+		// unbekannter Vorgang.
+		_, err = c.Create(context.Background(), contract.CreateRequest{Version: 1, Auth: auth})
+		if !errors.As(err, &ce) || ce.Code != code || errors.Is(err, contract.ErrUnknownOperation) ||
+			errors.Is(err, contract.ErrOutcomeUnknown) {
+			t.Errorf("create, %s: %v", code, err)
 		}
 	}
 }

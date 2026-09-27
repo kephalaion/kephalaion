@@ -161,3 +161,15 @@ func (f *fakeHub) Whoami(_ context.Context, req contract.WhoamiRequest) (contrac
 func (f *fakeHub) Rotate(context.Context, contract.RotateRequest) (contract.RotateResponse, error) {
 	return contract.RotateResponse{}, errors.New("rotate: in der Attrappe nicht umgesetzt")
 }
+
+func (f *fakeHub) Create(context.Context, contract.CreateRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("create: in der Attrappe nicht umgesetzt")
+}
+
+func (f *fakeHub) Write(context.Context, contract.WriteRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("write: in der Attrappe nicht umgesetzt")
+}
+
+func (f *fakeHub) Delete(context.Context, contract.DeleteRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("delete: in der Attrappe nicht umgesetzt")
+}

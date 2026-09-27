@@ -1,8 +1,11 @@
 // Package replication ist die Seite des Hubs im Vertrag (docs/vertrag.md):
-// Es setzt contract.Hub über dem Hub-Store um. Hier stehen Anmeldung von
-// Node und Account, erlaubte Collections und der Schnitt der Seiten; der
-// Store liefert nur Zeilen und schreibt rotate in einer Transaktion. So gilt die Logik für jede Umsetzung des Stores, und jeder
-// Transport (local, später HTTP) ruft dieselbe Prüfung.
+// Es setzt contract.Hub über dem Hub-Store um. Hier stehen Fassung, Form der
+// Anfrage, Anmeldung von Node und Account, erlaubte Collections, der Schnitt
+// der Seiten und die Codes der Fehler; der Store liefert Zeilen und schreibt
+// rotate und die Schreibvorgänge (write.go) je in einer Transaktion, in der
+// er Account, Lesbarkeit und Recht prüft. So gilt die Logik für jede
+// Umsetzung des Stores, und jeder Transport (local, HTTP) ruft dieselbe
+// Prüfung.
 package replication
 
 import (

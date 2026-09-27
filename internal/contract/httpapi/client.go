@@ -13,13 +13,19 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 )
 
 // Client setzt contract.Hub über HTTP um. whoami und sync wiederholt er bei
-// Fehlern des Transports mit wachsendem Abstand; rotate nie — danach gilt das
-// alte Token nicht mehr, und ein zweiter Versuch mit ihm scheiterte.
+// Fehlern des Transports mit wachsendem Abstand; rotate und die
+// Schreibvorgänge nie — nach rotate gilt das alte Token nicht mehr, und ein
+// zweiter Schreibversuch ergäbe name_taken oder stale_revision. Ist nach dem
+// Abschicken offen, ob der Hub ausgeführt hat, trägt ihr Fehler
+// contract.ErrOutcomeUnknown; kennt der Hub den Vorgang nicht,
+// contract.ErrUnknownOperation. Jeder andere Fehler, der kein
+// *contract.Error ist, heißt: Die Anfrage hat den Hub nicht erreicht.
 type Client struct {
 	base string
 	http *http.Client
@@ -27,7 +33,8 @@ type Client struct {
 	// der Abstand vor der ersten; er verdoppelt sich je Versuch.
 	Retries int
 	Backoff time.Duration
-	// ShortTimeout gilt für whoami und rotate, SyncTimeout für sync.
+	// ShortTimeout gilt für whoami, rotate und die Schreibvorgänge,
+	// SyncTimeout für sync.
 	ShortTimeout time.Duration
 	SyncTimeout  time.Duration
 }
@@ -89,6 +96,55 @@ func (c *Client) Sync(ctx context.Context, req contract.SyncRequest) (contract.S
 	err := c.call(ctx, OpSync, req.Version, req.Auth, req, &resp, true, c.SyncTimeout)
 	if err != nil {
 		return contract.SyncResponse{}, err
+	}
+	return resp, nil
+}
+
+// Create legt ein Dokument an, genau einmal; Ausgang wie bei Rotate.
+func (c *Client) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
+	if err := checkUTF8(req.Name, &req.Content); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return c.write(ctx, OpCreate, req.Version, req.Auth, req)
+}
+
+// Write ersetzt ein Dokument, genau einmal; Ausgang wie bei Rotate.
+func (c *Client) Write(ctx context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
+	if err := checkUTF8(req.Name, &req.Content); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return c.write(ctx, OpWrite, req.Version, req.Auth, req)
+}
+
+// Delete löscht ein Dokument, genau einmal; Ausgang wie bei Rotate.
+func (c *Client) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	if err := checkUTF8(req.Name, nil); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return c.write(ctx, OpDelete, req.Version, req.Auth, req)
+}
+
+// checkUTF8 lehnt einen Namen oder Inhalt ab, der kein gültiges UTF-8 ist:
+// encoding/json ersetzte die Bytes still durch U+FFFD, der Hub schriebe
+// einen anderen Namen oder Inhalt als gemeint. Die Antwort ist dieselbe wie
+// über local — invalid —, abgeschickt wird nichts. Collection und Account
+// brauchen das nicht: Ersetzt gibt es sie nicht, auf beiden Wegen dieselbe
+// Antwort.
+func checkUTF8(name string, content *string) error {
+	if !utf8.ValidString(name) {
+		return contract.Invalid(fmt.Sprintf("Dokument %q: der Name ist kein gültiges UTF-8", name))
+	}
+	if content != nil && !utf8.ValidString(*content) {
+		return contract.Invalid(fmt.Sprintf("Dokument %s: Inhalt ist kein UTF-8-Text", name))
+	}
+	return nil
+}
+
+// write schickt einen Schreibvorgang ohne Wiederholung.
+func (c *Client) write(ctx context.Context, op string, version int, auth contract.NodeAuth, req any) (contract.WriteResponse, error) {
+	var resp contract.WriteResponse
+	if err := c.call(ctx, op, version, auth, req, &resp, false, c.ShortTimeout); err != nil {
+		return contract.WriteResponse{}, err
 	}
 	return resp, nil
 }
@@ -167,6 +223,11 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 	}
 	var eb errorBody
 	_ = json.Unmarshal(data, &eb)
+	if resp.StatusCode == http.StatusNotFound && eb.Code == string(contract.CodeInvalid) {
+		// Ein unbekannter Vorgang (docs/vertrag.md, „HTTP“): ein Hub, der
+		// älter ist als der Vorgang. Er hat nichts ausgeführt.
+		return fmt.Errorf("%w: Hub %s: %s", contract.ErrUnknownOperation, c.base, eb.Message)
+	}
 	if slices.Contains(contract.Codes, contract.Code(eb.Code)) {
 		msg := eb.Message
 		if msg == "" {

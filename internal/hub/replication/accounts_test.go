@@ -264,10 +264,26 @@ func TestRotate(t *testing.T) {
 }
 
 // TestHTTPStatus prüft über HTTP jeden Fehlercode mit seinem Status, die
-// fremde Fassung und einen zu großen Body, gegen den echten Hub.
+// fremde Fassung und zu große Bodys, gegen den echten Hub. Nach einer 413
+// wartet net/http 0,5 s (rstAvoidanceDelay); alle 413 stehen deshalb hier.
 func TestHTTPStatus(t *testing.T) {
 	f := newFixtureOver(t, "http")
 	tokens := f.accounts(t)
+	f.put(t, "a", "da.md") // gehört admin
+	own, err := f.hub.Create(context.Background(), contract.CreateRequest{Version: contract.Version, Auth: f.node(),
+		Account: contract.AccountAuth{Account: "bob", Token: tokens["bob"]}, Collection: "a", Name: "eigen.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob := map[string]any{"account": "bob", "token": tokens["bob"]}
+	doc := func(name string, extra ...any) map[string]any {
+		m := map[string]any{"account": bob, "collection": "a", "name": name, "content": "x"}
+		for i := 0; i+1 < len(extra); i += 2 {
+			m[extra[i].(string)] = extra[i+1]
+		}
+		return m
+	}
+	big := strings.Repeat("x", contract.MaxDocumentBytes+1)
 	post := func(path string, node, token string, body any) (int, string) {
 		t.Helper()
 		var data []byte
@@ -307,6 +323,22 @@ func TestHTTPStatus(t *testing.T) {
 		{"fremde Fassung", "/v2/sync", "", "", map[string]any{}, 404, "unsupported_version"},
 		{"unbekannter Vorgang", "/v1/gibtsnicht", "laptop", f.token, map[string]any{}, 404, "invalid"},
 		{"zu groß", "/v1/sync", "laptop", f.token, bytes.Repeat([]byte(" "), httpapi.MaxBodyBytes+1), 413, "invalid"},
+		// Schreibvorgänge.
+		{"create", "/v1/create", "laptop", f.token, doc("neu.md"), 200, ""},
+		{"name_taken", "/v1/create", "laptop", f.token, doc("da.md"), 409, "name_taken"},
+		{"path_conflict", "/v1/create", "laptop", f.token, doc("da.md/x.md"), 409, "path_conflict"},
+		{"stale_revision", "/v1/write", "laptop", f.token, doc("eigen.md", "base_revision", own.Revision+100), 409, "stale_revision"},
+		{"not_found", "/v1/delete", "laptop", f.token, doc("fehlt.md"), 404, "not_found"},
+		{"forbidden", "/v1/write", "laptop", f.token, doc("da.md"), 403, "forbidden"},
+		{"not_readable", "/v1/create", "laptop", f.token, doc("x.md", "collection", "c"), 403, "not_readable"},
+		{"account_unauthenticated beim Schreiben", "/v1/create", "laptop", f.token,
+			doc("x.md", "account", map[string]any{"account": "bob", "token": "keph_falsch"}), 403, "account_unauthenticated"},
+		{"content fehlt", "/v1/write", "laptop", f.token, doc("eigen.md", "content", nil), 400, "invalid"},
+		{"Inhalt zu groß", "/v1/create", "laptop", f.token, doc("gross.md", "content", big), 400, "invalid"},
+		{"über 1 MiB ohne Schreibvorgang", "/v1/whoami", "laptop", f.token, map[string]any{"x": big}, 413, "invalid"},
+		{"zu groß zum Schreiben", "/v1/create", "laptop", f.token, bytes.Repeat([]byte(" "), httpapi.MaxWriteBodyBytes+1), 413, "invalid"},
+		{"unbekannter Vorgang, großer Body", "/v1/gibtsnicht", "laptop", f.token,
+			bytes.Repeat([]byte(" "), httpapi.MaxWriteBodyBytes+1), 404, "invalid"},
 	}
 	for _, c := range cases {
 		status, code := post(c.path, c.node, c.token, c.body)

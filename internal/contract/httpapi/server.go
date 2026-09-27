@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/reqlog"
@@ -52,12 +53,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	auth := contract.NodeAuth{Node: r.Header.Get(HeaderNode), Token: bearer(r)}
 	reqlog.Note(ctx, "node", auth.Node)
+	// Den Vorgang vor dem Body: Von ihm hängt die Grenze ab.
+	limit, known := bodyLimit(op)
+	if !known {
+		writeError(w, r, http.StatusNotFound, string(contract.CodeInvalid), fmt.Sprintf("unbekannter Vorgang %q", op))
+		return
+	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, r, http.StatusRequestEntityTooLarge, string(contract.CodeInvalid),
-			fmt.Sprintf("Anfrage größer als %d Bytes", MaxBodyBytes))
+			fmt.Sprintf("Anfrage größer als %d Bytes", limit))
 		return
 	}
 	if err != nil {
@@ -92,7 +99,44 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Version, req.Auth = version, auth
 		resp, err = h.hub.Sync(ctx, req)
+	case OpCreate:
+		// content ist Pflicht: Ein fehlendes Feld legte sonst still ein
+		// leeres Dokument an.
+		var in struct {
+			contract.CreateRequest
+			Content *string `json:"content"`
+		}
+		if !decode(w, r, body, &in) || !requireContent(w, r, in.Content) {
+			return
+		}
+		req := in.CreateRequest
+		req.Version, req.Auth, req.Content = version, auth, *in.Content
+		reqlog.Note(ctx, "account", req.Account.Account)
+		resp, err = h.hub.Create(ctx, req)
+	case OpWrite:
+		// content ist Pflicht: Ein fehlendes Feld leerte sonst still das
+		// Dokument.
+		var in struct {
+			contract.WriteRequest
+			Content *string `json:"content"`
+		}
+		if !decode(w, r, body, &in) || !requireContent(w, r, in.Content) {
+			return
+		}
+		req := in.WriteRequest
+		req.Version, req.Auth, req.Content = version, auth, *in.Content
+		reqlog.Note(ctx, "account", req.Account.Account)
+		resp, err = h.hub.Write(ctx, req)
+	case OpDelete:
+		var req contract.DeleteRequest
+		if !decode(w, r, body, &req) {
+			return
+		}
+		req.Version, req.Auth = version, auth
+		reqlog.Note(ctx, "account", req.Account.Account)
+		resp, err = h.hub.Delete(ctx, req)
 	default:
+		// bodyLimit kennt den Vorgang, der Handler nicht: ein Fehler hier.
 		writeError(w, r, http.StatusNotFound, string(contract.CodeInvalid), fmt.Sprintf("unbekannter Vorgang %q", op))
 		return
 	}
@@ -120,15 +164,31 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-// decode liest den Body als JSON; ein leerer Body ist {}. Bei einem Fehler
-// ist die Antwort geschrieben und ok false.
+// decode liest den Body als JSON; ein leerer Body ist {}. JSON ist UTF-8:
+// Ein Body mit ungültigem UTF-8 ist kein gültiges JSON — encoding/json
+// ersetzte die Bytes sonst still durch U+FFFD. Bei einem Fehler ist die
+// Antwort geschrieben und ok false.
 func decode(w http.ResponseWriter, r *http.Request, body []byte, v any) bool {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return true
 	}
+	if !utf8.Valid(body) {
+		writeError(w, r, http.StatusBadRequest, string(contract.CodeInvalid), "Anfrage ist kein gültiges JSON (kein UTF-8)")
+		return false
+	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(v); err != nil || dec.More() {
 		writeError(w, r, http.StatusBadRequest, string(contract.CodeInvalid), "Anfrage ist kein gültiges JSON")
+		return false
+	}
+	return true
+}
+
+// requireContent prüft, dass die Anfrage content trägt (auch leer, nicht
+// null). Sonst ist die Antwort geschrieben und ok false.
+func requireContent(w http.ResponseWriter, r *http.Request, content *string) bool {
+	if content == nil {
+		writeError(w, r, http.StatusBadRequest, string(contract.CodeInvalid), "ungültige Anfrage: content fehlt")
 		return false
 	}
 	return true

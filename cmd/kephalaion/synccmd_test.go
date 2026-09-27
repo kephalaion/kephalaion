@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/replication"
+	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/ident"
 )
 
@@ -233,4 +237,101 @@ func TestConfigSetUnset(t *testing.T) {
 	runT(t, "status", c).want(t, 0, "Abgleich:      im Hintergrund alle 30s (Standard)")
 	runT(t, "config", "--help").want(t, 0, "config set", "config unset")
 	runT(t, "config", "set", "--help").want(t, 0, "sync_interval", "0 schaltet ihn ab")
+}
+
+// failWriteAfterCommit führt Schreibvorgänge am echten Hub aus und meldet
+// danach einen gewöhnlichen Fehler — wie eine Datenbank, die nach dem Commit
+// ausfällt. Einen Fehler des Vertrags reicht es durch.
+type failWriteAfterCommit struct {
+	contract.Hub
+}
+
+var errDBGone = errors.New("Datenbank weg")
+
+func (f failWriteAfterCommit) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
+	if _, err := f.Hub.Create(ctx, req); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return contract.WriteResponse{}, errDBGone
+}
+
+func (f failWriteAfterCommit) Write(ctx context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
+	if _, err := f.Hub.Write(ctx, req); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return contract.WriteResponse{}, errDBGone
+}
+
+func (f failWriteAfterCommit) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	if _, err := f.Hub.Delete(ctx, req); err != nil {
+		return contract.WriteResponse{}, err
+	}
+	return contract.WriteResponse{}, errDBGone
+}
+
+// Über local ist ein Fehler eines Schreibvorgangs, der kein Fehler des
+// Vertrags ist, ein unklarer Ausgang — der Hub kann geschrieben haben, wie
+// über HTTP bei 500. Ein Fehler des Vertrags bleibt eindeutig.
+func TestLocalWriteOutcome(t *testing.T) {
+	e := newCommEnv(t)
+	old := newLocalHub
+	newLocalHub = func(st hubstore.Store) contract.Hub { return failWriteAfterCommit{replication.New(st)} }
+	t.Cleanup(func() { newLocalHub = old })
+
+	ctx := context.Background()
+	cfg, _, err := config.Load(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := nodeStore(t, e.cfg).Hub(ctx, "eigen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub, closeHub, err := connectHub(ctx, cfg, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeHub()
+	node := contract.NodeAuth{Node: h.NodeName, Token: h.Token}
+	acc := contract.AccountAuth{Account: "bob", Token: e.tokens["bob"]}
+	hs := hubStore(t, e.cfg)
+	unclear := func(what string, err error) {
+		t.Helper()
+		var ce *contract.Error
+		if !errors.Is(err, contract.ErrOutcomeUnknown) || errors.As(err, &ce) || !strings.Contains(err.Error(), "Datenbank weg") {
+			t.Errorf("%s: %v, erwartet unklaren Ausgang", what, err)
+		}
+	}
+
+	_, err = hub.Create(ctx, contract.CreateRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "neu.md", Content: "eins"})
+	unclear("create", err)
+	doc, err := hs.Document(ctx, "team-x", "neu.md")
+	if err != nil || doc.Content != "eins" {
+		t.Fatalf("am Hub: %+v, %v", doc, err)
+	}
+	_, err = hub.Write(ctx, contract.WriteRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "neu.md", Content: "zwei", BaseRevision: &doc.Revision})
+	unclear("write", err)
+	_, err = hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "neu.md"})
+	unclear("delete", err)
+	if _, err := hs.Document(ctx, "team-x", "neu.md"); !errors.Is(err, hubstore.ErrNotFound) {
+		t.Errorf("nach delete: %v", err)
+	}
+
+	// Ein Fehler des Vertrags ist eindeutig, auch über local.
+	_, err = hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "neu.md"})
+	if !errors.Is(err, contract.ErrNotFound) || errors.Is(err, contract.ErrOutcomeUnknown) {
+		t.Errorf("not_found: %v", err)
+	}
+	// Ein abgebrochener Aufruf kann nach dem Commit abgebrochen sein.
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = hub.Create(canceled, contract.CreateRequest{Version: contract.Version, Auth: node, Account: acc,
+		Collection: "team-x", Name: "abgebrochen.md"})
+	if !errors.Is(err, contract.ErrOutcomeUnknown) {
+		t.Errorf("abgebrochen: %v", err)
+	}
 }

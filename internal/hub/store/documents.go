@@ -10,12 +10,14 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
 
-// MaxDocumentBytes ist die Obergrenze für den Inhalt eines Dokuments: 1 MiB.
-const MaxDocumentBytes = 1 << 20
+// MaxDocumentBytes ist die Obergrenze für den Inhalt eines Dokuments: 1 MiB,
+// festgelegt im Vertrag.
+const MaxDocumentBytes = contract.MaxDocumentBytes
 
 // Fehlerarten beim Schreiben von Dokumenten.
 var (

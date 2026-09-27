@@ -158,6 +158,18 @@ func (f *docHub) Rotate(context.Context, contract.RotateRequest) (contract.Rotat
 	return contract.RotateResponse{}, errors.New("rotate: in der Attrappe nicht umgesetzt")
 }
 
+func (f *docHub) Create(context.Context, contract.CreateRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("create: in der Attrappe nicht umgesetzt")
+}
+
+func (f *docHub) Write(context.Context, contract.WriteRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("write: in der Attrappe nicht umgesetzt")
+}
+
+func (f *docHub) Delete(context.Context, contract.DeleteRequest) (contract.WriteResponse, error) {
+	return contract.WriteResponse{}, errors.New("delete: in der Attrappe nicht umgesetzt")
+}
+
 // docEnv ist ein Node mit Hubs aus Attrappen: keph mit wissen und privat,
 // team mit notizen. anna liest alles und darf in keph:wissen schreiben, otto
 // liest nur keph:wissen.

@@ -102,3 +102,58 @@ func TestAccountContent(t *testing.T) {
 		}
 	}
 }
+
+// Die Schreibvorgänge als JSON: Account als Objekt wie bei whoami, content
+// auch leer, base_revision nur, wenn gesetzt; Fassung und Anmeldung des
+// Nodes nie im Body.
+func TestWriteJSON(t *testing.T) {
+	acc := AccountAuth{Account: "bob", Token: "keph_account"}
+	node := NodeAuth{Node: "laptop", Token: "keph_node"}
+	base := int64(4)
+	for _, c := range []struct {
+		req  any
+		want string
+	}{
+		{CreateRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","content":""}`},
+		{WriteRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md", Content: "x", BaseRevision: &base},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","content":"x","base_revision":4}`},
+		{DeleteRequest{Version: Version, Auth: node, Account: acc, Collection: "a", Name: "n.md"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md"}`},
+	} {
+		b, err := json.Marshal(c.req)
+		if err != nil || string(b) != c.want {
+			t.Errorf("%T als JSON: %s, %v", c.req, b, err)
+		}
+	}
+	b, _ := json.Marshal(WriteResponse{HubID: "01H", Version: Version, Revision: 5, Rows: []Row{}})
+	if string(b) != `{"hub_id":"01H","version":1,"revision":5,"rows":[]}` {
+		t.Errorf("Antwort als JSON: %s", b)
+	}
+}
+
+// Jeder Code steht einmal in Codes; der unbekannte Vorgang und der unklare
+// Ausgang sind keine Fehler des Vertrags.
+func TestCodes(t *testing.T) {
+	seen := map[Code]bool{}
+	for _, c := range Codes {
+		if seen[c] {
+			t.Errorf("Code %s doppelt", c)
+		}
+		seen[c] = true
+	}
+	for _, c := range []Code{CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict, CodeStaleRevision} {
+		if !seen[c] {
+			t.Errorf("Code %s fehlt in Codes", c)
+		}
+	}
+	var e *Error
+	for _, err := range []error{ErrUnknownOperation, ErrOutcomeUnknown} {
+		if errors.As(err, &e) || errors.Is(err, ErrInvalid) {
+			t.Errorf("%v gilt als Fehler des Vertrags", err)
+		}
+	}
+	if err := fmt.Errorf("Hub: %w", &Error{Code: CodeStaleRevision, Message: "Revision 7"}); !errors.Is(err, ErrStaleRevision) {
+		t.Errorf("errors.Is: %v", err)
+	}
+}

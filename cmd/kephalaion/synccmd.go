@@ -118,18 +118,38 @@ func (l *connector) connect(h nodestore.Hub) (contract.Hub, error) {
 // ersetzen sie, etwa um einen Fehler nach dem Commit herbeizuführen.
 var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(st) }
 
-// localHub ist der Hub über local. Ein Fehler von Rotate, der kein Fehler
-// des Vertrags ist (Datenbank, Abbruch), lässt offen, ob der neue Hash schon
-// gilt: Er kommt als contract.ErrOutcomeUnknown an, wie über HTTP ein 500.
+// localHub ist der Hub über local. Ein Fehler von Rotate oder einem
+// Schreibvorgang, der kein Fehler des Vertrags ist (Datenbank, Abbruch),
+// lässt offen, ob der Hub ausgeführt hat — der neue Hash schon gilt, das
+// Dokument schon geschrieben ist: Er kommt als contract.ErrOutcomeUnknown
+// an, wie über HTTP ein 500.
 type localHub struct {
 	contract.Hub
 }
 
 func (l localHub) Rotate(ctx context.Context, req contract.RotateRequest) (contract.RotateResponse, error) {
-	resp, err := l.Hub.Rotate(ctx, req)
+	return outcome(l.Hub.Rotate(ctx, req))
+}
+
+func (l localHub) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
+	return outcome(l.Hub.Create(ctx, req))
+}
+
+func (l localHub) Write(ctx context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
+	return outcome(l.Hub.Write(ctx, req))
+}
+
+func (l localHub) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
+	return outcome(l.Hub.Delete(ctx, req))
+}
+
+// outcome hüllt einen Fehler, der kein Fehler des Vertrags ist, in
+// contract.ErrOutcomeUnknown.
+func outcome[T any](resp T, err error) (T, error) {
 	var ce *contract.Error
 	if err != nil && !errors.As(err, &ce) {
-		return contract.RotateResponse{}, fmt.Errorf("%w: %v", contract.ErrOutcomeUnknown, err)
+		var zero T
+		return zero, fmt.Errorf("%w: %v", contract.ErrOutcomeUnknown, err)
 	}
 	return resp, err
 }

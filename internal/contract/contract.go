@@ -2,7 +2,7 @@
 // als Go-Typen: Anfragen, Antworten, Fehler und die Schnittstelle Hub. Das
 // Paket ist neutral — es kennt weder internal/hub noch internal/node. Der Hub
 // setzt die Schnittstelle um, der Node benutzt sie; welche Umsetzung er
-// bekommt (local oder später HTTP), entscheidet cmd/kephalaion.
+// bekommt (local oder HTTP), entscheidet cmd/kephalaion.
 //
 // Die Typen sind so geschnitten, dass sie unverändert als JSON laufen. Was
 // über HTTP nicht im Body steht — die Fassung (im Pfad) und die Anmeldung des
@@ -23,6 +23,11 @@ const Version = 1
 // mit eigener Seitengröße.
 const DefaultPageSize = 500
 
+// MaxDocumentBytes ist die Obergrenze für den Inhalt eines Dokuments: 1 MiB.
+// Der Hub nimmt nichts Größeres an; ein Transport muss jedes Dokument bis
+// zu dieser Größe tragen.
+const MaxDocumentBytes = 1 << 20
+
 // Hub ist, was ein Node vom Hub braucht. Jeder Aufruf trägt die Anmeldung des
 // Nodes und wird am Hub geprüft, auch auf dem lokalen Weg. Fehler sind *Error
 // mit einem der Codes dieses Pakets oder Fehler des Transports bzw. der
@@ -37,6 +42,21 @@ type Hub interface {
 	Rotate(ctx context.Context, req RotateRequest) (RotateResponse, error)
 	// Sync liefert eine Seite des Abgleichs.
 	Sync(ctx context.Context, req SyncRequest) (SyncResponse, error)
+
+	// Die Schreibvorgänge schreiben im Namen eines Accounts, getragen vom
+	// Node. Wie Rotate nicht wiederholbar — ein zweiter Versuch ergäbe
+	// name_taken oder stale_revision —; ein Transport wiederholt sie nie.
+	// Ist nach dem Abschicken offen, ob der Hub geschrieben hat, trägt der
+	// Fehler ErrOutcomeUnknown.
+
+	// Create legt ein Dokument an.
+	Create(ctx context.Context, req CreateRequest) (WriteResponse, error)
+	// Write ersetzt den Inhalt eines Dokuments, wahlweise unter der
+	// Vorbedingung einer Revision.
+	Write(ctx context.Context, req WriteRequest) (WriteResponse, error)
+	// Delete setzt eine Löschmarke auf ein Dokument, wahlweise unter der
+	// Vorbedingung einer Revision.
+	Delete(ctx context.Context, req DeleteRequest) (WriteResponse, error)
 }
 
 // NodeAuth ist die Anmeldung des Nodes am Hub: sein Name dort und sein Token.
@@ -113,6 +133,65 @@ type RotateResponse struct {
 	// Rows sind die Account-Zeilen (SYSTEM:A:<account>) mit dem neuen Hash
 	// und dem User, je eine erlaubte Collection des Accounts, nach
 	// Collection; updated_by ist der User.
+	Rows []Row `json:"rows"`
+}
+
+// CreateRequest legt ein Dokument an: ein lebendes Dokument mit dem Namen
+// ist name_taken; eine Löschmarke hindert nicht.
+type CreateRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth NodeAuth `json:"-"`
+	// Account ist der Account, in dessen Namen geschrieben wird.
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+	Name       string      `json:"name"`
+	// Content ist der Inhalt: UTF-8 ohne NUL, höchstens MaxDocumentBytes,
+	// auch leer. Über HTTP Pflicht.
+	Content string `json:"content"`
+}
+
+// WriteRequest ersetzt den Inhalt eines lebenden Dokuments.
+type WriteRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth       NodeAuth    `json:"-"`
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+	Name       string      `json:"name"`
+	// Content wie bei CreateRequest; über HTTP Pflicht.
+	Content string `json:"content"`
+	// BaseRevision ist wahlweise die Revision, auf der der Vorgang beruht
+	// (≥ 1); nil heißt ohne Vorbedingung.
+	BaseRevision *int64 `json:"base_revision,omitempty"`
+}
+
+// DeleteRequest setzt eine Löschmarke auf ein lebendes Dokument.
+type DeleteRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth       NodeAuth    `json:"-"`
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+	Name       string      `json:"name"`
+	// BaseRevision wie bei WriteRequest.
+	BaseRevision *int64 `json:"base_revision,omitempty"`
+}
+
+// WriteResponse ist die Antwort jedes Schreibvorgangs (create, write,
+// delete). Sie ist die Wahrheit, nicht die Anfrage: Der Node übernimmt Rows
+// in seine Replica.
+type WriteResponse struct {
+	HubID   string `json:"hub_id"`
+	Version int    `json:"version"`
+	// Revision ist die Revision des Vorgangs; bei unverändertem Inhalt
+	// (write) die bestehende des Dokuments.
+	Revision int64 `json:"revision"`
+	// Rows sind die geschriebenen Zeilen in der Form von sync, bei delete
+	// die Löschmarken; bei unverändertem Inhalt die bestehende Zeile.
 	Rows []Row `json:"rows"`
 }
 
@@ -207,11 +286,31 @@ const (
 	// CodeNoSharedCollection: der Account hat keine der Collections, die der
 	// Node abgleichen darf (rotate).
 	CodeNoSharedCollection Code = "no_shared_collection"
+
+	// Codes der Schreibvorgänge; alle endgültig.
+
+	// CodeNotReadable: die Collection gibt es nicht, der Node darf sie nicht
+	// abgleichen, oder der Account hat keine lebende Zeile in ihr —
+	// dieselbe Antwort für alle drei.
+	CodeNotReadable Code = "not_readable"
+	// CodeForbidden: dem Account fehlt das Recht — write für Neues und
+	// Eigenes, supersede für Fremdes; die Meldung nennt den Grund.
+	CodeForbidden Code = "forbidden"
+	// CodeNotFound: kein lebendes Dokument mit dem Namen (write, delete).
+	CodeNotFound Code = "not_found"
+	// CodeNameTaken: ein lebendes Dokument trägt den Namen schon (create).
+	CodeNameTaken Code = "name_taken"
+	// CodePathConflict: der Name wäre zugleich Datei und Verzeichnis.
+	CodePathConflict Code = "path_conflict"
+	// CodeStaleRevision: das Dokument hat nicht die Revision, auf der der
+	// Vorgang beruht; die Meldung nennt die aktuelle.
+	CodeStaleRevision Code = "stale_revision"
 )
 
 // Codes sind alle Fehlercodes des Vertrags.
 var Codes = []Code{CodeUnauthenticated, CodeInvalid, CodeUnsupportedVersion, CodeAccountUnauthenticated,
-	CodeNoSharedCollection}
+	CodeNoSharedCollection, CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict,
+	CodeStaleRevision}
 
 // Error ist ein Fehler des Vertrags: ein Code und eine Meldung. errors.Is
 // vergleicht nur den Code, so dass jeder *Error mit gleichem Code die
@@ -238,14 +337,28 @@ var (
 		Message: "Account nicht angemeldet"}
 	ErrNoSharedCollection = &Error{Code: CodeNoSharedCollection,
 		Message: "der Account hat keine der Collections, die dieser Node abgleichen darf"}
+	ErrNotReadable   = &Error{Code: CodeNotReadable, Message: "Collection nicht lesbar"}
+	ErrForbidden     = &Error{Code: CodeForbidden, Message: "Recht fehlt"}
+	ErrNotFound      = &Error{Code: CodeNotFound, Message: "Dokument gibt es nicht"}
+	ErrNameTaken     = &Error{Code: CodeNameTaken, Message: "Name vergeben"}
+	ErrPathConflict  = &Error{Code: CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
+	ErrStaleRevision = &Error{Code: CodeStaleRevision, Message: "Revision veraltet"}
 )
 
 // ErrOutcomeUnknown meldet einen Transportfehler, nach dem offen ist, ob der
 // Hub die Anfrage ausgeführt hat — etwa eine Zeitüberschreitung, nachdem sie
 // abgeschickt war. Für rotate heißt das: prüfen (whoami mit Account-Teil),
-// nicht wiederholen. Ein Fehler, der vor dem Abschicken entstand
-// (Verbindung abgelehnt), ist es nicht.
+// nicht wiederholen; für einen Schreibvorgang: abgleichen und nachsehen. Ein
+// Fehler, der vor dem Abschicken entstand (Verbindung abgelehnt), ist es
+// nicht.
 var ErrOutcomeUnknown = errors.New("Ausgang unklar")
+
+// ErrUnknownOperation meldet, dass der Hub den Vorgang nicht kennt: ein Hub
+// derselben Fassung, der älter ist als der Vorgang (über HTTP 404 mit
+// invalid). Der Hub hat nichts ausgeführt. Der Hub schickt keinen eigenen
+// Code dafür; der Transport erkennt den Fall und meldet ihn so, nicht als
+// ErrInvalid.
+var ErrUnknownOperation = errors.New("der Hub kennt den Vorgang nicht")
 
 // Invalid liefert einen Fehler mit Code CodeInvalid und einem Grund.
 func Invalid(reason string) *Error {
