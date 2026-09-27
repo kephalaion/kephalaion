@@ -174,15 +174,27 @@ func (r *lazyRevision) get(ctx context.Context) (int64, error) {
 }
 
 // docTx ist ein Schreibvorgang an Dokumenten: eine Transaktion, höchstens
-// eine Revision, ein Zeitpunkt für alle Zeilen.
+// eine Revision, ein Zeitpunkt für alle Zeilen, ein Urheber.
 type docTx struct {
 	tx  sqlitedb.Querier
 	rev *lazyRevision
 	now int64
+	// by steht in created_by/updated_by der geschriebenen Zeilen: der User
+	// des schreibenden Accounts, Admin für die CLI am Hub.
+	by string
+	// account und carrier stehen in actions: der Account (nicht der User)
+	// und der Node, der die Anfrage trägt — leer (NULL) für die CLI am Hub.
+	account, carrier string
 }
 
-// writeDocs führt fn als einen Schreibvorgang an den Dokumenten einer
-// vorhandenen Collection aus.
+// newDocTx beginnt einen Schreibvorgang in tx mit dem Urheber by, account
+// und carrier.
+func newDocTx(tx sqlitedb.Querier, by, account, carrier string) docTx {
+	return docTx{tx: tx, rev: &lazyRevision{tx: tx}, now: sqlitedb.NowMillis(), by: by, account: account, carrier: carrier}
+}
+
+// writeDocs führt fn als einen Schreibvorgang der CLI am Hub (admin, ohne
+// Träger) an den Dokumenten einer vorhandenen Collection aus.
 func (s *sqliteStore) writeDocs(ctx context.Context, collection string, fn func(w *docTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -192,15 +204,18 @@ func (s *sqliteStore) writeDocs(ctx context.Context, collection string, fn func(
 	if err := requireCollection(ctx, tx, collection); err != nil {
 		return err
 	}
-	w := &docTx{tx: tx, rev: &lazyRevision{tx: tx}, now: sqlitedb.NowMillis()}
-	if err := fn(w); err != nil {
+	w := newDocTx(tx, Admin, Admin, "")
+	if err := fn(&w); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
+// logAction schreibt die Zeile eines Dokuments in actions: Account und
+// Träger des Vorgangs, die Revision.
 func (w *docTx) logAction(ctx context.Context, action, documentID string, rev int64) error {
-	if _, err := w.tx.ExecContext(ctx, q(queries.ActionInsertDocument), w.now, Admin, action, documentID, rev); err != nil {
+	if _, err := w.tx.ExecContext(ctx, q(queries.ActionInsertDocument),
+		w.now, w.account, nullable(w.carrier), action, documentID, rev); err != nil {
 		return fmt.Errorf("actions schreiben: %w", err)
 	}
 	return nil
@@ -235,7 +250,7 @@ func (w *docTx) create(ctx context.Context, collection string, d DocumentInput) 
 	}
 	id := ulid.Make().String()
 	if _, err := w.tx.ExecContext(ctx, q(queries.DocumentInsert),
-		id, collection, d.Name, d.Content, rev, w.now, Admin, w.now, Admin); err != nil {
+		id, collection, d.Name, d.Content, rev, w.now, w.by, w.now, w.by); err != nil {
 		return PutResult{}, fmt.Errorf("Dokument %s anlegen: %w", d.Name, err)
 	}
 	if err := w.logAction(ctx, "create", id, rev); err != nil {
@@ -250,7 +265,7 @@ func (w *docTx) replace(ctx context.Context, cur Document, content string) (PutR
 	if err != nil {
 		return PutResult{}, err
 	}
-	res, err := w.tx.ExecContext(ctx, q(queries.DocumentReplace), cur.ID, content, rev, w.now, Admin)
+	res, err := w.tx.ExecContext(ctx, q(queries.DocumentReplace), cur.ID, content, rev, w.now, w.by)
 	if err := mustAffect(res, err, "Dokument "+cur.Name); err != nil {
 		return PutResult{}, err
 	}
@@ -258,6 +273,23 @@ func (w *docTx) replace(ctx context.Context, cur Document, content string) (PutR
 		return PutResult{}, err
 	}
 	return PutResult{Name: cur.Name, ID: cur.ID, Revision: rev, Outcome: Replaced}, nil
+}
+
+// delete macht ein lebendes Dokument zur Löschmarke und liefert die
+// Revision.
+func (w *docTx) delete(ctx context.Context, cur Document) (int64, error) {
+	rev, err := w.rev.get(ctx)
+	if err != nil {
+		return 0, err
+	}
+	res, err := w.tx.ExecContext(ctx, q(queries.DocumentDelete), cur.ID, rev, w.now, w.by)
+	if err := mustAffect(res, err, "Dokument "+cur.Name); err != nil {
+		return 0, err
+	}
+	if err := w.logAction(ctx, "delete", cur.ID, rev); err != nil {
+		return 0, err
+	}
+	return rev, nil
 }
 
 // checkPathFree prüft, dass ein neuer Name nicht zugleich Datei und
@@ -351,20 +383,13 @@ func (s *sqliteStore) DeleteDocument(ctx context.Context, collection, name strin
 		if err != nil {
 			return err
 		}
-		rev, err := w.rev.get(ctx)
+		rev, err := w.delete(ctx, cur)
 		if err != nil {
-			return err
-		}
-		res, err := w.tx.ExecContext(ctx, q(queries.DocumentDelete), cur.ID, rev, w.now, Admin)
-		if err := mustAffect(res, err, "Dokument "+name); err != nil {
-			return err
-		}
-		if err := w.logAction(ctx, "delete", cur.ID, rev); err != nil {
 			return err
 		}
 		out = cur
 		out.Content, out.Meta, out.Deleted = "", "", true
-		out.Revision, out.UpdatedAt, out.UpdatedBy = rev, w.now, Admin
+		out.Revision, out.UpdatedAt, out.UpdatedBy = rev, w.now, w.by
 		return nil
 	})
 	if err != nil {

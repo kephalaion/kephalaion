@@ -391,12 +391,34 @@ func lockedAccountsUsing(ctx context.Context, db sqlitedb.Querier, collection st
 }
 
 // accountTx ist ein Schreibvorgang an Accounts: eine Transaktion, höchstens
-// eine Revision, ein Zeitpunkt, eine Zeile in actions.
+// eine Revision, ein Zeitpunkt, eine Zeile in actions. by (aus docTx) ist
+// Admin für die CLI am Hub, bei rotate der User des Accounts.
 type accountTx struct {
 	docTx
-	// by steht in created_by/updated_by der geschriebenen Zeilen: Admin für
-	// die CLI am Hub, bei rotate der User des Accounts.
-	by string
+}
+
+// begin beginnt eine schreibende Transaktion. tx ist sie selbst oder, wenn
+// ein Test traceTx gesetzt hat, ihre Aufzeichnung; Commit und Rollback gehen
+// an sqlTx.
+func (s *sqliteStore) begin(ctx context.Context) (sqlTx *sql.Tx, tx sqlitedb.Querier, err error) {
+	sqlTx, err = s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	tx = sqlTx
+	if s.traceTx != nil {
+		tx = s.traceTx(tx)
+	}
+	return sqlTx, tx, nil
+}
+
+// lockAccount sperrt die Zeile eines Accounts in accounts schreibend — die
+// erste Anweisung jedes Schreibvorgangs an oder durch einen Account.
+func lockAccount(ctx context.Context, tx sqlitedb.Querier, name string) error {
+	if _, err := tx.ExecContext(ctx, q(queries.AccountLock), name); err != nil {
+		return fmt.Errorf("Account %s sperren: %w", name, err)
+	}
+	return nil
 }
 
 // writeAccount führt fn als einen Schreibvorgang am Account target aus und
@@ -411,21 +433,17 @@ type accountTx struct {
 // sperrt fn selbst mit seiner ersten Anweisung (rotate: das bedingte
 // Schreiben).
 func (s *sqliteStore) writeAccount(ctx context.Context, target, account, carrier, action, subject string, fn func(w *accountTx) error) error {
-	sqlTx, err := s.db.BeginTx(ctx, nil)
+	sqlTx, tx, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = sqlTx.Rollback() }()
-	var tx sqlitedb.Querier = sqlTx
-	if s.traceTx != nil {
-		tx = s.traceTx(tx)
-	}
 	if target != "" {
-		if _, err := tx.ExecContext(ctx, q(queries.AccountLock), target); err != nil {
-			return fmt.Errorf("Account %s sperren: %w", target, err)
+		if err := lockAccount(ctx, tx, target); err != nil {
+			return err
 		}
 	}
-	w := &accountTx{docTx: docTx{tx: tx, rev: &lazyRevision{tx: tx}, now: sqlitedb.NowMillis()}, by: Admin}
+	w := &accountTx{docTx: newDocTx(tx, Admin, account, carrier)}
 	if err := fn(w); err != nil {
 		return err
 	}

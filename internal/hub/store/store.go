@@ -50,8 +50,10 @@ type Stats struct {
 }
 
 // Store ist der Zugriff des Hubs auf seine Datenbank. Jede Änderung läuft in
-// einer Transaktion und schreibt eine Zeile in actions, als Account admin —
-// außer RotateAccount, das der Account selbst über einen Node auslöst.
+// einer Transaktion und schreibt in actions, als Account admin ohne Träger —
+// außer RotateAccount und den Schreibvorgängen …As, die ein Account über
+// einen Node auslöst: Dort steht der Account in actions, der Node als
+// carrier, und sein User in created_by/updated_by.
 type Store interface {
 	Info(ctx context.Context) (Info, error)
 	Stats(ctx context.Context) (Stats, error)
@@ -151,6 +153,29 @@ type Store interface {
 	// einer Transaktion und unter einer Revision. Was fehlt, bleibt.
 	ImportDocuments(ctx context.Context, collection string, docs []DocumentInput) (ImportResult, error)
 
+	// Schreiben über einen Node (write.go): im Namen von auth.Account, mit
+	// auth.Carrier als Träger, je Vorgang eine Transaktion und höchstens eine
+	// Revision. Ihre erste Anweisung sperrt die Zeile des Accounts in
+	// accounts; geprüft wird darin die Anmeldung (ErrAccountAuth), die
+	// Lesbarkeit (ErrNotReadable) und das Recht (ErrForbidden): write für
+	// Neues und Eigenes, supersede für Fremdes. Name und Inhalt prüfen sie
+	// wie PutDocument, ungültig ist ErrInvalid. Das Ergebnis trägt die
+	// Zeilen in der Form von SyncRows.
+
+	// CreateDocumentAs legt ein Dokument an. Trägt ein lebendes Dokument den
+	// Namen: ErrNameTaken; eine Löschmarke hindert nicht, das Dokument
+	// bekommt eine neue id. Datei und Verzeichnis zugleich: ErrPathConflict.
+	CreateDocumentAs(ctx context.Context, auth WriteAuth, collection, name, content string) (WriteResult, error)
+	// WriteDocumentAs ersetzt den Inhalt eines lebenden Dokuments (sonst
+	// ErrNotFound). Nennt base eine andere Revision als die des Dokuments:
+	// ErrStaleRevision, geprüft vor dem Vergleich des Inhalts; nil heißt ohne
+	// Vorbedingung. Unveränderter Inhalt schreibt nichts, das Ergebnis trägt
+	// dann die bestehende Zeile und ihre Revision.
+	WriteDocumentAs(ctx context.Context, auth WriteAuth, collection, name, content string, base *int64) (WriteResult, error)
+	// DeleteDocumentAs setzt eine Löschmarke auf ein lebendes Dokument (sonst
+	// ErrNotFound); base wie bei WriteDocumentAs.
+	DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64) (WriteResult, error)
+
 	// SyncRows liest für den Abgleich die Zeilen der Collections in since
 	// mit revision > Since der jeweiligen Collection und revision ≤ upTo,
 	// sortiert nach Revision, dann id, höchstens limit (0: ohne Grenze). Alle
@@ -171,6 +196,7 @@ var queries = struct {
 	ActionInsertFull     string
 
 	DocumentLive       string
+	DocumentByID       string
 	DocumentsAll       string
 	DocumentsInDir     string
 	DocumentLiveCount  string
@@ -244,14 +270,15 @@ var queries = struct {
 	LockRevision: `UPDATE db_info SET value = value WHERE key = $1`,
 
 	ActionInsert: `INSERT INTO actions (at, account, action, subject) VALUES ($1, $2, $3, $4)`,
-	ActionInsertDocument: `INSERT INTO actions (at, account, action, document_id, revision)
-		VALUES ($1, $2, $3, $4, $5)`,
+	ActionInsertDocument: `INSERT INTO actions (at, account, carrier, action, document_id, revision)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
 	ActionInsertFull: `INSERT INTO actions (at, account, carrier, action, subject, revision)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
 
 	// Dokumente: documentColumns in dieser Reihenfolge, gelesen mit scanDocument.
 	DocumentLive: `SELECT ` + documentColumns + ` FROM documents
 		WHERE collection = $1 AND name = $2 AND deleted = 0`,
+	DocumentByID: `SELECT ` + documentColumns + ` FROM documents WHERE id = $1`,
 	// DocumentsAll und DocumentsInDir lesen die lebenden Dokumente einer
 	// Collection bzw. unter einem Verzeichnis, ohne SYSTEM:-Zeilen, nach Name.
 	// Das Verzeichnis grenzt ein Bereich ein: name >= 'tasks/' AND name <
@@ -499,8 +526,9 @@ func Create(ctx context.Context, addr config.DB) (Store, error) {
 // sqliteStore ist die Umsetzung für SQLite.
 type sqliteStore struct {
 	db *sql.DB
-	// traceTx umhüllt die Transaktion eines Schreibvorgangs an Accounts;
-	// nur Tests setzen es, um die Reihenfolge der Anweisungen zu sehen.
+	// traceTx umhüllt die Transaktion eines Schreibvorgangs an Accounts oder
+	// über einen Node (begin); nur Tests setzen es, um die Reihenfolge der
+	// Anweisungen zu sehen.
 	traceTx func(sqlitedb.Querier) sqlitedb.Querier
 }
 

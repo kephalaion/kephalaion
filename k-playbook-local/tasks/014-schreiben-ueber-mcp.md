@@ -252,7 +252,7 @@ derselben Etappe im selben Commit. Etappen 5–6 sind der zweite Teil und könne
 
 | Etappe | Status | Datum | Notiz |
 |---|---|---|---|
-| 1 — Hub-Store: Urheber, Rechte, create, write, delete | offen | | |
+| 1 — Hub-Store: Urheber, Rechte, create, write, delete | erledigt | 2026-09-27 | `docTx` trägt Urheber (User, Account, Node), CLI bleibt admin ohne Träger; `CreateDocumentAs`/`WriteDocumentAs`/`DeleteDocumentAs` mit `WriteAuth`, Sperre der Account-Zeile zuerst, Fehler `ErrNotReadable`/`ErrForbidden`/`ErrNameTaken`/`ErrStaleRevision`/`ErrInvalid` (`write.go`); Tests `write_test.go`, `make check` grün; Commit folgt |
 | 2 — Vertrag: create, write, delete über local und HTTP | offen | | |
 | 3 — Node: Werkzeuge create, write, delete | offen | | |
 | 4 — rename und Verzeichnisse | offen | | |

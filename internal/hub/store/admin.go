@@ -590,7 +590,7 @@ func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, ta
 	if _, err := tx.ExecContext(ctx, q(queries.AccountsLockAll)); err != nil {
 		return fmt.Errorf("Accounts sperren: %w", err)
 	}
-	w := &accountTx{docTx: docTx{tx: tx, rev: &lazyRevision{tx: tx}, now: sqlitedb.NowMillis()}, by: Admin}
+	w := &accountTx{docTx: newDocTx(tx, Admin, Admin, "")}
 	if tables != nil {
 		if err := checkImport(ctx, tx, *tables); err != nil {
 			return err

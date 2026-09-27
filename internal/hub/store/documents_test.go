@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -37,9 +38,10 @@ func revision(t *testing.T, s Store) int64 {
 }
 
 // docActions liest die Dokument-Zeilen in actions: Aktion, id, Revision.
+// Die CLI am Hub schreibt als admin ohne Träger.
 func docActions(t *testing.T, s Store) []string {
 	t.Helper()
-	rows, err := s.(*sqliteStore).db.Query(`SELECT action, document_id, revision, account FROM actions
+	rows, err := s.(*sqliteStore).db.Query(`SELECT action, document_id, revision, account, carrier FROM actions
 		WHERE document_id IS NOT NULL ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
@@ -48,12 +50,13 @@ func docActions(t *testing.T, s Store) []string {
 	var out []string
 	for rows.Next() {
 		var action, id, account string
+		var carrier sql.NullString
 		var rev int64
-		if err := rows.Scan(&action, &id, &rev, &account); err != nil {
+		if err := rows.Scan(&action, &id, &rev, &account, &carrier); err != nil {
 			t.Fatal(err)
 		}
-		if account != Admin {
-			t.Errorf("actions: Account %q", account)
+		if account != Admin || carrier.Valid {
+			t.Errorf("actions: Account %q, Träger %v", account, carrier)
 		}
 		out = append(out, action+" "+id+" "+strconv.FormatInt(rev, 10))
 	}
