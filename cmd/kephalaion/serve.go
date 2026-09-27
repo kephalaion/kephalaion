@@ -33,8 +33,11 @@ Der Dienst: startet je eingerichteter Rolle einen HTTP-Listener auf ihrem
 listen aus der config — beide Rollen in einem Prozess, wenn beide
 eingerichtet sind — und läuft, bis SIGINT oder SIGTERM ihn beendet.
 
-  hub    der Vertrag für Nodes: POST /v1/whoami, /v1/rotate, /v1/sync
-  node   MCP für Clients unter /mcp
+  hub    der Vertrag für Nodes: POST /v1/whoami, /v1/rotate, /v1/sync und
+         die Schreibvorgänge /v1/create, /v1/write, /v1/delete, /v1/rename
+  node   MCP für Clients unter /mcp: whoami, list, read und changes aus der
+         Replica, create, write, delete und rename über den Hub — ist er
+         nicht erreichbar, wird nichts gespeichert, gelesen wird weiter
 
 Beide lauschen bisher nur auf diesem Rechner (127.0.0.1, ::1, localhost):
 Klartext-HTTP verlässt den Rechner nicht, bis https und ssh kommen. Ein
@@ -54,8 +57,8 @@ hält die anderen nicht auf. Transport local nimmt den Hub desselben serve,
 http den Hub unter seiner Adresse; https und ssh werden noch übergangen.
 Erfolg und letzter Fehler je Hub stehen in node.db (kephalaion status).
 kephalaion node sync läuft daneben wie immer. Nach einem Schreibvorgang über
-MCP (create, write, delete, rename) gleicht serve den Hub außer der Reihe ab,
-auch bei sync_interval 0.
+MCP (create, write, delete, rename) — gelungen oder mit unklarem Ausgang —
+gleicht serve den Hub außer der Reihe ab, auch bei sync_interval 0.
 
 Als Node fragt serve außerdem höchstens einmal am Tag bei GitHub nach dem
 neuesten Release (nach einem Fehler frühestens nach einer Stunde) und gibt
@@ -63,9 +66,11 @@ die Antwort im Werkzeug whoami mit (update) — aus seiner Sicht: global also
 der Weg des Verwalters. Die Antwort bleibt im Speicher.
 
 Logs gehen nach stderr: eine Zeile je Anfrage mit Methode, Pfad, Status,
-Dauer und den Namen von Node bzw. Account — nie ein Token. Vom Abgleich im
-Hintergrund eine Zeile, wenn Zeilen kamen, eine beim ersten Fehler eines Hubs
-und wenn sich die Art des Fehlers ändert, und eine, wenn es wieder geht.
+Dauer und den Namen von Node bzw. Account, bei einem Schreibvorgang über MCP
+dazu Vorgang, Hub und Fehlercode — nie ein Token, nie ein Inhalt. Vom
+Abgleich im Hintergrund eine Zeile, wenn Zeilen kamen, eine beim ersten Fehler
+eines Hubs und wenn sich die Art des Fehlers ändert, und eine, wenn es wieder
+geht.
 
 Optionen:
   --config pfad   Ort der config (siehe kephalaion hub init --help)

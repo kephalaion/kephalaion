@@ -204,6 +204,13 @@ func TestServeLoopbackOnly(t *testing.T) {
 	}
 }
 
+// Die Hilfe nennt die Pfade des Vertrags und die Werkzeuge, auch die, die
+// schreiben.
+func TestServeHelp(t *testing.T) {
+	runT(t, "serve", "--help").want(t, 0, "/v1/sync und", "/v1/create, /v1/write, /v1/delete, /v1/rename",
+		"create, write, delete und rename über den Hub", "nie ein Inhalt")
+}
+
 // Beenden per Signal: serve über die Kommandozeile, SIGTERM an den eigenen
 // Prozess, Exit-Code 0.
 func TestServeSignal(t *testing.T) {

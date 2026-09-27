@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -216,6 +218,212 @@ func TestMCPWriteThroughServe(t *testing.T) {
 			t.Errorf("Token oder Adresse in der Antwort: %s", raw)
 		}
 	}
+}
+
+// Der Durchlauf von Task 014: serve mit Hub und Node, dazu ein zweiter Node
+// mit eigener config und eigenem serve, der den Hub über http erreicht — zwei
+// Rechner auf einem, zwei Accounts desselben Users. Beide schreiben, und der
+// Anstoß nach dem eigenen Schreiben bringt auch das des anderen; ein
+// Konflikt zwischen beiden wird abgelehnt (stale_revision, name_taken), nichts
+// wird still überschrieben; der Urheber ist der User, actions nennt Account
+// und Node. Ist der Hub gestoppt, speichert der zweite Node nichts
+// (unreachable) und liest weiter.
+func TestMCPWriteTwoNodes(t *testing.T) {
+	slow(t, "zwei serve, wartet auf die angestoßenen Abgleiche")
+	e := newCommEnv(t)
+	r := e.run(t, "hub", "account", "add", "bob-vm", "--user", "kleist")
+	r.want(t, 0)
+	bobVM := tokenFrom(t, r.out)
+	e.run(t, "hub", "account", "grant", "bob-vm", "team-x", "--write").want(t, 0)
+	r = e.run(t, "hub", "node", "add", "vm")
+	r.want(t, 0)
+	vmToken := tokenFrom(t, r.out)
+	e.run(t, "hub", "node", "grant", "vm", "team-x").want(t, 0)
+
+	// Erster Rechner: Hub und Node in einem serve; nur der Anstoß gleicht ab.
+	e.run(t, "node", "sync", "eigen").want(t, 0)
+	e.run(t, "config", "set", "node", "sync_interval", "0").want(t, 0)
+	srvA := startServe(t, portZero(t, e.cfg))
+
+	// Zweiter Rechner: nur ein Node, der Hub über http unter der Adresse von
+	// serve.
+	dir := filepath.Join(e.dir, "vm")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfgB := filepath.Join(dir, "config.yaml")
+	cB := "--config=" + cfgB
+	runT(t, "node", "init", "--db", "sqlite://"+filepath.Join(dir, "node.db"), cB).want(t, 0)
+	runIn(t, vmToken, "node", "hub", "add", "zentral", "--node", "vm", "--transport", "http",
+		"--address", "http://"+srvA.addrs[config.Hub], "--token-stdin", cB).want(t, 0)
+	runT(t, "node", "collection", "add", "zentral:team-x", cB).want(t, 0)
+	runT(t, "config", "set", "node", "sync_interval", "0", cB).want(t, 0)
+	runT(t, "node", "sync", cB).want(t, 0)
+	cfg, _, err := config.Load(cfgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Node.Listen = "127.0.0.1:0"
+	srvB := startServe(t, cfg)
+
+	type client struct {
+		endpoint, addr string
+		pairs          map[string][2]string
+	}
+	A := client{"http://" + srvA.addrs[config.Node] + mcpnode.Path, "eigen:team-x",
+		map[string][2]string{"eigen": {"bob", e.tokens["bob"]}}}
+	B := client{"http://" + srvB.addrs[config.Node] + mcpnode.Path, "zentral:team-x",
+		map[string][2]string{"zentral": {"bob-vm", bobVM}}}
+	write := func(c client, tool string, args any) mcpnode.WriteOutput {
+		t.Helper()
+		var out mcpnode.WriteOutput
+		mcpTool(t, c.endpoint, c.pairs, tool, args, &out)
+		return out
+	}
+	read := func(c client, name string) (mcpnode.ReadOutput, string) {
+		t.Helper()
+		var out mcpnode.ReadOutput
+		_, text := mcpTool(t, c.endpoint, c.pairs, "read", mcpnode.ReadInput{Collection: c.addr, Name: name}, &out)
+		return out, text
+	}
+	hubHas := func(name, content string) {
+		t.Helper()
+		if r := e.run(t, "hub", "doc", "get", "team-x", name); r.code != 0 || r.out != content {
+			t.Errorf("am Hub %s: %q (Exit %d), erwartet %q", name, r.out, r.code, content)
+		}
+	}
+
+	// Beide schreiben. B kennt geteilt.md erst nach dem Abgleich, den sein
+	// eigenes create anstößt.
+	fromA := write(A, "create", mcpnode.CreateInput{Collection: A.addr, Name: "geteilt.md", Content: "von A"})
+	if fromA.Error != nil || fromA.Updated == nil || fromA.Updated.By != "kleist" {
+		t.Fatalf("create von A: %+v", fromA)
+	}
+	if doc, _ := read(B, "geteilt.md"); doc.Kind != mcpnode.KindNone {
+		t.Fatalf("B kennt geteilt.md vor dem Abgleich: %+v", doc)
+	}
+	fromB := write(B, "create", mcpnode.CreateInput{Collection: B.addr, Name: "von-b.md", Content: "von B"})
+	if fromB.Error != nil || fromB.Updated == nil || fromB.Updated.By != "kleist" || fromB.Revision <= fromA.Revision {
+		t.Fatalf("create von B: %+v", fromB)
+	}
+	eventuallyLog(t, srvB, "B liest geteilt.md nach dem angestoßenen Abgleich", func() bool {
+		doc, text := read(B, "geteilt.md")
+		return doc.Revision == fromA.Revision && text == "von A"
+	})
+	e.run(t, "node", "sync", "eigen").want(t, 0)
+	if doc, text := read(A, "von-b.md"); doc.ID != fromB.ID || text != "von B" || doc.Created == nil ||
+		doc.Created.By != "kleist" {
+		t.Errorf("A liest von-b.md: %+v, %q", doc, text)
+	}
+
+	// Konflikt: A ändert geteilt.md; B beruht noch auf dem alten Stand und
+	// wird abgelehnt. Erst nach dem Abgleich schreibt B auf den neuen.
+	base := fromA.Revision
+	newA := write(A, "write", mcpnode.WriteInput{Collection: A.addr, Name: "geteilt.md", Content: "A zwei",
+		BaseRevision: &base})
+	if newA.Error != nil || newA.Revision <= base {
+		t.Fatalf("write von A: %+v", newA)
+	}
+	if doc, _ := read(B, "geteilt.md"); doc.Revision != base {
+		t.Fatalf("B schon abgeglichen: %+v", doc)
+	}
+	wantWriteCode(t, "B auf altem Stand", write(B, "write", mcpnode.WriteInput{Collection: B.addr, Name: "geteilt.md",
+		Content: "B zwei", BaseRevision: &base}), "stale_revision",
+		fmt.Sprintf("hat Revision %d, der Vorgang beruht auf %d", newA.Revision, base))
+	hubHas("geteilt.md", "A zwei")
+	runT(t, "node", "sync", cB).want(t, 0)
+	doc, text := read(B, "geteilt.md")
+	if doc.Revision != newA.Revision || text != "A zwei" {
+		t.Fatalf("B nach dem Abgleich: %+v, %q", doc, text)
+	}
+	if out := write(B, "write", mcpnode.WriteInput{Collection: B.addr, Name: "geteilt.md", Content: "B zwei",
+		BaseRevision: &doc.Revision}); out.Error != nil {
+		t.Fatalf("write von B auf neuem Stand: %+v", out)
+	}
+	hubHas("geteilt.md", "B zwei")
+
+	// Derselbe Name von beiden: A legt an, B bekommt name_taken — beim
+	// Anlegen wie beim Umbenennen; nichts wird überschrieben.
+	if out := write(A, "create", mcpnode.CreateInput{Collection: A.addr, Name: "gleich.md", Content: "A"}); out.Error != nil {
+		t.Fatalf("create gleich.md von A: %+v", out)
+	}
+	wantWriteCode(t, "B legt gleich.md an", write(B, "create", mcpnode.CreateInput{Collection: B.addr, Name: "gleich.md",
+		Content: "B"}), "name_taken", "gleich.md gibt es in team-x schon")
+	wantWriteCode(t, "B benennt auf gleich.md um", write(B, "rename", mcpnode.RenameInput{Collection: B.addr,
+		Name: "von-b.md", NewName: "gleich.md"}), "name_taken", "gleich.md gibt es in team-x schon")
+	hubHas("gleich.md", "A")
+	hubHas("von-b.md", "von B")
+
+	// Urheber: je Vorgang der Account und der Node, der ihn trug.
+	rows, err := rawHub(t, e.dir).Query(`SELECT account, carrier, action FROM actions WHERE document_id = ?
+		ORDER BY revision`, fromA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var acts []string
+	for rows.Next() {
+		var account, carrier, action string
+		if err := rows.Scan(&account, &carrier, &action); err != nil {
+			t.Fatal(err)
+		}
+		acts = append(acts, account+"@"+carrier+":"+action)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(acts, " "); got != "bob@laptop:create bob@laptop:update bob-vm@vm:update" {
+		t.Errorf("actions von geteilt.md: %s", got)
+	}
+
+	// Der Hub ist gestoppt: B speichert nichts und liest weiter.
+	srvA.stop(t)
+	wantWriteCode(t, "Hub gestoppt", write(B, "write", mcpnode.WriteInput{Collection: B.addr, Name: "von-b.md",
+		Content: "offline"}), "unreachable", "Hub zentral nicht erreichbar, nichts gespeichert")
+	if doc, text := read(B, "von-b.md"); doc.Kind != mcpnode.KindDocument || text != "von B" {
+		t.Errorf("B liest ohne Hub: %+v, %q", doc, text)
+	}
+	if doc, text := read(B, "geteilt.md"); doc.Kind != mcpnode.KindDocument || text != "B zwei" {
+		t.Errorf("B liest ohne Hub: %+v, %q", doc, text)
+	}
+	hubHas("von-b.md", "von B")
+
+	srvB.stop(t)
+	hubLog, logB := srvA.log.String(), srvB.log.String()
+	for _, want := range [][]string{
+		{"hub POST /v1/create 200", "node=vm", "account=bob-vm"},
+		{"hub POST /v1/write 409", "node=vm", "account=bob-vm"},
+		{"node POST /mcp 200", "op=create", "hub=eigen node=laptop", "account=bob"},
+	} {
+		if !logLine(hubLog, want...) {
+			t.Errorf("Log von serve A ohne Zeile mit %q:\n%s", want, hubLog)
+		}
+	}
+	for _, want := range [][]string{
+		{"op=create", "hub=zentral node=vm", "account=bob-vm"},
+		{"op=write", "code=stale_revision"},
+		{"op=create", "code=name_taken"},
+		{"op=rename", "code=name_taken"},
+		{"op=write", "code=unreachable"},
+	} {
+		if !logLine(logB, want...) {
+			t.Errorf("Log von serve B ohne Zeile mit %q:\n%s", want, logB)
+		}
+	}
+	for _, log := range []string{hubLog, logB} {
+		if strings.Contains(log, "keph_") || strings.Contains(log, "von A") || strings.Contains(log, "B zwei") {
+			t.Errorf("Token oder Inhalt im Log:\n%s", log)
+		}
+	}
+}
+
+// logLine sagt, ob eine Zeile des Logs alle parts enthält.
+func logLine(log string, parts ...string) bool {
+	for _, line := range strings.Split(log, "\n") {
+		if contains(line, parts...) {
+			return true
+		}
+	}
+	return false
 }
 
 func wantWriteCode(t *testing.T, what string, out mcpnode.WriteOutput, code, want string) {
