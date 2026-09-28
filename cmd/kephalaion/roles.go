@@ -163,6 +163,7 @@ const nodeUsage = `Aufruf:
   kephalaion node account rotate|check …
   kephalaion node sync [<alias>]
   kephalaion node doc list|get …
+  kephalaion node dir push|pull …
   kephalaion node whoami [<account>] [--hub <alias>] [--json]
 
 Kommandos:
@@ -175,12 +176,17 @@ Kommandos:
   sync         gleicht die Replicas mit den Hubs ab (Transport local und http);
                serve tut das im Hintergrund selbst
   doc          listet und liest Dokumente aus der Replica
+  dir          gleicht einen lokalen Ordner mit einem Verzeichnis einer
+               Collection ab, als Client des Nodes über MCP: push ersetzt den
+               Inhalt des Verzeichnisses (vorerst nur unter vendor/), pull
+               holt ihn
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
 
 Hilfe: kephalaion node hub --help, kephalaion node collection --help,
 kephalaion node account --help, kephalaion node sync --help,
-kephalaion node doc --help, kephalaion node whoami --help
+kephalaion node doc --help, kephalaion node dir --help,
+kephalaion node whoami --help
 `
 
 // runRole verteilt die Kommandos unter hub bzw. node.
@@ -219,6 +225,8 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runNodeSync(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "doc":
 		return runNodeDoc(args[1:], stdout, stderr)
+	case r == config.Node && args[0] == "dir":
+		return runNodeDir(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "whoami":
 		return runNodeWhoami(args[1:], stdout, stderr)
 	default:

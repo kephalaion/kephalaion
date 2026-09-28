@@ -311,8 +311,13 @@ func parent(name string) string {
 
 // dirName nennt ein Verzeichnis in Meldungen; die Wurzel als „/“.
 func dirName(dir string) string {
+	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" {
 		return "/"
 	}
 	return dir + "/"
 }
+
+// DirName nennt ein Verzeichnis so, wie die Meldungen es tun: mit '/' am
+// Ende, die Wurzel als „/“.
+func DirName(dir string) string { return dirName(dir) }
