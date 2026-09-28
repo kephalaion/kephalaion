@@ -26,9 +26,10 @@ Bauen und installieren (unter WSL aus einem WSL-Terminal, dann landet die Erweit
 VS-Code-Server der WSL):
 
 ```sh
-cd vscode && npx --yes @vscode/vsce package --skip-license
-code --install-extension kephalaion-0.0.5.vsix
+make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie mit code
 ```
+
+Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce` kommt per `npx`).
 
 Danach „Developer: Reload Window“. Die Statusleiste zeigt `Keph <hub>`; ein Klick öffnet das
 Menü (Status, neu verbinden, Account wählen, Collection einbinden, Log).

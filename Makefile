@@ -35,7 +35,7 @@ HOST_TARGET = $(shell go env GOOS)-$(shell go env GOARCH)
 # -buildvcs=false, weil der Commit ausdrücklich per -ldflags kommt.
 LDFLAGS = -s -w -X $(BUILDINFO).Version=$(VERSION) -X $(BUILDINFO).Commit=$(COMMIT)
 
-.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install clean
+.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-vsix vscode-install clean
 
 help: ## Zeigt diese Hilfe an
 	@echo "Targets:"
@@ -202,6 +202,22 @@ dev-install: dist-host ## Baut diese Plattform, ersetzt ~/.local/bin/kephalaion,
 	      echo "Dienst neu gestartet (launchctl kickstart -k $$agent)"; \
 	    fi ;; \
 	  esac
+
+# Die Erweiterung: Version aus vscode/package.json, gebaut mit vsce per npx
+# (braucht Node.js). Die .vsix landet in ./dist/ neben den Binaries.
+VSCODE_DIR := vscode
+VSCODE_VSIX = $(DIST_DIR)/$(BINARY)-$(shell node -p "require('./$(VSCODE_DIR)/package.json').version").vsix
+
+vscode-vsix: ## Baut die VS-Code-Erweiterung nach ./dist/ (braucht Node.js)
+	@mkdir -p "$(DIST_DIR)"
+	cd "$(VSCODE_DIR)" && npx --yes @vscode/vsce package --skip-license --out "$(abspath $(VSCODE_VSIX))"
+
+# code aus einem Terminal der WSL, eines SSH-Remotes oder Devcontainers
+# installiert in den VS-Code-Server dort — dorthin gehört eine Erweiterung der
+# Art workspace. --force: auch bei gleicher Version ersetzen.
+vscode-install: vscode-vsix ## Baut die Erweiterung und installiert sie mit code; danach „Developer: Reload Window“
+	code --install-extension "$(VSCODE_VSIX)" --force
+	@echo 'In VS Code: „Developer: Reload Window“'
 
 clean: ## Entfernt ./dist/ und ./coverage/
 	rm -rf "$(DIST_DIR)" "$(COVER_DIR)"
