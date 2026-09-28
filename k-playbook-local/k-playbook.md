@@ -47,6 +47,11 @@ Pakete unter `internal/`:
   reserviert), `LogName` für Namen im Log.
 - `sqlq` — Hilfe für PostgreSQL-taugliche Abfragen: Platzhalter `$n`, `Bind` je Dialekt,
   `Check` auf verbotene Konstrukte.
+- `frontmatter` — neutral, liest das Frontmatter einer Markdown-Datei (`Parse`: Block ganz am
+  Anfang zwischen zwei Zeilen genau `---`, YAML, BOM und `\r\n` erlaubt; Ergebnis ein
+  JSON-taugliches Objekt, „keins“ oder ein kurzer Fehler; `MaxBytes` 64 KiB, `IsMarkdown`).
+  Über den Knotenbaum von yaml.v3, damit Zeitangaben Text bleiben und Schlüssel am Tag geprüft
+  werden. Für `mcpnode` (`list`, `read`), später die Suche.
 - `hub/store`, `node/store` — die gekapselten Datenbanken von Hub und Node, je eine
   Schnittstelle `Store` mit SQLite-Umsetzung und DDL. Der Hub-Store schreibt Dokumente mit
   Urheber (`docTx`: User, Account, Träger); die Vorgänge im Namen eines Accounts stehen in
@@ -87,7 +92,10 @@ Pakete unter `internal/`:
   Header-Paare je Hub, Anmeldung über alle Hubs (`Authenticate`), Werkzeug `whoami`
   (`Whoami`, auch für `node whoami`); Werkzeuge `list`, `read`, `changes` (`list.go`,
   `read.go`, `changes.go`) über dem gemeinsamen Schritt in `access.go` (Adresse, Anmeldung,
-  Recht, Replica je Hub) und den Abfragen in `node/replica/read.go`; Werkzeuge `create`,
+  Recht, Replica je Hub) und den Abfragen in `node/replica/read.go`; `list` und `read` mit
+  `frontmatter` (`frontmatter.go`: Dokumente `.md` per id, Verzeichnisse und Collections über
+  ihre `README.md` per `replica.HeadByName`/`HeadByID`, nur die ersten 64 KiB, nur für die
+  Einträge der Seite, nach dem Blättern; nicht im Cursor); Werkzeuge `create`,
   `write`, `delete`, `rename` (`write.go`) auf demselben Schritt, den Weg zum Hub und den
   Anstoß des Abgleichs bekommt es als `HubLink` von `cmd/kephalaion`. Fehler der Werkzeuge,
   die schreiben, tragen einen Code (Codes des Vertrags, dazu `unreachable`,

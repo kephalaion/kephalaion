@@ -116,14 +116,19 @@ Ausführlich: [`konzept.md`](konzept.md).
   Hub fortlaufend nummeriert. Ersetzt den früheren Gedanken der „Reihen“ (`series_*`).
 - **mask** (Maske) — Glob auf das letzte Segment eines Namens (`*.md`, `0*-*.md`), etwa bei
   `list`; kein regulärer Ausdruck.
-- **frontmatter** — *geplant, Task 015.* Block am Anfang einer `.md`-Datei zwischen zwei
-  Zeilen `---`, darin YAML. Er bleibt Teil des Inhalts; `list` und `read` liefern ihn mit dem
-  Parameter `frontmatter` als JSON-Objekt (Feld `frontmatter`, bei einem Fehler
-  `frontmatter_error`). Ein Verzeichnis und eine Collection haben das Frontmatter ihrer
-  **README.md** (`<verzeichnis>/README.md` bzw. `README.md` auf oberster Ebene).
+- **frontmatter** — Block ganz am Anfang einer `.md`-Datei zwischen zwei Zeilen, die genau
+  `---` lauten, darin YAML (UTF-8-BOM davor und `\r\n` erlaubt). Er bleibt Teil des Inhalts;
+  `list` und `read` liefern ihn mit dem Parameter `frontmatter` als JSON-Objekt (Feld
+  `frontmatter`, bei einem Fehler `frontmatter_error` mit kurzem Grund; ohne Frontmatter fehlt
+  beides). Gelesen werden nur die ersten 64 KiB. Ein Verzeichnis und eine Collection haben das
+  Frontmatter ihrer **README.md**. Paket `internal/frontmatter` (Task 015).
 - **directory** (Verzeichnis) — ein Präfix von Namen bis zu einem `/`; es gibt es, solange ein
   lebendes Dokument darunter liegt. `list` zeigt die Verzeichnisse der nächsten Ebene als
   eigene Einträge (Art `directory`), `read` erkennt eines an seinem Namen.
+- **README.md** — das Dokument, das ein Verzeichnis oder eine Collection beschreibt:
+  `<verzeichnis>/README.md` bzw. `README.md` auf oberster Ebene, genau so geschrieben. Sein
+  Frontmatter liefern `list` und `read` als Frontmatter des Verzeichnisses bzw. der Collection;
+  sonst ist es ein gewöhnliches Dokument.
 - **list** — Werkzeug des Nodes: Inhalt eines Verzeichnisses aus der Replica, ohne Löschmarken
   und `SYSTEM:`-Namen; ohne `collection` die lesbaren Collections. Sortiert nach `name`,
   `created` oder `updated`, geblättert mit `limit` und `cursor`, gefiltert mit `mask`.

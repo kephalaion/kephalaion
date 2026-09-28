@@ -213,3 +213,52 @@ func TestChangedEntries(t *testing.T) {
 		t.Errorf("nach allem: %v, %v", ok, err)
 	}
 }
+
+// HeadByName und HeadByID liefern den Anfang eines Inhalts in Bytes, nur von
+// lebenden Zeilen ohne SYSTEM:; bei zwei lebenden Zeilen eines Namens die
+// jüngste.
+func TestHead(t *testing.T) {
+	ctx := context.Background()
+	r := readReplica(t, 6,
+		row("A", "wissen", "a.md", 1, 1, "---\ntitle: alt\n---\n"),
+		row("B", "wissen", "a.md", 2, 1, "---\ntitle: neu\n---\nText äöü"),
+		row("C", "wissen", "leer.md", 3, 1, ""),
+		tomb("D", "wissen", "weg.md", 4),
+		row("S", "wissen", contract.AccountRowName("bob"), 5, 1, "{}"),
+	)
+	head, ok, err := r.HeadByName(ctx, "wissen", "a.md", 100)
+	if err != nil || !ok || string(head) != "---\ntitle: neu\n---\nText äöü" {
+		t.Errorf("a.md: %q, %v, %v", head, ok, err)
+	}
+	// Bytes, nicht Zeichen: ä ist zwei Bytes, der Schnitt liegt mitten darin.
+	head, ok, err = r.HeadByName(ctx, "wissen", "a.md", 25)
+	if err != nil || !ok || len(head) != 25 || string(head) != "---\ntitle: neu\n---\nText \xc3" {
+		t.Errorf("a.md gekürzt: %q, %v, %v", head, ok, err)
+	}
+	head, ok, err = r.HeadByID(ctx, "B", 3)
+	if err != nil || !ok || string(head) != "---" {
+		t.Errorf("per id: %q, %v, %v", head, ok, err)
+	}
+	if head, ok, err = r.HeadByName(ctx, "wissen", "leer.md", 10); err != nil || !ok || len(head) != 0 {
+		t.Errorf("leer: %q, %v, %v", head, ok, err)
+	}
+	// Per id zählt die Zeile selbst, auch die ältere zweite eines Namens.
+	if head, ok, err := r.HeadByID(ctx, "A", 100); err != nil || !ok || string(head) != "---\ntitle: alt\n---\n" {
+		t.Errorf("A: %q, %v, %v", head, ok, err)
+	}
+	for _, c := range []struct{ id, name string }{{"D", "weg.md"}, {"S", ""}, {"X", "fehlt.md"}} {
+		if c.id != "" {
+			if _, ok, err := r.HeadByID(ctx, c.id, 10); ok || err != nil {
+				t.Errorf("id %s: %v, %v", c.id, ok, err)
+			}
+		}
+		if c.name != "" {
+			if _, ok, err := r.HeadByName(ctx, "wissen", c.name, 10); ok || err != nil {
+				t.Errorf("Name %s: %v, %v", c.name, ok, err)
+			}
+		}
+	}
+	if _, _, err := r.HeadByName(ctx, "wissen", contract.AccountRowName("bob"), 10); err == nil {
+		t.Error("SYSTEM:-Name ohne Fehler")
+	}
+}

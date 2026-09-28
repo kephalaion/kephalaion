@@ -43,7 +43,7 @@ func decodeCursor(s string, v any) error {
 
 // errCursorMismatch meldet einen Cursor, der zu einer anderen Anfrage gehört.
 var errCursorMismatch = &toolError{msg: "cursor gehört zu einer anderen Anfrage: collection, path und die übrigen " +
-	"Angaben müssen gleich bleiben"}
+	"Angaben außer limit und frontmatter müssen gleich bleiben"}
 
 // fingerprint fasst die Angaben einer Anfrage zusammen, die ein Cursor
 // festhält: 16 Hex-Zeichen von sha256.

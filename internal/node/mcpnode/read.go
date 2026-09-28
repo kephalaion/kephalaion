@@ -12,10 +12,11 @@ import (
 
 // ReadInput sind die Argumente von read.
 type ReadInput struct {
-	Collection string `json:"collection,omitempty" jsonschema:"<hub>:<collection>, Hub-Teil entbehrlich bei nur einem Hub; <hub>: für die Wurzel des Hubs"`
-	Name       string `json:"name,omitempty" jsonschema:"Dokument oder Verzeichnis in der Collection, leer für ihre Wurzel"`
-	ID         string `json:"id,omitempty" jsonschema:"id des Dokuments statt name; collection dann entbehrlich bei nur einem Hub"`
-	Content    *bool  `json:"content,omitempty" jsonschema:"Inhalt mitliefern, Standard ja; false nur die Angaben"`
+	Collection  string `json:"collection,omitempty" jsonschema:"<hub>:<collection>, Hub-Teil entbehrlich bei nur einem Hub; <hub>: für die Wurzel des Hubs"`
+	Name        string `json:"name,omitempty" jsonschema:"Dokument oder Verzeichnis in der Collection, leer für ihre Wurzel"`
+	ID          string `json:"id,omitempty" jsonschema:"id des Dokuments statt name; collection dann entbehrlich bei nur einem Hub"`
+	Content     *bool  `json:"content,omitempty" jsonschema:"Inhalt mitliefern, Standard ja; false nur die Angaben"`
+	Frontmatter bool   `json:"frontmatter,omitempty" jsonschema:"auch das Frontmatter als JSON-Objekt: bei einem .md-Dokument seines, bei einem Verzeichnis oder der Wurzel der Collection das der README.md"`
 }
 
 // ReadOutput ist die Antwort von read: kind document, directory oder none —
@@ -36,11 +37,17 @@ type ReadOutput struct {
 	// Writable sagt, ob der Account in der Collection write hat; bei
 	// Dokumenten und Verzeichnissen in einer Collection.
 	Writable *bool `json:"writable,omitempty"`
+	// Frontmatter ist das Frontmatter als JSON-Objekt, FrontmatterError der
+	// Grund, wenn es sich nicht lesen ließ — nur mit dem Parameter
+	// frontmatter (frontmatter.go).
+	Frontmatter      any    `json:"frontmatter,omitempty"`
+	FrontmatterError string `json:"frontmatter_error,omitempty"`
 }
 
 const readDescription = "Liest ein Dokument aus der Replica, per collection und name oder per id; der Inhalt ist " +
 	"der Text des Ergebnisses. kind: document, directory oder none. Mit content: false nur Name, id, Revision, " +
-	"angelegt, geändert, Größe und writable."
+	"angelegt, geändert, Größe und writable. Mit frontmatter das Frontmatter (.md, bei einem Verzeichnis das seiner " +
+	"README.md) als JSON-Objekt; der Inhalt bleibt der volle Text."
 
 func (n *Node) read(ctx context.Context, req *mcp.CallToolRequest, in ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
 	out, content, err := n.doRead(ctx, req, in)
@@ -75,7 +82,7 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 	}
 	defer a.Close()
 	if in.ID != "" {
-		out, content, err := readByID(ctx, a, t, in.ID, withContent)
+		out, content, err := readByID(ctx, a, t, in.ID, withContent, in.Frontmatter)
 		return out, content, a.wrap(ctx, err)
 	}
 	if t.Collection == "" {
@@ -84,19 +91,26 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 		}
 		return ReadOutput{Kind: KindDirectory, Address: t.Address()}, nil, nil
 	}
-	out, content, err := readByName(ctx, a, t, in.Name, withContent)
+	out, content, err := readByName(ctx, a, t, in.Name, withContent, in.Frontmatter)
 	return out, content, a.wrap(ctx, err)
 }
 
 // readByName liest einen Namen einer lesbaren Collection: Dokument,
 // Verzeichnis (ein lebendes Dokument darunter; leer ist die Wurzel) oder
-// nichts. Ein '/' am Ende ist erlaubt.
-func readByName(ctx context.Context, a *hubAccess, t target, name string, withContent bool) (ReadOutput, *string, error) {
+// nichts. Ein '/' am Ende ist erlaubt. Mit withFM dazu das Frontmatter: das
+// des Dokuments, bei Verzeichnis und Wurzel das der README.md.
+func readByName(ctx context.Context, a *hubAccess, t target, name string, withContent, withFM bool) (ReadOutput, *string, error) {
 	writable := a.rights[t.Collection].Write
 	out := ReadOutput{Kind: KindNone, Address: t.Address(), Name: name}
 	name = strings.TrimSuffix(name, "/")
 	if name == "" {
 		out.Kind, out.Name, out.Writable = KindDirectory, "", &writable
+		if withFM {
+			var err error
+			if out.Frontmatter, out.FrontmatterError, err = readmeFrontmatter(ctx, a.rep, t.Collection, ""); err != nil {
+				return ReadOutput{}, nil, err
+			}
+		}
 		return out, nil, nil
 	}
 	if err := ident.CheckDocName(name); err != nil {
@@ -109,6 +123,11 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 	}
 	if ok {
 		out = documentOutput(t, e, writable)
+		if withFM {
+			if out.Frontmatter, out.FrontmatterError, err = documentFrontmatter(ctx, a.rep, e.Name, e.ID, e.Content); err != nil {
+				return ReadOutput{}, nil, err
+			}
+		}
 		return out, e.Content, nil
 	}
 	dir, err := a.rep.HasUnder(ctx, t.Collection, name+"/")
@@ -117,6 +136,11 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 	}
 	if dir {
 		out.Kind, out.Writable = KindDirectory, &writable
+		if withFM {
+			if out.Frontmatter, out.FrontmatterError, err = readmeFrontmatter(ctx, a.rep, t.Collection, name+"/"); err != nil {
+				return ReadOutput{}, nil, err
+			}
+		}
 	}
 	return out, nil, nil
 }
@@ -124,8 +148,8 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 // readByID liest eine id im Hub des Ziels; nennt das Ziel eine Collection,
 // nur dort. Eine Löschmarke, eine SYSTEM:-Zeile und ein Dokument in einer
 // Collection, die der Client nicht lesen darf, sind none — wie eine
-// unbekannte id.
-func readByID(ctx context.Context, a *hubAccess, t target, id string, withContent bool) (ReadOutput, *string, error) {
+// unbekannte id. Mit withFM dazu das Frontmatter des Dokuments.
+func readByID(ctx context.Context, a *hubAccess, t target, id string, withContent, withFM bool) (ReadOutput, *string, error) {
 	none := ReadOutput{Kind: KindNone, Address: t.Address(), ID: id}
 	e, ok, err := a.rep.EntryByID(ctx, id, withContent)
 	if err != nil {
@@ -135,7 +159,13 @@ func readByID(ctx context.Context, a *hubAccess, t target, id string, withConten
 		return none, nil, nil
 	}
 	dt := target{Hub: t.Hub, Collection: e.Collection}
-	return documentOutput(dt, e, a.rights[e.Collection].Write), e.Content, nil
+	out := documentOutput(dt, e, a.rights[e.Collection].Write)
+	if withFM {
+		if out.Frontmatter, out.FrontmatterError, err = documentFrontmatter(ctx, a.rep, e.Name, e.ID, e.Content); err != nil {
+			return ReadOutput{}, nil, err
+		}
+	}
+	return out, e.Content, nil
 }
 
 func documentOutput(t target, e replica.Entry, writable bool) ReadOutput {

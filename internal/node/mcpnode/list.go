@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +41,9 @@ type ListInput struct {
 	Limit      int    `json:"limit,omitempty" jsonschema:"höchstens so viele Einträge, Standard 100, höchstens 1000"`
 	Cursor     string `json:"cursor,omitempty" jsonschema:"cursor der letzten Antwort, um weiterzublättern"`
 	Mask       string `json:"mask,omitempty" jsonschema:"Glob auf das letzte Segment, nur für Dokumente, etwa *.md"`
+	// Frontmatter gehört nicht zum Fingerabdruck des Cursors: Es ändert, was
+	// ein Eintrag enthält, nicht welche kommen.
+	Frontmatter bool `json:"frontmatter,omitempty" jsonschema:"auch das Frontmatter der .md-Dokumente als JSON-Objekt; bei Verzeichnissen und Collections das ihrer README.md"`
 }
 
 // ListOutput ist die Antwort von list.
@@ -66,11 +70,17 @@ type ListEntry struct {
 	Updated  *Stamp `json:"updated,omitempty"`
 	// Size ist die Größe des Inhalts in Bytes.
 	Size *int64 `json:"size,omitempty"`
+	// Frontmatter ist das Frontmatter als JSON-Objekt, FrontmatterError der
+	// Grund, wenn es sich nicht lesen ließ — nur mit dem Parameter
+	// frontmatter, nur bei passenden Einträgen (frontmatter.go).
+	Frontmatter      any    `json:"frontmatter,omitempty"`
+	FrontmatterError string `json:"frontmatter_error,omitempty"`
 }
 
 const listDescription = "Listet ein Verzeichnis einer Collection aus der Replica: zuerst die Unterverzeichnisse " +
 	"(ohne recursive), dann die Dokumente mit Name, id, Revision, angelegt und geändert, Größe. Ohne collection " +
-	"die lesbaren Collections. Mit more weiter über cursor."
+	"die lesbaren Collections. Mit more weiter über cursor. Mit frontmatter das Frontmatter der .md-Dokumente " +
+	"(Verzeichnisse und Collections: das ihrer README.md) als JSON-Objekt."
 
 // listCursor ist der Cursor von list: die Stelle nach dem letzten Eintrag
 // und der Fingerabdruck der Anfrage. Dir sagt, dass der letzte Eintrag ein
@@ -206,6 +216,16 @@ func (n *Node) doList(ctx context.Context, req *mcp.CallToolRequest, in ListInpu
 		}
 		pageCollections(pg, colls)
 		out := pg.finish()
+		if in.Frontmatter && len(out.Entries) > 0 {
+			// Ein zweiter Gang über die Hubs, nur für die Einträge der Seite.
+			more, err := r.eachValid(ctx, func(a *hubAccess) error {
+				return fillFrontmatter(ctx, a, target{Hub: a.hub}, out.Entries)
+			})
+			if err != nil {
+				return ListOutput{}, err
+			}
+			unread = mergeSorted(unread, more)
+		}
 		if len(unread) > 0 {
 			out.UnreadableHubs = unread
 		}
@@ -225,7 +245,13 @@ func (n *Node) doList(ctx context.Context, req *mcp.CallToolRequest, in ListInpu
 			return ListOutput{}, &toolError{msg: "path nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
 		}
 		pageCollections(pg, collectionEntries(a))
-		return pg.finish(), nil
+		out := pg.finish()
+		if in.Frontmatter {
+			if err := a.wrap(ctx, fillFrontmatter(ctx, a, t, out.Entries)); err != nil {
+				return ListOutput{}, err
+			}
+		}
+		return out, nil
 	}
 	prefix, err := ident.DocDirPrefix(in.Path)
 	if err != nil {
@@ -234,7 +260,26 @@ func (n *Node) doList(ctx context.Context, req *mcp.CallToolRequest, in ListInpu
 	if err := a.wrap(ctx, listDocuments(ctx, a, t, prefix, pg)); err != nil {
 		return ListOutput{}, err
 	}
-	return pg.finish(), nil
+	out := pg.finish()
+	if in.Frontmatter {
+		// Nach dem Blättern, nur für die Einträge der Seite.
+		if err := a.wrap(ctx, fillFrontmatter(ctx, a, t, out.Entries)); err != nil {
+			return ListOutput{}, err
+		}
+	}
+	return out, nil
+}
+
+// mergeSorted vereinigt zwei sortierte Listen von Aliasen ohne Doppel.
+func mergeSorted(a, b []string) []string {
+	out := append([]string{}, a...)
+	for _, s := range b {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // collectionEntries sind die lesbaren Collections eines Hubs als Einträge.

@@ -342,10 +342,16 @@ Node einen Hub noch nie abgeglichen, sagt die Meldung das.
   Hubs; sonst ein Verzeichnis (`path`): zuerst die Unterverzeichnisse, dann die Dokumente mit
   Name, `id`, Revision, angelegt und geändert (wann, von wem) und Größe. `recursive`, `sort`
   (`name`, `created`, `updated`), `order`, `mask` (Glob auf das letzte Segment, etwa `*.md`),
-  `limit` (Standard 100, höchstens 1000) und `cursor` zum Weiterblättern.
+  `limit` (Standard 100, höchstens 1000) und `cursor` zum Weiterblättern. Mit `frontmatter`
+  trägt jedes `.md`-Dokument sein Frontmatter (Block am Anfang zwischen zwei Zeilen `---`, YAML)
+  als JSON-Objekt `frontmatter`, Verzeichnisse und Collections das ihrer `README.md`; lässt es
+  sich nicht lesen, steht der Grund in `frontmatter_error`. So bekommt die KI alle Skills mit
+  Beschreibung in einem Aufruf: `recursive`, `mask: "SKILL.md"`, `frontmatter: true`.
 - **`read`** — ein Dokument per `collection` und `name` oder per `id`; der Inhalt ist der Text
   des Ergebnisses. `kind` ist `document`, `directory` oder `none`; mit `content: false` nur
-  die Angaben samt `writable`.
+  die Angaben samt `writable`. Mit `frontmatter` dazu das Frontmatter des `.md`-Dokuments, bei
+  einem Verzeichnis oder der Wurzel der Collection das seiner `README.md`; der Inhalt bleibt der
+  volle Text.
 - **`changes`** — was sich geändert hat: ohne Argumente nur ein `cursor` für „ab jetzt“, mit
   dem `cursor` der letzten Antwort lückenlos alles danach — je Dokument einmal, Löschmarken
   eingeschlossen. `reset` nennt Hubs, deren Replica neu angelegt wurde (neu mit `list` lesen),

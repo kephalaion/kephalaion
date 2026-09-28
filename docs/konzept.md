@@ -21,6 +21,8 @@ Kommandozeile. Task 009 brachte das Lesen über MCP (`list`, `read`, `changes`),
 Schreiben: `create`, `write`, `delete` und `rename` als Vorgänge des Vertrags und Werkzeuge des
 Nodes, mit Rechten je Collection, Urheber und Revision als Vorbedingung, Verzeichnisse als
 Ganzes; die Erweiterung für VS Code speichert damit (Stufe 2 bis auf `create_numbered`). Seit
+Task 015 liefern `list` und `read` mit `frontmatter` das Frontmatter der `.md`-Dokumente als
+JSON-Objekt, Verzeichnisse und Collections das ihrer `README.md`. Seit
 Task 011 gibt es beide Arten der Installation ([`installation.md`](installation.md)): pro User mit
 Dienst (`kephalaion service install`, systemd `--user` bzw. LaunchAgent) und global für alle
 User eines Linux-Rechners (System-Unit aus `service unit --system`, von Hand oder per
@@ -1525,8 +1527,8 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
   `list` und `changes`.
 - **Cursor:** JSON in base64url, für den Client undurchsichtig, ohne Geheimnisse; der Node
   prüft bei jedem Aufruf Anmeldung und Recht neu, ein veränderter Cursor öffnet also nichts.
-  Er ist an die Anfrage gebunden (bei `list` alle Angaben außer `limit`, bei `changes`
-  `collection` und `path`); passt er nicht, ist das ein Fehler.
+  Er ist an die Anfrage gebunden (bei `list` alle Angaben außer `limit` und `frontmatter`,
+  bei `changes` `collection` und `path`); passt er nicht, ist das ein Fehler.
 - **`list`:** Namen sind voll, auch die der Verzeichnisse (`2026/09`, nicht `09`). Ohne
   `recursive` kommen zuerst die Verzeichnisse der nächsten Ebene nach Name, dann die
   Dokumente in der verlangten Ordnung; `sort` und `mask` gelten nur für Dokumente. Geblättert
@@ -1554,9 +1556,10 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
   erscheint dort nicht mehr — `changes` kennt keinen alten Namen. Lückenlos über Umbenennungen
   hinweg ist nur `changes` ohne `path`.
 
-**Frontmatter in `list` und `read` — entschieden am 2026-09-27, nicht gebaut (Task 015).**
+**Frontmatter in `list` und `read` — entschieden am 2026-09-27, gebaut in Task 015.**
 Damit die KI eine Übersicht — etwa alle Skills mit ihrer Beschreibung — in einem Aufruf
-bekommt, statt jede Datei zu lesen:
+bekommt, statt jede Datei zu lesen (`list` mit `recursive`, `mask: "SKILL.md"` und
+`frontmatter`):
 
 - **Parameter `frontmatter`** (Standard aus) bei `list` und `read`. Mit ihm trägt jeder passende
   Eintrag das Feld `frontmatter`, ein JSON-Objekt, oder `frontmatter_error` mit kurzem Grund;
@@ -1569,14 +1572,24 @@ bekommt, statt jede Datei zu lesen:
 - **Verzeichnisse und Collections** bekommen das Frontmatter ihrer `README.md` — ein Verzeichnis
   das von `<verzeichnis>/README.md`, eine Collection das von `README.md` auf ihrer obersten
   Ebene. Ein README beschreibt ohnehin sein Verzeichnis und ist für Menschen sichtbar; gibt es
-  keines oder hat es kein Frontmatter, fehlt das Feld. Die `README.md` selbst erscheint weiter
-  als Dokument.
-- **Fehler machen nichts unlesbar:** nicht geschlossen, ungültiges YAML, oben kein Objekt oder
-  länger als 64 KiB — der Eintrag kommt mit `frontmatter_error`. Gelesen wird nur der Anfang des
-  Inhalts und nur für die Einträge der Seite.
+  keines oder hat es kein Frontmatter, fehlt das Feld; ist sein Frontmatter fehlerhaft, tragen
+  Verzeichnis bzw. Collection `frontmatter_error` — wie das Dokument `README.md` selbst. Die
+  `README.md` selbst erscheint weiter als Dokument.
+- **Fehler machen nichts unlesbar:** nicht geschlossen, ungültiges YAML, oben kein Objekt, ein
+  Schlüssel, der kein Text ist, oder länger als 64 KiB — der Eintrag kommt mit
+  `frontmatter_error`. Gelesen wird nur der Anfang des Inhalts (64 KiB je Eintrag; ein Gesamtmaß
+  für eine Seite gibt es nicht, die Größe steuert die KI über `limit`) und nur für die Einträge
+  der Seite, nach dem Blättern; `frontmatter` gehört nicht zum Cursor.
 - Mit `recursive: true` gibt es keine Einträge für Verzeichnisse und damit kein Frontmatter von
   Verzeichnissen; die README-Dateien erscheinen als Dokumente. `read` liefert den Inhalt
-  unverändert, einschließlich Frontmatter.
+  unverändert, einschließlich Frontmatter — per `name` wie per `id`, bei einem Verzeichnis und
+  der Wurzel der Collection das der `README.md`, bei der Wurzel eines Hubs keines; mit
+  `content: false` nur das Frontmatter ohne Text.
+- **Gebaut (Task 015):** Paket `internal/frontmatter` (neutral, ohne Hub, Node und MCP; die
+  Suche soll es mitnutzen) liest den Block über den Knotenbaum von yaml.v3, damit Zeitangaben
+  der geschriebene Text bleiben (`2026-09-27` wird nicht `2026-09-27T00:00:00Z`) und Schlüssel
+  am Tag geprüft werden; ein leerer Block ist `{}`. Die Replica liest mit `HeadByName`/`HeadByID`
+  nur die ersten 64 KiB in Bytes (`substr(CAST(content AS BLOB) …)`).
 
 **`whoami` — festgelegt am 2026-09-26.** Ein Werkzeug für „wer bin ich“ und „wie steht der
 Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:

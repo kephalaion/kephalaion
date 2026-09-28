@@ -58,6 +58,12 @@ const (
 	qLiveNames = `SELECT DISTINCT name FROM documents WHERE collection = ? AND deleted = 0 AND ` + notSystem +
 		` AND ` + inRange + ` ORDER BY name`
 	qStateOf = `SELECT revision FROM sync_state WHERE collection = ?`
+	// Der Anfang eines Inhalts in Bytes (substr auf TEXT zählte Zeichen):
+	// Platzhalter Länge, dann die Zeile. Nur lebende Zeilen, keine SYSTEM:.
+	qHeadByName = `SELECT substr(CAST(content AS BLOB), 1, ?) FROM documents
+		WHERE collection = ? AND name = ? AND deleted = 0 AND ` + notSystem + `
+		ORDER BY revision DESC, id DESC LIMIT 1`
+	qHeadByID = `SELECT substr(CAST(content AS BLOB), 1, ?) FROM documents WHERE id = ? AND deleted = 0 AND ` + notSystem
 )
 
 // prefixRange liefert zu einem Verzeichnis-Präfix (wie von
@@ -122,6 +128,35 @@ func (r *Replica) EntryByID(ctx context.Context, id string, content bool) (e Ent
 		return Entry{}, false, nil
 	}
 	return e, true, nil
+}
+
+// HeadByName liest die ersten n Bytes des Inhalts des lebenden Dokuments
+// eines Namens — für das Frontmatter, ohne den ganzen Inhalt zu laden; ok ist
+// false, wenn es keines gibt. Der Schnitt kann mitten in einem Zeichen liegen.
+// Ein Name gegen die Pfadregeln ist ein Fehler.
+func (r *Replica) HeadByName(ctx context.Context, collection, name string, n int) (head []byte, ok bool, err error) {
+	if err := ident.CheckDocName(name); err != nil {
+		return nil, false, err
+	}
+	return r.head(ctx, name, qHeadByName, n, collection, name)
+}
+
+// HeadByID liest die ersten n Bytes des Inhalts eines lebenden Dokuments per
+// id; ok ist false ohne lebendes Dokument dieser id.
+func (r *Replica) HeadByID(ctx context.Context, id string, n int) (head []byte, ok bool, err error) {
+	return r.head(ctx, id, qHeadByID, n, id)
+}
+
+func (r *Replica) head(ctx context.Context, what, query string, n int, args ...any) ([]byte, bool, error) {
+	var head []byte
+	err := r.db.QueryRowContext(ctx, query, append([]any{n}, args...)...).Scan(&head)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("Anfang von Dokument %s lesen: %w", what, err)
+	}
+	return head, true, nil
 }
 
 // HasUnder sagt, ob unter einem Verzeichnis-Präfix (nicht leer, mit '/' am

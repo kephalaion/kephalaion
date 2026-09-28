@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 mit allen Etappen erledigt)
+Stand: 2026-09-27 (Tasks 001–014 abgeschlossen, in `done/`; Task 015 mit allen Etappen erledigt)
 
 ## So wird diese Datei aktualisiert
 
@@ -139,6 +139,14 @@ Stand: 2026-09-27 (Tasks 001–013 abgeschlossen, in `done/`; Task 014 mit allen
   - Erweiterung für VS Code 0.0.5 schreibt (Tabelle `id` → Name, Fehler nach Code), geprüft
     mit Ersatz für `vscode`; Durchlauf mit zwei Nodes als `TestMCPWriteTwoNodes`
     (`konzept.md`, „Allgemein — schreiben“; `vscode.md`, „Umsetzung: Schreiben“).
+- **Task 015 — Frontmatter in list und read** (2026-09-27, Etappen 1–3): Parameter
+  `frontmatter` bei `list` und `read` — je `.md`-Dokument das Frontmatter (Block am Anfang
+  zwischen zwei Zeilen `---`, YAML) als JSON-Objekt `frontmatter` oder `frontmatter_error`,
+  Verzeichnisse und Collections über ihre `README.md`; nur die ersten 64 KiB, nur für die
+  Einträge der Seite, nicht im Cursor; neutrales Paket `internal/frontmatter` (yaml.v3 über den
+  Knotenbaum, Zeitangaben bleiben Text); Durchlauf gegen den echten Node (`home:eins`,
+  `test/frontmatter/`). Nur Node, kein Vertrag, kein Schema, Erweiterung unberührt
+  (`konzept.md`, „Datenmodell“, „Allgemein — lesen“; Befund `frontmatter-yaml.md`).
 
 ## In Arbeit
 
@@ -151,10 +159,6 @@ Nichts.
   `replace_directory` auf `vendor/<name>/` mit Scope `vendor/<name>` (Account-Zeile, `hub
   account grant`, Exportformat). Das Update macht k-playbook in seiner Projekt-Collection, das
   Überlagern ebenso (`konzept.md`, „vendor/“).
-- **Task 015 — Frontmatter in list und read** (angelegt 2026-09-27, nach Task 014): Parameter
-  `frontmatter` bei `list` und `read`, nur `.md`, Block am Anfang in YAML, Antwort als
-  JSON-Objekt; Verzeichnisse und Collections über ihre `README.md`; nur Node, kein Vertrag,
-  kein Schema (`konzept.md`, „Datenmodell“, „Allgemein — lesen“).
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
