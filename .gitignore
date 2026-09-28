@@ -1,5 +1,9 @@
 /k-playbook/
 
+# Tasks, Befunde, Doku und persönliche Abläufe: eigenes, privates Repo
+# kephalaion/kephalaion-dev, gesichert mit make -C k-playbook-local sichern.
+/k-playbook-local/
+
 # Von k-playbook je Rechner geschrieben, enthält den Pfad des Binarys
 /.mcp.json
 /.cursor/mcp.json
