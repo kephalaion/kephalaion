@@ -2,10 +2,13 @@ package mcpnode
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/kephalaion/kephalaion/internal/contract"
 )
 
 func (e *docEnv) read(t *testing.T, h map[string][]string, in ReadInput) (ReadOutput, *mcp.CallToolResult, string) {
@@ -129,4 +132,68 @@ func TestReadDirectoryAndNone(t *testing.T) {
 // pairOf sind die Header eines Accounts an einem Hub.
 func pairOf(e *docEnv, hub, account string) map[string][]string {
 	return pair(hub, account, e.tokens[hub+"/"+account])
+}
+
+// writable folgt je Name der Regel des Hubs (contract.Rights): unter
+// vendor/<name>/ zählt allein der Scope, direkt in vendor/ ist es nie wahr,
+// sonst write — für Dokumente per Name und per id, für Verzeichnisse und die
+// Wurzel nach dem, was darunter läge. Drei Accounts: nur der Scope, nur
+// write, beides.
+func TestReadWritableVendor(t *testing.T) {
+	e := newDocEnv(t)
+	hub := e.hubs["keph"]
+	e.tokens["keph/kp"], e.tokens["keph/beide"] = token(t), token(t)
+	hub.grant("kp", "wissen", e.tokens["keph/kp"], contract.Rights{Vendor: []string{"k-playbook"}})
+	hub.grant("beide", "wissen", e.tokens["keph/beide"], contract.Rights{Write: true, Vendor: []string{"k-playbook"}})
+	ids := map[string]string{}
+	for _, name := range []string{"a.md", "docs/b.md", "vendor/direkt.md", "vendor/k-playbook/rules/r.md",
+		"vendor/anders/x.md", "Vendor/k-playbook/x.md"} {
+		ids[name] = hub.put("wissen", name, "x")
+	}
+	e.sync(t)
+	// anna: nur write; kp: nur der Scope; beide: write und der Scope.
+	accounts := map[string]http.Header{"anna": pairOf(e, "keph", "anna"), "kp": pairOf(e, "keph", "kp"),
+		"beide": pairOf(e, "keph", "beide")}
+	cases := []struct {
+		name            string
+		kind            string
+		anna, kp, beide bool
+	}{
+		{"a.md", KindDocument, true, false, true},
+		{"docs/b.md", KindDocument, true, false, true},
+		{"Vendor/k-playbook/x.md", KindDocument, true, false, true},
+		{"vendor/direkt.md", KindDocument, false, false, false},
+		{"vendor/k-playbook/rules/r.md", KindDocument, false, true, true},
+		{"vendor/anders/x.md", KindDocument, false, false, false},
+		{"", KindDirectory, true, false, true},
+		{"docs", KindDirectory, true, false, true},
+		{"vendor", KindDirectory, false, false, false},
+		{"vendor/", KindDirectory, false, false, false},
+		{"vendor/k-playbook", KindDirectory, false, true, true},
+		{"vendor/k-playbook/rules", KindDirectory, false, true, true},
+		{"vendor/anders", KindDirectory, false, false, false},
+	}
+	for _, c := range cases {
+		want := map[string]bool{"anna": c.anna, "kp": c.kp, "beide": c.beide}
+		for account, h := range accounts {
+			out, _, errText := e.read(t, h, ReadInput{Collection: "keph:wissen", Name: c.name})
+			if errText != "" || out.Kind != c.kind || out.Writable == nil || *out.Writable != want[account] {
+				t.Errorf("%s liest %q: %+v, %s; erwartet %s writable %v", account, c.name, out, errText, c.kind, want[account])
+			}
+			if c.kind != KindDocument {
+				continue
+			}
+			out, _, errText = e.read(t, h, ReadInput{Collection: "keph:", ID: ids[c.name]})
+			if errText != "" || out.Kind != c.kind || out.Writable == nil || *out.Writable != want[account] {
+				t.Errorf("%s liest id von %q: %+v, %s; erwartet writable %v", account, c.name, out, errText, want[account])
+			}
+		}
+	}
+	// Ohne jedes Recht ist nichts writable, auch nicht unter vendor/<name>/.
+	for _, name := range []string{"a.md", "vendor/k-playbook/rules/r.md", "", "vendor/k-playbook"} {
+		out, _, _ := e.read(t, e.otto(), ReadInput{Collection: "keph:wissen", Name: name})
+		if out.Writable == nil || *out.Writable {
+			t.Errorf("otto liest %q: %+v", name, out)
+		}
+	}
 }

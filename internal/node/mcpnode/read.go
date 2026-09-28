@@ -34,8 +34,12 @@ type ReadOutput struct {
 	Updated  *Stamp `json:"updated,omitempty"`
 	// Size ist die Größe des Inhalts in Bytes.
 	Size *int64 `json:"size,omitempty"`
-	// Writable sagt, ob der Account in der Collection write hat; bei
-	// Dokumenten und Verzeichnissen in einer Collection.
+	// Writable sagt, ob der Account das Dokument nach der Regel des Hubs
+	// anlegen oder als Eigenes ändern dürfte (contract.Rights.Writable):
+	// unter vendor/<name>/ der Scope vendor/<name>, direkt in vendor/ nie,
+	// sonst write. Bei einem Verzeichnis und der Wurzel der Collection, ob
+	// darunter etwas angelegt werden dürfte (WritableUnder). Ob ein fremdes
+	// Dokument supersede braucht, sagt es nicht.
 	Writable *bool `json:"writable,omitempty"`
 	// Frontmatter ist das Frontmatter als JSON-Objekt, FrontmatterError der
 	// Grund, wenn es sich nicht lesen ließ — nur mit dem Parameter
@@ -46,8 +50,9 @@ type ReadOutput struct {
 
 const readDescription = "Liest ein Dokument aus der Replica, per collection und name oder per id; der Inhalt ist " +
 	"der Text des Ergebnisses. kind: document, directory oder none. Mit content: false nur Name, id, Revision, " +
-	"angelegt, geändert, Größe und writable. Mit frontmatter das Frontmatter (.md, bei einem Verzeichnis das seiner " +
-	"README.md) als JSON-Objekt; der Inhalt bleibt der volle Text."
+	"angelegt, geändert, Größe und writable (write in der Collection; unter vendor/<name>/ der Scope vendor/<name>). " +
+	"Mit frontmatter das Frontmatter (.md, bei einem Verzeichnis das seiner README.md) als JSON-Objekt; der Inhalt " +
+	"bleibt der volle Text."
 
 func (n *Node) read(ctx context.Context, req *mcp.CallToolRequest, in ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
 	out, content, err := n.doRead(ctx, req, in)
@@ -98,12 +103,14 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 // readByName liest einen Namen einer lesbaren Collection: Dokument,
 // Verzeichnis (ein lebendes Dokument darunter; leer ist die Wurzel) oder
 // nichts. Ein '/' am Ende ist erlaubt. Mit withFM dazu das Frontmatter: das
-// des Dokuments, bei Verzeichnis und Wurzel das der README.md.
+// des Dokuments, bei Verzeichnis und Wurzel das der README.md. writable
+// folgt je Name der Regel des Hubs (contract.Rights).
 func readByName(ctx context.Context, a *hubAccess, t target, name string, withContent, withFM bool) (ReadOutput, *string, error) {
-	writable := a.rights[t.Collection].Write
+	rights := a.rights[t.Collection]
 	out := ReadOutput{Kind: KindNone, Address: t.Address(), Name: name}
 	name = strings.TrimSuffix(name, "/")
 	if name == "" {
+		writable := rights.WritableUnder("")
 		out.Kind, out.Name, out.Writable = KindDirectory, "", &writable
 		if withFM {
 			var err error
@@ -122,7 +129,7 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 		return ReadOutput{}, nil, err
 	}
 	if ok {
-		out = documentOutput(t, e, writable)
+		out = documentOutput(t, e, rights.Writable(e.Name))
 		if withFM {
 			if out.Frontmatter, out.FrontmatterError, err = documentFrontmatter(ctx, a.rep, e.Name, e.ID, e.Content); err != nil {
 				return ReadOutput{}, nil, err
@@ -135,6 +142,7 @@ func readByName(ctx context.Context, a *hubAccess, t target, name string, withCo
 		return ReadOutput{}, nil, err
 	}
 	if dir {
+		writable := rights.WritableUnder(name)
 		out.Kind, out.Writable = KindDirectory, &writable
 		if withFM {
 			if out.Frontmatter, out.FrontmatterError, err = readmeFrontmatter(ctx, a.rep, t.Collection, name+"/"); err != nil {
@@ -159,7 +167,7 @@ func readByID(ctx context.Context, a *hubAccess, t target, id string, withConten
 		return none, nil, nil
 	}
 	dt := target{Hub: t.Hub, Collection: e.Collection}
-	out := documentOutput(dt, e, a.rights[e.Collection].Write)
+	out := documentOutput(dt, e, a.rights[e.Collection].Writable(e.Name))
 	if withFM {
 		if out.Frontmatter, out.FrontmatterError, err = documentFrontmatter(ctx, a.rep, e.Name, e.ID, e.Content); err != nil {
 			return ReadOutput{}, nil, err
