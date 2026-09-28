@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-09-27 (Tasks 001–014 abgeschlossen, in `done/`; Task 015 mit allen Etappen erledigt)
+Stand: 2026-09-28 (Tasks 001–015 abgeschlossen, in `done/`; Task 016 angelegt)
 
 ## So wird diese Datei aktualisiert
 
@@ -154,11 +154,13 @@ Nichts.
 
 ## Zu tun
 
-- **`vendor/` und Verzeichnis-Update** (entschieden 2026-09-27, nach Task 014): `vendor/` auf
-  oberster Ebene jeder Collection über den Node schreibgeschützt; einziger Weg hinein ist
-  `replace_directory` auf `vendor/<name>/` mit Scope `vendor/<name>` (Account-Zeile, `hub
-  account grant`, Exportformat). Das Update macht k-playbook in seiner Projekt-Collection, das
-  Überlagern ebenso (`konzept.md`, „vendor/“).
+- **Task 016 — vendor/ und Ordner abgleichen** (angelegt 2026-09-28, nicht begonnen, als
+  Nächstes): Scope `vendor/<name>` — unter `vendor/<name>/` zählt allein er, ohne `write`, ohne
+  Urheber; CLI `node dir push|pull` als Client des Nodes über MCP, Vergleich über den Inhalt,
+  Einzelvorgänge, abbrechbar und wiederholbar, `push` vorerst nur unter `vendor/`. Ersetzt den
+  früheren Gedanken „nur `replace_directory` unter `vendor/`“ (`konzept.md`, „vendor/“ und
+  „Einen Ordner abgleichen“). Das Update von `vendor/k-playbook/` und das Überlagern macht
+  danach k-playbook.
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
