@@ -22,7 +22,10 @@ Schreiben: `create`, `write`, `delete` und `rename` als Vorgänge des Vertrags u
 Nodes, mit Rechten je Collection, Urheber und Revision als Vorbedingung, Verzeichnisse als
 Ganzes; die Erweiterung für VS Code speichert damit (Stufe 2 bis auf `create_numbered`). Seit
 Task 015 liefern `list` und `read` mit `frontmatter` das Frontmatter der `.md`-Dokumente als
-JSON-Objekt, Verzeichnisse und Collections das ihrer `README.md`. Seit
+JSON-Objekt, Verzeichnisse und Collections das ihrer `README.md`. Task 016 brachte den Scope
+`vendor/<name>` — unter `vendor/<name>/` zählt allein er — und `kephalaion node dir push|pull`,
+den Abgleich eines lokalen Ordners mit einem Verzeichnis einer Collection als Client des
+Nodes über MCP (`push` vorerst nur unter `vendor/`). Seit
 Task 011 gibt es beide Arten der Installation ([`installation.md`](installation.md)): pro User mit
 Dienst (`kephalaion service install`, systemd `--user` bzw. LaunchAgent) und global für alle
 User eines Linux-Rechners (System-Unit aus `service unit --system`, von Hand oder per
@@ -358,7 +361,7 @@ Automatisierung, hat sechs Accounts und einen User.
 | `read` | Suchen, Lesen. Hat jeder Account, der in der Collection eingetragen ist. |
 | `write` | Neues anlegen; **Eigenes** ändern und löschen (`created_by` ist der eigene User — auch was ein anderer Account desselben Users angelegt hat). Einen gelöschten Namen neu anlegen darf jeder mit `write`. |
 | `supersede` | **Fremdes** ändern, ablösen und löschen. |
-| `vendor/<name>` | Unter `vendor/<name>/` schreiben — allein dieser Scope zählt dort, ohne `write` und unabhängig vom Urheber; siehe „vendor/“ unten (entschieden am 2026-09-27/28, nicht gebaut). |
+| `vendor/<name>` | Unter `vendor/<name>/` schreiben — allein dieser Scope zählt dort, ohne `write` und unabhängig vom Urheber; siehe „vendor/“ unten (entschieden am 2026-09-27/28, gebaut in Task 016). |
 | `replicate` | Kein Recht eines Accounts, sondern eines Nodes: Inhalt und Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections` (siehe „Datenmodell“). |
 
 Später, falls gebraucht: `write` als Liste von Namenspräfixen statt `true` (etwa `["eins/",
@@ -386,7 +389,11 @@ Umgesetzt in Task 014: Ein Schreibvorgang über einen Node schreibt je Dokument 
 
 ### vendor/ — Vorlagen mit eigenem Scope (entschieden am 2026-09-27, überarbeitet am 2026-09-28)
 
-Nicht gebaut; Task 016.
+Gebaut in Task 016 (2026-09-28): Die eine Regel, welches Recht ein Name braucht, steht in
+`contract.Rights.MayWrite`; der Hub-Store prüft damit jeden Schreibvorgang (bei `rename` den
+alten und den neuen Namen), der Node meldet `writable` danach. Der Scope kommt per
+`hub account grant --vendor <name>` (wiederholbar) in `rights.vendor` der Account-Zeile,
+Exportformat 6 trägt ihn.
 
 **Der Fall:** k-playbook liefert Regeln, Reviews, Commands und Ähnliches mit, die ein Projekt
 mit einer gleichnamigen eigenen Datei überschreibt. Die mitgelieferten ändert niemand von
@@ -426,8 +433,12 @@ verschwände eine Änderung beim nächsten Update still, ohne dass es jemand mer
 
 ### Einen Ordner abgleichen: push und pull (entschieden am 2026-09-28)
 
-Nicht gebaut; Task 016. Ein ganzer Ordner wird geschrieben, indem der alte Inhalt durch den
-eines lokalen Ordners ersetzt wird — und ebenso zurückgelesen.
+Gebaut in Task 016 (2026-09-28) als neutrales Paket `internal/dirsync` gegen eine kleine
+Schnittstelle (list, read, create, write, delete) und als `kephalaion node dir push|pull`;
+gemessen im Durchlauf: 115 Dokumente in 1,7 s angelegt (rund 15 ms je Vorgang), ein Lauf ohne
+Änderung 0,5 s, ein Abbruch per SIGINT setzt beim nächsten Lauf fort (Befund
+`vendor-scope-und-dir-push-pull.md`). Ein ganzer Ordner wird geschrieben, indem der alte
+Inhalt durch den eines lokalen Ordners ersetzt wird — und ebenso zurückgelesen.
 
 - **Die Dateien liefert, wer sie sieht.** Den Namen eines lokalen Ordners an den Node zu geben,
   damit er ihn selbst liest oder schreibt, geht nicht: Global läuft der Node als `kephalaion`
@@ -805,8 +816,8 @@ liegen in der Datenbank des Hubs, die Konfigurationsdatei enthält nur, was der 
 Starten braucht. Ein Account — ein Zugang auf einem Rechner — bekommt Name, User,
 Kurzbeschreibung (`kephalaion hub account add <name> [--user …] [--description …]`) und seine
 Rechte je Collection, gesetzt mit `kephalaion hub account grant <name> <collection> [--write]
-[--supersede]` — `grant` setzt die Rechte der Collection vollständig, ohne `--write` wird
-`write` entzogen; `revoke` nimmt die Collection (umgesetzt in Task 005 statt `account add
+[--supersede] [--vendor <name>]…` — `grant` setzt die Rechte der Collection vollständig, ohne
+`--write` wird `write` entzogen, ohne `--vendor` jeder Scope (Task 016); `revoke` nimmt die Collection (umgesetzt in Task 005 statt `account add
 --scope`). Der User (`--user`, ohne Angabe der Name des Accounts; ändern mit `hub account set
 --user`) ist mit Task 006 gebaut. Ein Node bekommt einen Eintrag mit Name und
 Kurzbeschreibung (`kephalaion hub node add <name>`)
@@ -1447,7 +1458,8 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   - `content` = Hash des Tokens, der User und die Rechte in *dieser* Collection, etwa
     `{"hash": "…", "user": "kleist", "rights": {"write": true, "supersede": false}}`; `read`
     ergibt sich aus der Zeile selbst (Form in [`vertrag.md`](vertrag.md), „Account-Zeilen“;
-    gebaut mit Task 006). `accounts` führt den User maßgeblich in der Spalte `"user"` —
+    gebaut mit Task 006; die Scopes `vendor/<name>` als Liste `vendor` in `rights`, nur wenn es
+    welche gibt, Task 016). `accounts` führt den User maßgeblich in der Spalte `"user"` —
     in Anführungszeichen, weil `user` in PostgreSQL reserviert ist — mit Index `accounts_user`.
   - Der User steht in jeder Zeile des Accounts; ändert der Admin ihn, ändern sich alle Zeilen
     in einer Transaktion, wie bei `rotate`. Vorhandene Dokumente behalten ihren User. Alle
@@ -1583,8 +1595,10 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
   der Collections blättert ebenso, nach Adresse. Tragen zwei lebende Zeilen denselben Namen
   (Umbenennungen, die in beliebiger Reihenfolge ankommen), gilt die jüngste.
 - **`read`:** Der Inhalt ist der Text des Ergebnisses, die Angaben die Struktur daneben; mit
-  `content: false` steht die Struktur auch im Text. Größe in Bytes. `writable` heißt `write`
-  auf der Collection, bei Dokumenten und Verzeichnissen. Per `id` sind eine Löschmarke, eine
+  `content: false` steht die Struktur auch im Text. Größe in Bytes. `writable` folgt je Name
+  der Regel des Hubs (`contract.Rights.Writable`, Task 016): `write` auf der Collection, unter
+  `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie; bei Verzeichnissen und
+  der Wurzel, ob darunter etwas angelegt werden dürfte. Per `id` sind eine Löschmarke, eine
   unbekannte `id` und ein Dokument einer nicht lesbaren Collection gleichermaßen `none`.
 - **Zeiten** in RFC 3339, UTC, auf Millisekunden (`2026-09-26T10:00:00.000Z`), so genau, wie
   der Hub sie führt; `whoami` bleibt bei Sekunden.
@@ -1721,7 +1735,7 @@ Erweiterung ist ein Client wie jeder andere ([`vscode.md`](vscode.md)).
 | `rename` | umbenennen, verschieben | Änderung am Namen, `id` bleibt; auch ein Verzeichnis. Gebaut in Task 014 |
 | `supersede` | ablösen | mit Nachfolger und Grund |
 | `delete` | löschen | Löschmarke; Eigenes mit `write`, Fremdes mit `supersede`; ein Verzeichnis mit `recursive`. Gebaut in Task 014 |
-| `replace_directory` | ein ganzes Verzeichnis ersetzen | für Generatoren, in k-playbook heute `publish` |
+| `replace_directory` | ein ganzes Verzeichnis ersetzen | verworfen am 2026-09-28: `kephalaion node dir push` aus Einzelvorgängen (Task 016), siehe „Einen Ordner abgleichen“ |
 
 **Festgelegt am 2026-09-26 für `create`, `write`, `delete` und `rename`, umgesetzt in Task 014
 (2026-09-27)** — `rename` ist dafür aus Stufe 3 in Stufe 2 vorgezogen, weil Umbenennen und
@@ -1733,8 +1747,9 @@ Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und
   den Hub; ob geschrieben werden darf, entscheidet allein der Hub — so wirkt eine Sperre beim
   Schreiben sofort.
 - **Rechte am Hub:** `write` für `create` und für Eigenes (`created_by` ist der User des
-  Accounts), `supersede` für Fremdes, `write` ist dafür nicht nötig — bei Verzeichnissen für
-  jedes Dokument darunter; ein einziges verbotenes lässt den ganzen Vorgang scheitern.
+  Accounts), `supersede` für Fremdes, `write` ist dafür nicht nötig; unter `vendor/<name>/`
+  allein der Scope `vendor/<name>`, direkt in `vendor/` niemand (Task 016) — bei Verzeichnissen
+  für jedes Dokument darunter, bei `rename` mit altem und neuem Namen; ein einziges verbotenes lässt den ganzen Vorgang scheitern.
   Collection unbekannt, nicht für den Node erlaubt oder nicht für den Account: eine Antwort.
   `created_by`/`updated_by` ist der User; `actions` nennt Account und Node.
 - **Revision als Vorbedingung:** `write`, `delete` und `rename` nehmen wahlweise die Revision,

@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-09-28 (Tasks 001–015 abgeschlossen, in `done/`; Task 016 angelegt)
+Stand: 2026-09-28 (Tasks 001–016 abgeschlossen; 001–015 in `done/`, 016 ausgeführt)
 
 ## So wird diese Datei aktualisiert
 
@@ -147,6 +147,28 @@ Stand: 2026-09-28 (Tasks 001–015 abgeschlossen, in `done/`; Task 016 angelegt)
   Knotenbaum, Zeitangaben bleiben Text); Durchlauf gegen den echten Node (`home:eins`,
   `test/frontmatter/`). Nur Node, kein Vertrag, kein Schema, Erweiterung unberührt
   (`konzept.md`, „Datenmodell“, „Allgemein — lesen“; Befund `frontmatter-yaml.md`).
+- **Task 016 — vendor/ und Ordner abgleichen** (2026-09-28, Etappen 1–5):
+  - Scope `vendor/<name>` in `rights.vendor` der Account-Zeile (Liste, ohne neue Fassung des
+    Vertrags); die eine Regel in `contract.Rights.MayWrite`: unter `vendor/<name>/` allein der
+    Scope, direkt in `vendor/` niemand, sonst `write`/`supersede`; Hub-Store prüft damit
+    `create`, `write`, `delete`, `rename` (alter und neuer Name, je Dokument), der Node meldet
+    `writable` danach; `hub account grant --vendor <name>` (wiederholbar), `show`, `list`,
+    `whoami`; Exportformat 6, Format 5 und älter lesen ohne Scopes; gesperrt gemerkt
+    (`vertrag.md`, „Account-Zeilen“);
+  - neutrales Paket `internal/dirsync`: `Push` und `Pull` gegen die Schnittstelle `Target`
+    (list, read, create, write, delete), Vergleich über den Inhalt, je Ebene löschen,
+    anlegen/schreiben, absteigen; Vorabprüfung mit allen Treffern, `.git` und `--exclude`
+    beidseitig unberührt, `--last`, `--dry-run`, Abbruch und Höchstzeit zwischen zwei
+    Vorgängen, gemeldete Konflikte lassen den Lauf weitergehen (unvollständig), `pull`
+    mit `--delete`, ohne Symlinks zu folgen, von vorn bei geändertem Stand;
+  - `kephalaion node dir push|pull` als MCP-Client des Nodes (go-sdk, Header-Paar), Adresse
+    aus `listen` oder `--node`, Token aus `tokens/<hub>/<account>.token`, `--token-file` oder
+    `--token-stdin`; Exit 0/1/2/3; `push` nur unter `vendor/<name>/`;
+  - Durchlauf im vorübergehenden Aufbau: `k-playbook/` (115 Dateien, `--exclude installer`,
+    84 Symlinks übergangen, keine Treffer der Vorabprüfung) in 1,7 s nach
+    `vendor/k-playbook/`, zweiter Lauf 0,5 s ohne Änderung, SIGINT nach 13 von 49 Änderungen
+    und Fortsetzen, `pull` mit `diff -r` ohne Unterschied, Account nur mit `write`
+    abgewiesen (Befund `vendor-scope-und-dir-push-pull.md`).
 
 ## In Arbeit
 
@@ -154,13 +176,12 @@ Nichts.
 
 ## Zu tun
 
-- **Task 016 — vendor/ und Ordner abgleichen** (angelegt 2026-09-28, nicht begonnen, als
-  Nächstes): Scope `vendor/<name>` — unter `vendor/<name>/` zählt allein er, ohne `write`, ohne
-  Urheber; CLI `node dir push|pull` als Client des Nodes über MCP, Vergleich über den Inhalt,
-  Einzelvorgänge, abbrechbar und wiederholbar, `push` vorerst nur unter `vendor/`. Ersetzt den
-  früheren Gedanken „nur `replace_directory` unter `vendor/`“ (`konzept.md`, „vendor/“ und
-  „Einen Ordner abgleichen“). Das Update von `vendor/k-playbook/` und das Überlagern macht
-  danach k-playbook.
+- **Nach Task 016:** `push` außerhalb von `vendor/` freigeben, sobald sich der Abgleich
+  bewährt hat (`konzept.md`, „Einen Ordner abgleichen“); das Update von `vendor/k-playbook/`
+  und das Überlagern macht k-playbook. Die Erweiterung für VS Code merkt sich `writable` je
+  Collection aus dem letzten `read` (`extension.js`, `this.writable`) — unter `vendor/` kann
+  die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen Dokuments abhängen; `stat`
+  je Dokument ist richtig (Befund `vendor-scope-und-dir-push-pull.md`).
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:

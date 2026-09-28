@@ -108,15 +108,17 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **hub import** — `kephalaion hub import <collection> <verzeichnis>`: spielt ein Verzeichnis
   als Dokumente ein, Name = relativer Pfad; ein Schreibvorgang, eine Revision. Nicht zu
   verwechseln mit `config import`.
-- **vendor/** — *geplant, Task 016.* Oberstes Verzeichnis jeder Collection für mitgelieferte
+- **vendor/** — Oberstes Verzeichnis jeder Collection für mitgelieferte
   Vorlagen, etwa `vendor/k-playbook/`. Lesen darf jeder mit `read`; schreiben unter
   `vendor/<name>/` nur mit dem Scope `vendor/<name>` (siehe „scope“), direkt in `vendor/`
   niemand über einen Node.
-- **dir push** / **dir pull** — *geplant, Task 016.* `kephalaion node dir push|pull`: gleicht
+- **dir push** / **dir pull** — `kephalaion node dir push|pull`: gleicht
   einen lokalen Ordner mit einem Verzeichnis einer Collection ab, als Client des Nodes über
   MCP, mit Account und Token des Aufrufers. Vergleich über den Inhalt, Einzelvorgänge,
   abbrechbar und wiederholbar; `push` ersetzt den Inhalt des Ziels (löscht, was lokal fehlt),
-  vorerst nur unter `vendor/`; `pull` löscht lokal nur mit `--delete`.
+  vorerst nur unter `vendor/`; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
+  `--last` (`push`), `--dry-run`, `--timeout`; Exit 3 heißt unvollständig — erneut ausführen.
+  Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016).
 - **personal** (persönliches Verzeichnis) — *vorgemerkt.* Eigenschaft eines Verzeichnisses:
   Auflisten, Lesen und Schreiben zeigen nur Dokumente des eigenen Users, der Schalter `all`
   alles; die Suche bleibt unberührt. Eine Ansicht, kein Recht — anders als eine private
@@ -265,8 +267,10 @@ Ausführlich: [`konzept.md`](konzept.md).
   - `write` — anlegen; Eigenes (`created_by` = eigener User) ändern und löschen; gelöschte
     Namen neu anlegen.
   - `supersede` — Fremdes ändern, ablösen, umbenennen, löschen; `write` ist dafür nicht nötig.
-  - `vendor/<name>` — *geplant, Task 016.* Unter `vendor/<name>/` schreiben: allein dieser
-    Scope zählt dort, ohne `write` und unabhängig vom Urheber; anderswo gibt er nichts.
+  - `vendor/<name>` — Unter `vendor/<name>/` schreiben: allein dieser Scope zählt dort, ohne
+    `write` und unabhängig vom Urheber; anderswo gibt er nichts. Gesetzt mit `hub account
+    grant --vendor <name>` (wiederholbar), in der Account-Zeile die Liste `rights.vendor`,
+    im Export ab Format 6 (Task 016).
   - `replicate` — kein Scope eines Accounts, sondern das Recht eines Nodes: Inhalt und
     Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections`.
 - **node entry** (Node-Eintrag) — ein Node am Hub: Zeile in `nodes`, Name vom Admin, Token
@@ -291,8 +295,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   von vorn ab.
 - **grant** / **revoke** — `kephalaion hub node grant <node> <collection>`: gibt einem Node
   `replicate` auf eine Collection; `revoke` nimmt es zurück. `kephalaion hub account grant
-  <name> <collection> [--write] [--supersede]` setzt die Rechte eines Accounts in einer
-  Collection vollständig (ohne `--write` wird `write` entzogen); `revoke` macht seine Zeile
+  <name> <collection> [--write] [--supersede] [--vendor <name>]…` setzt die Rechte eines
+  Accounts in einer Collection vollständig (ohne `--write` wird `write` entzogen, ohne
+  `--vendor` jeder Scope); `revoke` macht seine Zeile
   zur Löschmarke.
 - **lock** / **unlock** — `kephalaion hub node lock <name>`: sperrt einen Node; `unlock` hebt
   die Sperre auf. `hub account lock` macht alle Zeilen eines Accounts zu Löschmarken und merkt

@@ -191,7 +191,8 @@ Namen. Die Hilfe zeigt alle Kommandos: `kephalaion hub node --help`,
 
 `config export` sichert auch die Collections, Nodes und Accounts (nur mit Hash, Accounts samt
 User und Rechten je Collection) und die Hubs des Nodes samt ihrem Token im Klartext — die Datei
-entsteht deshalb mit `0600`. Das Exportformat ist 5 (`format: 5`), `user` je Account ist dort
+entsteht deshalb mit `0600`. Das Exportformat ist 6 (`format: 6`; seit 6 je Recht die Scopes
+`vendor`, ältere Fassungen lesen sich ohne sie), `user` je Account ist dort
 Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
 Format 4 setzt den User jedes Accounts auf dessen Namen, einer vor Format 4 lässt die Accounts
 unberührt, einer im Format 1 ersetzt nur die `settings`, einer im Format 2 geht nur, wenn er am
@@ -203,7 +204,10 @@ Export.
 Ein Account ist, wer zugreift — Mensch, KI oder Programm. Der Hub legt ihn an, zeigt sein
 Einrichtungstoken einmal und speichert nur den Hash; die Rechte gelten je Collection: `read`
 immer, dazu wahlweise `write` (Eigenes anlegen, ändern, löschen) und `supersede` (Fremdes
-ändern, ablösen, löschen).
+ändern, ablösen, löschen). Dazu Scopes `vendor/<name>`: Unter `vendor/<name>/` — mitgelieferte
+Vorlagen, etwa von k-playbook — zählt allein der Scope, ohne `write` und unabhängig vom
+Urheber; direkt in `vendor/` schreibt über einen Node niemand. Ein Account nur mit dem Scope
+pflegt seine Vorlagen und kann sonst nichts schreiben.
 
 Jeder Account gehört einem **User** — ein Merkmal, kein Zugang: kein Token, keine Rechte. Wer
 auf zwei Rechnern je eine KI-Sitzung hat, hat zwei Accounts und einen User. Ohne `--user` ist
@@ -218,6 +222,7 @@ kephalaion hub account set alice-vm --user bob             # alle Zeilen des Acc
 kephalaion hub account grant alice team-x                  # read
 kephalaion hub account grant alice team-x --write          # setzt vollständig: read, write
 kephalaion hub account grant alice team-x                  # und wieder nur read
+kephalaion hub account grant k-playbook team-x --vendor k-playbook   # nur der Scope: schreibt unter vendor/k-playbook/
 kephalaion hub account show alice
 kephalaion hub account lock alice      # Zeilen werden Löschmarken, die Rechte bleiben gemerkt
 kephalaion hub account unlock alice
@@ -517,6 +522,52 @@ Aliase, die im Export fehlen. Die Regeln des Abgleichs stehen in
 rm|add` und `config import`: Jede Seite prüft in ihrer Transaktion, dass die Replica noch zu
 Eintrag (`entry_id`), `hub_id` und Stand passt, und schreibt sonst nichts. Ein Abgleich für
 einen inzwischen entfernten oder neu angelegten Eintrag schreibt nie in den neuen.
+
+### Einen Ordner abgleichen: node dir push und pull
+
+`kephalaion node dir push|pull` gleicht einen lokalen Ordner mit einem Verzeichnis einer
+Collection ab — als Client des Nodes über MCP, mit Account und Token des Aufrufers, dort
+aufgerufen, wo der Ordner liegt. Verglichen wird der Inhalt, nicht das Datum; der Abgleich
+besteht aus den Einzelvorgängen `list`, `read`, `create`, `write` und `delete`, je Ebene nach
+Name: erst löschen, was fehlt oder die andere Art hat, dann anlegen und schreiben, dann
+absteigen. Ein zweiter Lauf ändert nur, was noch abweicht. So bringt k-playbook seine
+Vorlagen nach `vendor/k-playbook/` — mit einem Account, der nur den Scope hat:
+
+```sh
+kephalaion hub account add k-playbook
+kephalaion hub account grant k-playbook team-x --vendor k-playbook
+# … Token nach ~/.config/kephalaion/tokens/privat/k-playbook.token, rotate wie oben …
+
+kephalaion node dir push privat:team-x vendor/k-playbook ./k-playbook \
+  --exclude installer --last VERSION           # VERSION zuletzt: Zeichen eines vollständigen Laufs
+kephalaion node dir push privat:team-x vendor/k-playbook ./k-playbook --exclude installer --dry-run
+kephalaion node dir pull privat:team-x vendor/k-playbook /tmp/vorlagen --delete
+```
+
+`push` ersetzt den Inhalt des Verzeichnisses — was dort fehlt, wird gelöscht — und schreibt
+vorerst nur unter `vendor/<name>/` (ein Schutz vor Versehen, keine Grenze am Hub). Vorab liest
+es den ganzen Ordner ein: Jede Datei muss UTF-8 ohne NUL und höchstens 1 MiB sein und einen
+gültigen Namen haben, sonst bricht `push` mit allen Treffern ab, ohne zu schreiben — mit
+`--exclude glob` (wiederholbar, auf Namen jeder Ebene) ausnehmen. Symlinks werden übergangen
+und gemeldet, leere Ordner entstehen im Store nicht, `.git` bleibt in Quelle und Ziel
+unberührt, ebenso jeder Treffer von `--exclude`. `pull` schreibt lokal nur, was abweicht oder
+fehlt (neu `0644`, Ordner `0755`), löscht nur mit `--delete`, nie außerhalb des Ordners und
+folgt keinem Symlink darin. `--dry-run` zeigt, was geschähe.
+
+Abbrechen (SIGINT/SIGTERM) und `--timeout` wirken zwischen zwei Vorgängen: Der laufende geht
+zu Ende, dann meldet die Kommandozeile, wie weit sie kam — erneut ausführen setzt fort.
+Konflikte (`stale_revision`, `name_taken`, `path_conflict`, `not_found`) und ein unklarer
+Ausgang werden gemeldet, nicht wiederholt; der Lauf geht weiter und endet unvollständig.
+Exit-Codes: 0 fertig, 1 Fehler, 2 falscher Aufruf, 3 unvollständig. Die Adresse des Nodes
+kommt aus `listen` der config oder `--node <url>`, der Account aus `--account` oder der
+einzigen Token-Datei unter `tokens/<hub>/`, das Token aus ihr, `--token-file` oder
+`--token-stdin` — nie als Argument, nie in einer Ausgabe.
+
+```text
++ vendor/k-playbook/rules/befunde.md
+~ vendor/k-playbook/VERSION
+push privat:team-x vendor/k-playbook/: 115 angelegt, 0 geändert, 0 gelöscht, 0 unverändert, 84 übergangen, 0 gemeldet, 1.671s
+```
 
 ## VS Code
 
