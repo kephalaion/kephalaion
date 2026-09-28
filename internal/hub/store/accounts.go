@@ -733,7 +733,11 @@ func (s *sqliteStore) RemoveAccount(ctx context.Context, name string) error {
 }
 
 func (s *sqliteStore) GrantAccount(ctx context.Context, name, collection string, rights contract.Rights) (bool, error) {
-	err := s.writeAccount(ctx, name, Admin, "", "account.grant", ident.Address(name, collection), func(w *accountTx) error {
+	rights, err := contract.NormalizeRights(rights)
+	if err != nil {
+		return false, err
+	}
+	err = s.writeAccount(ctx, name, Admin, "", "account.grant", ident.Address(name, collection), func(w *accountTx) error {
 		a, err := getAccount(ctx, w.tx, name)
 		if err != nil {
 			return err
@@ -748,7 +752,7 @@ func (s *sqliteStore) GrantAccount(ctx context.Context, name, collection string,
 			if err != nil {
 				return err
 			}
-			if cur, ok := m[collection]; ok && cur == rights {
+			if cur, ok := m[collection]; ok && cur.Equal(rights) {
 				return errUnchanged
 			}
 			m[collection] = rights
@@ -876,7 +880,8 @@ func documentRow(d Document) contract.Row {
 
 // replaceAccounts ersetzt beim Import die Tabelle accounts und gleicht die
 // SYSTEM:A:-Zeilen an: vorhandene ändern, fehlende werden Löschmarken, neue
-// entstehen — alles unter der einen Revision des Imports.
+// entstehen — alles unter der einen Revision des Imports. Die Rechte kommen
+// in die gespeicherte Form (CheckTables hat sie geprüft).
 func (w *accountTx) replaceAccounts(ctx context.Context, accounts []Account) error {
 	if _, err := w.tx.ExecContext(ctx, q(queries.AccountsDeleteAll)); err != nil {
 		return err
@@ -887,7 +892,11 @@ func (w *accountTx) replaceAccounts(ctx context.Context, accounts []Account) err
 		locked, saved := 0, any(nil)
 		m := rightsMap{}
 		for _, r := range a.Rights {
-			m[r.Collection] = r.Rights
+			rights, err := contract.NormalizeRights(r.Rights)
+			if err != nil {
+				return fmt.Errorf("Account %s: %w", a.Name, err)
+			}
+			m[r.Collection] = rights
 		}
 		if a.Locked {
 			enc, err := encodeRights(m)

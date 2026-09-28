@@ -86,7 +86,7 @@ func TestConfigExportImportRoundTrip(t *testing.T) {
 		t.Errorf("Exportdatei %v, erwartet 0600", fi.Mode().Perm())
 	}
 	data, _ := os.ReadFile(exp)
-	for _, want := range []string{"format: 5", "config:", "settings:", "tables:", "zentrale"} {
+	for _, want := range []string{"format: 6", "config:", "settings:", "tables:", "zentrale"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}
@@ -122,7 +122,7 @@ func TestConfigImportUnknownFormat(t *testing.T) {
 	cfg := setup(t, dir)
 	setSettings(t, cfg, config.Hub, map[string]string{"bleibt": "ja"})
 	for _, content := range []string{
-		"format: 6\nconfig: {}\nneu: 1\n",
+		"format: 7\nconfig: {}\nneu: 1\n",
 		"config: {}\nsettings: {}\n",
 	} {
 		exp := filepath.Join(dir, "export.yaml")

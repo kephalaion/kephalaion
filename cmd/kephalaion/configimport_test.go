@@ -141,8 +141,8 @@ func TestImportRoundTripTables(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	data, _ := os.ReadFile(exp)
 	for _, want := range []string{"token_hash: " + ident.HashToken(tok), "token: " + tok, "node_collections:", "hub_collections:",
-		"format: 5", "node_name: laptop", "node_name: rechner-fern", "accounts:", "name: alice", "supersede: true",
-		"user: alice", "user: kleist"} {
+		"format: 6", "node_name: laptop", "node_name: rechner-fern", "accounts:", "name: alice", "supersede: true",
+		"user: alice", "user: kleist", "vendor: []"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("Export ohne %q", want)
 		}
@@ -197,7 +197,7 @@ func TestImportFormat2WithoutNodeName(t *testing.T) {
 			lines = append(lines, l)
 		}
 	}
-	old := strings.Replace(dropAccounts(t, strings.Join(lines, "\n")), "format: 5", "format: 2", 1)
+	old := strings.Replace(dropAccounts(t, strings.Join(lines, "\n")), "format: 6", "format: 2", 1)
 	if err := os.WriteFile(exp, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestImportNodeNameTakenByAccount(t *testing.T) {
 	runT(t, "config", "import", "--config", cfgB, both).want(t, 1, "gemeinsam eindeutig", "Nichts geschrieben")
 
 	old := filepath.Join(dir, "old.yaml")
-	if err := os.WriteFile(old, []byte(strings.Replace(dropAccounts(t, string(data)), "format: 5", "format: 3", 1)), 0o600); err != nil {
+	if err := os.WriteFile(old, []byte(strings.Replace(dropAccounts(t, string(data)), "format: 6", "format: 3", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runT(t, "hub", "account", "add", "laptop", "--config", cfgB).want(t, 0)
@@ -372,13 +372,13 @@ func TestImportAccountsPart(t *testing.T) {
 	}
 	missing := write("missing.yaml", dropAccounts(t, string(data)))
 	runT(t, "config", "import", "--config", cfgB, missing).want(t, 1, "tables.hub.accounts fehlt", "Nichts geschrieben")
-	oldWith := write("oldwith.yaml", strings.Replace(string(data), "format: 5", "format: 3", 1))
+	oldWith := write("oldwith.yaml", strings.Replace(string(data), "format: 6", "format: 3", 1))
 	runT(t, "config", "import", "--config", cfgB, oldWith).want(t, 1, "kennt keine Accounts", "Nichts geschrieben")
 	if got := hubTables(t, cfgB).Accounts; !reflect.DeepEqual(got, before) {
 		t.Errorf("Accounts verändert: %+v", got)
 	}
 
-	old := write("old.yaml", strings.Replace(dropAccounts(t, string(data)), "format: 5", "format: 3", 1))
+	old := write("old.yaml", strings.Replace(dropAccounts(t, string(data)), "format: 6", "format: 3", 1))
 	// team-x bleibt im Export, carol behält ihre Zeile.
 	runT(t, "config", "import", "--config", cfgB, old).want(t, 0, "Accounts unberührt (Format 3)")
 	if got := hubTables(t, cfgB).Accounts; !reflect.DeepEqual(got, before) {
@@ -388,7 +388,7 @@ func TestImportAccountsPart(t *testing.T) {
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "2 Accounts")
 	got := hubTables(t, cfgB).Accounts
 	if len(got) != 2 || got[0].Name != "alice" || got[1].Name != "bob" || !got[1].Locked {
-		t.Errorf("Accounts nach Format 5: %+v", got)
+		t.Errorf("Accounts nach Format 6: %+v", got)
 	}
 	// carol ist weg, ihre Zeile eine Löschmarke; alices Zeile lebt.
 	var live, dead int
@@ -578,7 +578,7 @@ func TestImportAccountsNull(t *testing.T) {
 	with := func(part string) string {
 		return strings.Replace(dropped, "    node_collections:", part+"\n    node_collections:", 1)
 	}
-	format3 := func(s string) string { return strings.Replace(s, "format: 5", "format: 3", 1) }
+	format3 := func(s string) string { return strings.Replace(s, "format: 6", "format: 3", 1) }
 	cases := []struct{ name, content, want string }{
 		{"F5 ohne Wert", with("    accounts:"), "tables.hub.accounts ist null"},
 		{"F5 null", with("    accounts: null"), "tables.hub.accounts ist null"},
@@ -599,22 +599,55 @@ func TestImportAccountsNull(t *testing.T) {
 	}
 }
 
-// toFormat4 macht aus einem Export im Format 5 einen im Format 4: ohne user.
+// toFormat5 macht aus einem Export im Format 6 einen im Format 5: ohne die
+// Scopes vendor je Recht — die Zeile vendor: und die Einträge der Liste
+// darunter.
+func toFormat5(t *testing.T, data string) string {
+	t.Helper()
+	var out []string
+	dropped, inList := 0, false
+	for _, l := range strings.Split(data, "\n") {
+		switch {
+		case strings.HasPrefix(l, "            vendor:"):
+			dropped++
+			inList = true
+			continue
+		case inList && strings.HasPrefix(l, "              - "):
+			continue
+		}
+		inList = false
+		out = append(out, l)
+	}
+	if dropped == 0 {
+		t.Fatalf("kein vendor im Export:\n%s", data)
+	}
+	return strings.Replace(strings.Join(out, "\n"), "format: 6", "format: 5", 1)
+}
+
+// toFormat4 macht aus einem Export im Format 6 einen im Format 4: ohne user
+// und ohne vendor.
 func toFormat4(t *testing.T, data string) string {
+	t.Helper()
+	return strings.Replace(dropLines(t, toFormat5(t, data), "        user: "), "format: 5", "format: 4", 1)
+}
+
+// dropLines entfernt die Zeilen, die mit prefix beginnen; keine ist ein
+// Fehler des Tests.
+func dropLines(t *testing.T, data, prefix string) string {
 	t.Helper()
 	var out []string
 	dropped := 0
 	for _, l := range strings.Split(data, "\n") {
-		if strings.HasPrefix(l, "        user: ") {
+		if strings.HasPrefix(l, prefix) {
 			dropped++
 			continue
 		}
 		out = append(out, l)
 	}
 	if dropped == 0 {
-		t.Fatalf("kein user im Export:\n%s", data)
+		t.Fatalf("keine Zeile %q im Export:\n%s", prefix, data)
 	}
-	return strings.Replace(strings.Join(out, "\n"), "format: 5", "format: 4", 1)
+	return strings.Join(out, "\n")
 }
 
 // Der User je Account: Format 5 trägt ihn und verlangt ihn — fehlend, null,
@@ -652,7 +685,7 @@ func TestImportAccountUser(t *testing.T) {
 		{"leer", strings.Replace(data, bobUser, "\n        user: \"\"", 1), "Account bob: User: Name fehlt"},
 		{"ungültig", strings.Replace(data, bobUser, "\n        user: Kleist", 1), "Account bob: User \"Kleist\": ungültiger Name"},
 		{"admin", strings.Replace(data, bobUser, "\n        user: admin", 1), "reserviert"},
-		{"F4 mit user", strings.Replace(data, "format: 5", "format: 4", 1), "Format 4 kennt keinen User"},
+		{"F4 mit user", strings.Replace(toFormat5(t, data), "format: 5", "format: 4", 1), "Format 4 kennt keinen User"},
 	}
 	for _, c := range cases {
 		write(c.content)
@@ -669,10 +702,10 @@ func TestImportAccountUser(t *testing.T) {
 	if len(got) != 2 || got[0].Name != "alice" || got[0].User != "alice" || got[1].Name != "bob" || got[1].User != "bob" {
 		t.Errorf("Accounts nach Format 4: %+v", got)
 	}
-	// Format 5: der User kommt mit, auch in die Zeilen.
+	// Format 6: der User kommt mit, auch in die Zeilen.
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "2 Accounts")
 	if got, want := hubTables(t, cfgB).Accounts, hubTables(t, cfgA).Accounts; !reflect.DeepEqual(got, want) || got[1].User != "kleist" {
-		t.Errorf("Accounts nach Format 5:\n%+v\nerwartet\n%+v", got, want)
+		t.Errorf("Accounts nach Format 6:\n%+v\nerwartet\n%+v", got, want)
 	}
 	var content string
 	if err := rawHub(t, b).QueryRow(`SELECT content FROM documents WHERE name = 'SYSTEM:A:alice' AND deleted = 0`).Scan(&content); err != nil {

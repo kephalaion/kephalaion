@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,169 @@ func TestAccountContent(t *testing.T) {
 	} {
 		if _, err := DecodeAccountContent(bad); err == nil {
 			t.Errorf("angenommen: %s", bad)
+		}
+	}
+
+	// Die Scopes stehen nur, wenn es welche gibt, sortiert und ohne Doppel;
+	// eine Zeile ohne vendor (Hub vor Task 016) liest sich als leere Liste.
+	s, err = EncodeAccountContent(AccountContent{Hash: hash, User: "kleist",
+		Rights: Rights{Vendor: []string{"zwei", "eins", "zwei"}}})
+	if err != nil || s != `{"hash":"`+hash+`","user":"kleist","rights":{"write":false,"supersede":false,"vendor":["eins","zwei"]}}` {
+		t.Errorf("Inhalt mit Scopes = %s, %v", s, err)
+	}
+	c, err = DecodeAccountContent(s)
+	if err != nil || !reflect.DeepEqual(c.Rights.Vendor, []string{"eins", "zwei"}) {
+		t.Errorf("Scopes gelesen = %+v, %v", c, err)
+	}
+	c, err = DecodeAccountContent(`{"hash":"` + hash + `","user":"kleist","rights":{"write":true,"supersede":false,"vendor":[]}}`)
+	if err != nil || c.Rights.Vendor != nil {
+		t.Errorf("leere Scopes gelesen = %+v, %v", c, err)
+	}
+}
+
+// Die Rechte als Text und im Vergleich: read immer zuerst, die Scopes
+// zuletzt; gleich sind Rechte mit denselben Scopes, gleich in welcher
+// Reihenfolge. NormalizeRights prüft die Namen und sortiert.
+func TestRightsStringAndEqual(t *testing.T) {
+	for _, c := range []struct {
+		r    Rights
+		want string
+	}{
+		{Rights{}, "read"},
+		{Rights{Write: true}, "read, write"},
+		{Rights{Write: true, Supersede: true}, "read, write, supersede"},
+		{Rights{Vendor: []string{"k-playbook"}}, "read, vendor/k-playbook"},
+		{Rights{Supersede: true, Vendor: []string{"a", "b"}}, "read, supersede, vendor/a, vendor/b"},
+	} {
+		if got := c.r.String(); got != c.want {
+			t.Errorf("%+v: %q, erwartet %q", c.r, got, c.want)
+		}
+	}
+	a := Rights{Write: true, Vendor: []string{"b", "a"}}
+	b := Rights{Write: true, Vendor: []string{"a", "b", "a"}}
+	if !a.Equal(b) || !b.Equal(a) || !(Rights{}).Equal(Rights{Vendor: []string{}}) {
+		t.Error("gleiche Rechte gelten als verschieden")
+	}
+	for _, o := range []Rights{{Write: true}, {Write: true, Vendor: []string{"a"}}, {Vendor: []string{"a", "b"}},
+		{Write: true, Supersede: true, Vendor: []string{"a", "b"}}} {
+		if a.Equal(o) {
+			t.Errorf("%+v gilt als gleich %+v", a, o)
+		}
+	}
+	n, err := NormalizeRights(b)
+	if err != nil || !reflect.DeepEqual(n, Rights{Write: true, Vendor: []string{"a", "b"}}) {
+		t.Errorf("NormalizeRights = %+v, %v", n, err)
+	}
+	if n, err := NormalizeRights(Rights{Vendor: []string{}}); err != nil || n.Vendor != nil {
+		t.Errorf("leer normalisiert = %+v, %v", n, err)
+	}
+	for _, bad := range []string{"", "K-Playbook", "system-x", "a:b", "mit leerzeichen"} {
+		if _, err := NormalizeRights(Rights{Vendor: []string{"ok", bad}}); err == nil ||
+			!strings.Contains(err.Error(), "Scope vendor/<name>") {
+			t.Errorf("Scope %q angenommen: %v", bad, err)
+		}
+	}
+}
+
+// Die eine Regel, welches Recht ein Name braucht: unter vendor/<name>/ allein
+// der Scope, ohne Rücksicht auf write und Urheber; vendor selbst und direkt
+// darin niemand; sonst write für Eigenes, supersede für Fremdes. Nur die
+// Kleinschreibung vendor ist besonders.
+func TestMayWrite(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		vendor   string
+		reserved bool
+	}{
+		{"x.md", "", false},
+		{"docs/vendor/x.md", "", false},
+		{"Vendor/k/x.md", "", false},
+		{"vendors/k/x.md", "", false},
+		{"vendor", "", true},
+		{"vendor/x.md", "", true},
+		{"vendor/k-playbook", "", true},
+		{"vendor/k-playbook/x.md", "k-playbook", false},
+		{"vendor/k-playbook/a/b/c.md", "k-playbook", false},
+		{"vendor/Foo/x.md", "Foo", false},
+	} {
+		v, r := VendorOf(c.name)
+		if v != c.vendor || r != c.reserved {
+			t.Errorf("VendorOf(%q) = %q, %v; erwartet %q, %v", c.name, v, r, c.vendor, c.reserved)
+		}
+	}
+	scope := Rights{Vendor: []string{"k-playbook"}}
+	writer := Rights{Write: true}
+	super := Rights{Supersede: true}
+	both := Rights{Write: true, Supersede: true, Vendor: []string{"k-playbook"}}
+	none := Rights{}
+	for _, c := range []struct {
+		what string
+		r    Rights
+		name string
+		own  bool
+		want Denial
+	}{
+		{"Scope unter vendor/<name>/, fremd", scope, "vendor/k-playbook/x.md", false, 0},
+		{"Scope unter vendor/<name>/, eigen", scope, "vendor/k-playbook/a/x.md", true, 0},
+		{"Scope anderswo, eigen", scope, "x.md", true, DenyWrite},
+		{"Scope anderswo, fremd", scope, "x.md", false, DenySupersede},
+		{"Scope, anderer Name", scope, "vendor/anders/x.md", true, DenyVendor},
+		{"Scope, direkt in vendor/", scope, "vendor/x.md", true, DenyReserved},
+		{"Scope, vendor selbst", scope, "vendor", true, DenyReserved},
+		{"write unter vendor/<name>/", writer, "vendor/k-playbook/x.md", true, DenyVendor},
+		{"supersede unter vendor/<name>/", super, "vendor/k-playbook/x.md", false, DenyVendor},
+		{"alles, direkt in vendor/", both, "vendor/x.md", true, DenyReserved},
+		{"alles unter vendor/<name>/", both, "vendor/k-playbook/x.md", false, 0},
+		{"write, eigen", writer, "x.md", true, 0},
+		{"write, fremd", writer, "x.md", false, DenySupersede},
+		{"supersede, fremd", super, "x.md", false, 0},
+		{"supersede, eigen", super, "x.md", true, DenyWrite},
+		{"nichts, eigen", none, "x.md", true, DenyWrite},
+		{"nichts, fremd", none, "x.md", false, DenySupersede},
+	} {
+		d := c.r.MayWrite(c.name, c.own)
+		switch {
+		case c.want == 0 && d != nil:
+			t.Errorf("%s: %v, erwartet erlaubt", c.what, d)
+		case c.want != 0 && d == nil:
+			t.Errorf("%s: erlaubt, erwartet %d", c.what, c.want)
+		case c.want != 0 && d.Kind != c.want:
+			t.Errorf("%s: %v (%d), erwartet %d", c.what, d, d.Kind, c.want)
+		}
+	}
+	if d := scope.MayWrite("vendor/anders/x.md", true); d.Vendor != "anders" || d.Error() != "Scope vendor/anders fehlt" {
+		t.Errorf("Grund: %v (%q)", d, d.Vendor)
+	}
+	if d := none.MayWrite("vendor/x.md", true); d.Error() != "direkt in vendor/ schreibt niemand" {
+		t.Errorf("Grund: %v", d)
+	}
+
+	// writable: für ein Dokument wie Neues oder Eigenes, für ein Verzeichnis
+	// nach dem, was darunter läge.
+	for _, c := range []struct {
+		r    Rights
+		name string
+		want bool
+	}{
+		{scope, "vendor/k-playbook/x.md", true}, {scope, "x.md", false}, {scope, "vendor/x.md", false},
+		{writer, "x.md", true}, {writer, "vendor/k-playbook/x.md", false}, {super, "x.md", false},
+	} {
+		if got := c.r.Writable(c.name); got != c.want {
+			t.Errorf("%+v Writable(%q) = %v", c.r, c.name, got)
+		}
+	}
+	for _, c := range []struct {
+		r    Rights
+		dir  string
+		want bool
+	}{
+		{scope, "", false}, {scope, "vendor", false}, {scope, "vendor/", false}, {scope, "vendor/k-playbook", true},
+		{scope, "vendor/k-playbook/", true}, {scope, "vendor/k-playbook/tief", true}, {scope, "vendor/anders", false},
+		{scope, "docs", false}, {writer, "", true}, {writer, "docs", true}, {writer, "vendor", false},
+		{writer, "vendor/k-playbook", false}, {super, "", false}, {both, "vendor", false}, {both, "vendor/k-playbook", true},
+	} {
+		if got := c.r.WritableUnder(c.dir); got != c.want {
+			t.Errorf("%+v WritableUnder(%q) = %v", c.r, c.dir, got)
 		}
 	}
 }

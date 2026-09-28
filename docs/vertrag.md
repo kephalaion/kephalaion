@@ -191,7 +191,7 @@ Je Account und Collection steht in `documents` eine Zeile mit dem Namen `SYSTEM:
 Clients gegen sie. `content` ist JSON in genau dieser Form:
 
 ```json
-{"hash":"<sha256 des Tokens, 64 Zeichen hex>","user":"<user>","rights":{"write":false,"supersede":false}}
+{"hash":"<sha256 des Tokens, 64 Zeichen hex>","user":"<user>","rights":{"write":false,"supersede":false,"vendor":["k-playbook"]}}
 ```
 
 - `hash` ist eine Kopie; maßgeblich führt der Hub den Hash in seiner Tabelle `accounts`.
@@ -204,7 +204,15 @@ Clients gegen sie. `content` ist JSON in genau dieser Form:
   verwirft die Replica beim nächsten Kontakt.
 - `created_by` ist `admin`; `updated_by` ist `admin`, nach `rotate` der User des Accounts.
 - `rights` sind die Rechte in dieser Collection über `read` hinaus; `read` ergibt sich aus der
-  Zeile selbst. `write` und `supersede` sind unabhängig.
+  Zeile selbst. `write` und `supersede` sind unabhängig. `vendor` sind die Scopes
+  `vendor/<name>` als Liste der `<name>` (Namensregel wie Collections), sortiert und ohne
+  Doppel; sie steht nur, wenn es welche gibt — fehlend heißt keine (Zeilen eines Hubs vor
+  Task 016). Unter `vendor/<name>/` zählt beim Schreiben allein dieser Scope: `write` ist dort
+  weder nötig noch genügt es, der Urheber spielt keine Rolle; direkt in `vendor/` schreibt
+  über einen Node niemand (`contract.Rights.MayWrite`, dieselbe Regel für den Hub und für
+  `writable` am Node). Ein Node, der `vendor` nicht kennt, übergeht das Feld; seine Anzeige
+  von `writable` ist dort ungenau, der Hub prüft trotzdem. Kam mit Task 016 ohne neue
+  Fassung hinzu.
 - Sperren, Entziehen und Entfernen machen die Zeile zur Löschmarke (`content` NULL). Bekommt
   der Account die Collection wieder, wird die Löschmarke mit neuer Revision wiederbelebt; ihre
   `id` bleibt.
@@ -251,11 +259,14 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
    - **Lesbarkeit:** Die Collection gibt es, der Node darf sie abgleichen (`node_collections`),
      und der Account hat eine lebende `SYSTEM:A:`-Zeile in ihr. Sonst `not_readable`, dieselbe
      Antwort für alle drei.
-   - **Recht** aus dieser Zeile: `write` für `create` und für Eigenes — `created_by` ist der
-     User des Accounts, gleich über welchen seiner Accounts es angelegt wurde —, `supersede`
-     für Fremdes; `write` ist dafür nicht nötig. Bei einem Verzeichnis gilt das je Dokument
-     darunter; ein einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`,
-     die Meldung nennt den Grund („gehört admin, supersede fehlt“).
+   - **Recht** aus dieser Zeile, je Dokument nach seinem Namen (`contract.Rights.MayWrite`):
+     `write` für `create` und für Eigenes — `created_by` ist der User des Accounts, gleich
+     über welchen seiner Accounts es angelegt wurde —, `supersede` für Fremdes; `write` ist
+     dafür nicht nötig. Unter `vendor/<name>/` zählt allein der Scope `vendor/<name>` (siehe
+     „Account-Zeilen“), genau `vendor` und direkt in `vendor/` schreibt niemand. Bei einem
+     Verzeichnis gilt das je Dokument darunter, bei `rename` mit altem **und** neuem Namen; ein
+     einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`, die Meldung
+     nennt den Grund („gehört admin, supersede fehlt“, „Scope vendor/k-playbook fehlt“).
    - **Name und Vorbedingung** je Vorgang, siehe unten. `base_revision` weicht von der Revision
      des lebenden Dokuments ab: `stale_revision`, die Meldung nennt die aktuelle. Die Revision
      ist global und steigt nur, Gleichheit genügt. Ohne `base_revision` gilt keine
@@ -375,7 +386,7 @@ nichts geändert.
 | `account_unauthenticated` | 403 | der Node ist angemeldet, der Account nicht: unbekannt, Token falsch oder gesperrt (`rotate`, Schreibvorgänge) |
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
 | `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr — dieselbe Meldung für alle drei (Schreibvorgänge) |
-| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes; die Meldung nennt den Grund |
+| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes, unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand. Die Meldung nennt den Grund |
 | `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |

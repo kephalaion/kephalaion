@@ -226,7 +226,8 @@ const configExportUsage = `Aufruf:
 Schreibt die config und je eingerichteter Rolle die settings und die lokalen
 Tabellen als YAML, samt Fassung des Formats — keine Inhalte:
   hub:   collections, nodes (nur der Hash des Tokens), node_collections,
-         accounts (User, nur der Hash des Tokens, die Rechte je Collection)
+         accounts (User, nur der Hash des Tokens, die Rechte je Collection
+         samt Scopes vendor/<name>)
   node:  hubs (samt dem eigenen Token beim Hub, im Klartext), hub_collections
 Nicht dabei sind db_info — ein neu angelegter Hub bekommt eine neue hub_id —
 und das Protokoll actions. Ohne --output auf die Standardausgabe. Die Datei
@@ -331,7 +332,8 @@ Rolle alles in einer Transaktion: die settings und, ab Format 2, die lokalen
 Tabellen. Ein Export im Format 1 ersetzt nur die settings und lässt die
 Tabellen unberührt; einer vor Format 4 lässt die Accounts unberührt; einer im
 Format 4 kennt keinen User und setzt ihn je Account auf dessen Namen — ab
-Format 5 ist user Pflicht. Am Hub
+Format 5 ist user Pflicht; einer vor Format 6 kennt keine Scopes vendor/<name>
+und liest sich ohne sie. Am Hub
 gleicht der Import die Account-Zeilen (SYSTEM:A:) an die Accounts des Exports
 an — vorhandene ändern, fehlende werden Löschmarken, neue entstehen —, unter
 einer Revision. Die config selbst, db_info und das Protokoll bleiben; am Hub

@@ -20,6 +20,7 @@ const hubAccountUsage = `Aufruf:
   kephalaion hub account lock   <name>
   kephalaion hub account unlock <name>
   kephalaion hub account grant  <name> <collection> [--write] [--supersede]
+                                [--vendor <name>]…
   kephalaion hub account revoke <name> <collection>
   kephalaion hub account token  <name>
 
@@ -36,9 +37,13 @@ Kommandos:
   lock     sperrt einen Account: seine Zeilen werden Löschmarken, die Rechte
            merkt sich der Hub; unlock legt sie wieder an
   grant    setzt die Rechte in einer Collection vollständig: read immer, dazu
-           --write (Eigenes anlegen, ändern, löschen) und --supersede
-           (Fremdes ändern, ablösen, löschen); ohne --write wird write
-           entzogen, ohne --supersede ebenso supersede
+           --write (Eigenes anlegen, ändern, löschen), --supersede
+           (Fremdes ändern, ablösen, löschen) und je --vendor <name> der Scope
+           vendor/<name> (unter vendor/<name>/ schreiben — dort zählt allein
+           er, ohne write und unabhängig vom Urheber; direkt in vendor/
+           schreibt über einen Node niemand); ohne --write wird write
+           entzogen, ohne --supersede ebenso supersede, ohne --vendor jeder
+           Scope
   revoke   nimmt dem Account die Collection
   token    erzeugt ein neues Einrichtungstoken und zeigt es einmal; das alte
            gilt nicht mehr
@@ -64,6 +69,8 @@ Optionen:
   --description text   Kurzbeschreibung
   --write              Recht write (bei grant)
   --supersede          Recht supersede (bei grant)
+  --vendor name        Scope vendor/<name> (bei grant, wiederholbar); <name>
+                       folgt der Namensregel für Collections
   --config pfad        Ort der config (siehe kephalaion hub init --help)
 `
 
@@ -195,8 +202,13 @@ func runHubAccount(args []string, stdout, stderr io.Writer) int {
 			c := newCommand("hub account grant", u, stdout, stderr, "<name>", "<collection>")
 			write := c.fs.Bool("write", false, "")
 			supersede := c.fs.Bool("supersede", false, "")
+			var vendor stringList
+			c.fs.Var(&vendor, "vendor", "")
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
-				rights := contract.Rights{Write: *write, Supersede: *supersede}
+				rights, err := contract.NormalizeRights(contract.Rights{Write: *write, Supersede: *supersede, Vendor: vendor})
+				if err != nil {
+					return err
+				}
 				changed, err := s.GrantAccount(ctx, pos[0], pos[1], rights)
 				if err != nil {
 					return err
@@ -233,6 +245,12 @@ func runHubAccount(args []string, stdout, stderr io.Writer) int {
 		},
 	})
 }
+
+// stringList ist eine wiederholbare Option: jeder Wert kommt dazu.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
 // printAccountToken zeigt ein Einrichtungstoken — das einzige Mal — und wie
 // der Account es gegen sein eigenes tauscht.

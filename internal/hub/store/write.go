@@ -23,14 +23,16 @@ import (
 //  3. Lesbarkeit: Die Collection gibt es, der Node darf sie abgleichen
 //     (node_collections), der Account hat eine lebende SYSTEM:A:-Zeile in
 //     ihr — sonst ErrNotReadable, dieselbe Antwort für alle drei.
-//  4. Das Recht aus dieser Zeile: write für Neues und Eigenes (created_by ist
+//  4. Das Recht aus dieser Zeile, je Dokument nach der einen Regel in
+//     contract.Rights.MayWrite: write für Neues und Eigenes (created_by ist
 //     der User des Accounts, gleich über welchen seiner Accounts angelegt),
-//     supersede für Fremdes; write ist dafür nicht nötig. Sonst
-//     ErrForbidden mit dem Grund.
+//     supersede für Fremdes; unter vendor/<name>/ allein der Scope
+//     vendor/<name>, direkt in vendor/ niemand. Sonst ErrForbidden mit dem
+//     Grund.
 //
 // delete und rename nehmen auch ein Verzeichnis — alle lebenden Dokumente
-// darunter, als Ganzes: eine Revision, das Recht je Dokument, alles oder
-// nichts. Reihenfolge nach der Lesbarkeit: gibt es den Namen (ErrNotFound),
+// darunter, als Ganzes: eine Revision, das Recht je Dokument (bei rename mit
+// altem und neuem Namen), alles oder nichts. Reihenfolge nach der Lesbarkeit: gibt es den Namen (ErrNotFound),
 // gilt der Vorgang für diese Art (ErrInvalid: Verzeichnis ohne recursive,
 // base_revision bei einem Verzeichnis, ein neuer Name ungültig), das Recht,
 // die Revision eines Dokuments, zuletzt das Ziel von rename.
@@ -50,7 +52,8 @@ var (
 	// abgleichen, oder der Account hat keine lebende Zeile in ihr.
 	ErrNotReadable = errors.New("nicht lesbar")
 	// ErrForbidden: dem Account fehlt das Recht — write für Neues und
-	// Eigenes, supersede für Fremdes.
+	// Eigenes, supersede für Fremdes, unter vendor/<name>/ der Scope; direkt
+	// in vendor/ schreibt niemand.
 	ErrForbidden = errors.New("Recht fehlt")
 	// ErrNameTaken: ein lebendes Dokument trägt den Namen schon.
 	ErrNameTaken = errors.New("Name vergeben")
@@ -170,20 +173,40 @@ func readableRights(ctx context.Context, tx sqlitedb.Querier, auth WriteAuth, co
 	return c.Rights, nil
 }
 
-// mayChange prüft das Recht, ein lebendes Dokument zu ändern oder zu
-// löschen: Eigenes braucht write, Fremdes supersede.
+// mayChange prüft das Recht, ein lebendes Dokument zu ändern, zu löschen
+// oder umzubenennen — nach contract.Rights.MayWrite, mit dem Namen des
+// Dokuments: Eigenes braucht write, Fremdes supersede, unter vendor/<name>/
+// nur der Scope.
 func (w *docTx) mayChange(cur Document, rights contract.Rights, verb string) error {
-	if cur.CreatedBy == w.by {
-		if rights.Write {
-			return nil
-		}
-		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: write fehlt", cur.Name, cur.Collection, verb)}
-	}
-	if rights.Supersede {
+	return w.mayWriteAs(cur.Name, cur, rights, verb)
+}
+
+// mayWriteAs prüft das Recht an cur unter dem Namen name — bei rename der
+// neue —; own ist, ob der User des Accounts das Dokument angelegt hat.
+func (w *docTx) mayWriteAs(name string, cur Document, rights contract.Rights, verb string) error {
+	own := cur.CreatedBy == w.by
+	d := rights.MayWrite(name, own)
+	if d == nil {
 		return nil
 	}
-	return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: gehört %s, supersede fehlt",
-		cur.Name, cur.Collection, verb, cur.CreatedBy)}
+	reason := d.Error()
+	if d.Kind == contract.DenySupersede {
+		reason = "gehört " + cur.CreatedBy + ", " + reason
+	}
+	what := name
+	if name != cur.Name {
+		what = cur.Name + " nach " + name
+	}
+	return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: %s", what, cur.Collection, verb, reason)}
+}
+
+// mayCreate prüft das Recht, name in collection anzulegen: Neues zählt wie
+// Eigenes (write), unter vendor/<name>/ der Scope.
+func mayCreate(collection, name string, rights contract.Rights) error {
+	if d := rights.MayWrite(name, true); d != nil {
+		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s anlegen: %v", name, collection, d)}
+	}
+	return nil
 }
 
 // checkBase prüft die Revision, auf der ein Vorgang beruht; nil heißt ohne
@@ -286,8 +309,8 @@ func (s *sqliteStore) CreateDocumentAs(ctx context.Context, auth WriteAuth, coll
 	}
 	var out WriteResult
 	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
-		if !rights.Write {
-			return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s anlegen: write fehlt", name, collection)}
+		if err := mayCreate(collection, name, rights); err != nil {
+			return err
 		}
 		_, err := liveDocument(ctx, w.tx, collection, name)
 		if err == nil {
@@ -405,8 +428,15 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 				return err
 			}
 		}
+		// Das Recht am alten und am neuen Namen, je Dokument: hinein, heraus
+		// und innerhalb von vendor/ ohne Sonderfall.
 		if err := w.mayChangeAll(docs, rights, "umbenennen"); err != nil {
 			return err
+		}
+		for i, d := range docs {
+			if err := w.mayWriteAs(renamed[i], d, rights, "umbenennen"); err != nil {
+				return err
+			}
 		}
 		if !dir {
 			if err := checkBase(docs[0], base); err != nil {

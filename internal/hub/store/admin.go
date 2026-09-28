@@ -75,7 +75,7 @@ type Tables struct {
 // CheckTables prüft lokale Tabellen ohne Datenbank, wie die CLI es beim
 // Anlegen tut: Namensregel, Eindeutigkeit (Nodes und Accounts gemeinsam),
 // User je Account (CheckUser), Form des Hashes, Rechte nur auf vorhandene
-// Nodes und Collections. Was die Datenbank braucht (Dokumente in
+// Nodes und Collections, die Scopes vendor/<name> nach der Namensregel. Was die Datenbank braucht (Dokumente in
 // wegfallenden Collections), prüft Import in der Transaktion.
 func CheckTables(t Tables) error {
 	colls := map[string]bool{}
@@ -153,6 +153,9 @@ func CheckTables(t Tables) error {
 				return fmt.Errorf("Account %s: Rechte in %s stehen zweimal", a.Name, r.Collection)
 			}
 			seen[r.Collection] = true
+			if _, err := contract.NormalizeRights(r.Rights); err != nil {
+				return fmt.Errorf("Account %s in %s: %w", a.Name, r.Collection, err)
+			}
 		}
 	}
 	return nil

@@ -178,7 +178,7 @@ func TestAccountLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := accountRowsAll(t, s, "bob")
-	if len(rows) != 2 || rows[0].collection != "privat" || rows[1].content != (contract.AccountContent{Hash: hash, User: "bob", Rights: contract.Rights{Write: true}}) {
+	if len(rows) != 2 || rows[0].collection != "privat" || !reflect.DeepEqual(rows[1].content, contract.AccountContent{Hash: hash, User: "bob", Rights: contract.Rights{Write: true}}) {
 		t.Errorf("Zeilen = %+v", rows)
 	}
 	// Dieselben Rechte noch einmal: nichts geschrieben.
@@ -280,7 +280,7 @@ func TestAccountLifecycle(t *testing.T) {
 	}
 	rows = accountRowsAll(t, s, "bob")
 	if len(rows) != 2 || !rows[0].deleted || rows[1].deleted || rows[1].collection != "team-x" ||
-		rows[1].content != (contract.AccountContent{Hash: hash2, User: "bob", Rights: contract.Rights{Write: true}}) || rows[1].revision != rev+1 {
+		!reflect.DeepEqual(rows[1].content, contract.AccountContent{Hash: hash2, User: "bob", Rights: contract.Rights{Write: true}}) || rows[1].revision != rev+1 {
 		t.Errorf("Zeilen nach unlock: %+v", rows)
 	}
 	a, _ = s.Account(ctx, "bob")
@@ -764,7 +764,7 @@ func TestAccountUser(t *testing.T) {
 		}
 		want := b.content
 		want.User = "kleist"
-		if r.id != b.id || r.content != want || r.revision != rev+1 || r.updatedBy != Admin {
+		if r.id != b.id || !reflect.DeepEqual(r.content, want) || r.revision != rev+1 || r.updatedBy != Admin {
 			t.Errorf("Zeile nach set --user: %+v", r)
 		}
 	}

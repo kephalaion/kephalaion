@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -186,7 +187,7 @@ func TestRotateLockedFailsAtConditionalWrite(t *testing.T) {
 	if a, _ := s.Account(ctx, "bob"); a.TokenHash != ident.HashToken(token) || revision(t, s) != rev {
 		t.Errorf("geändert: %+v", a)
 	}
-	if after := accountRowsAll(t, s, "bob"); !slices.Equal(after, before) {
+	if after := accountRowsAll(t, s, "bob"); !reflect.DeepEqual(after, before) {
 		t.Errorf("Zeilen geändert: %+v", after)
 	}
 }

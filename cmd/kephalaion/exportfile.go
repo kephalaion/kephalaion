@@ -20,14 +20,18 @@ import (
 // derselben Prüfung wie node hub add ohne --node. Format 4 bringt die Accounts
 // des Hubs samt Rechten; ein Export vor Format 4 lässt die Accounts beim
 // Import, wie sie sind. Format 5 bringt den User je Account, dort Pflicht; ein
-// Import von Format 4 setzt ihn auf den Namen des Accounts.
+// Import von Format 4 setzt ihn auf den Namen des Accounts. Format 6 bringt
+// je Recht die Scopes vendor/<name> (vendor, eine Liste); ein Export davor
+// darf sie nicht tragen und liest sich ohne Scopes.
 const (
-	exportFormat    = 5
+	exportFormat    = 6
 	minExportFormat = 1
 	// accountsFormat ist die erste Fassung mit Accounts.
 	accountsFormat = 4
 	// userFormat ist die erste Fassung mit dem User je Account.
 	userFormat = 5
+	// vendorFormat ist die erste Fassung mit den Scopes vendor/<name>.
+	vendorFormat = 6
 )
 
 // exportFile ist der Inhalt einer Exportdatei: die config, die settings je
@@ -70,10 +74,14 @@ type accountYAML struct {
 	Rights      []rightYAML `yaml:"rights"`
 }
 
+// rightYAML sind die Rechte eines Accounts in einer Collection. Vendor sind
+// die Scopes vendor/<name>, ab Format 6, immer als Liste (auch leer); davor
+// darf das Feld nicht dastehen — das prüft parseExport am YAML-Knoten.
 type rightYAML struct {
-	Collection string `yaml:"collection"`
-	Write      bool   `yaml:"write"`
-	Supersede  bool   `yaml:"supersede"`
+	Collection string   `yaml:"collection"`
+	Write      bool     `yaml:"write"`
+	Supersede  bool     `yaml:"supersede"`
+	Vendor     []string `yaml:"vendor"`
 }
 
 type collectionYAML struct {
@@ -138,7 +146,8 @@ func hubTablesToYAML(t hubstore.Tables) *hubTablesYAML {
 		y := accountYAML{Name: a.Name, User: a.User, Description: a.Description, TokenHash: a.TokenHash, Locked: a.Locked,
 			CreatedAt: a.CreatedAt, CreatedBy: a.CreatedBy, Rights: []rightYAML{}}
 		for _, r := range a.Rights {
-			y.Rights = append(y.Rights, rightYAML{Collection: r.Collection, Write: r.Write, Supersede: r.Supersede})
+			y.Rights = append(y.Rights, rightYAML{Collection: r.Collection, Write: r.Write, Supersede: r.Supersede,
+				Vendor: append([]string{}, r.Vendor...)})
 		}
 		out.Accounts = append(out.Accounts, y)
 	}
@@ -148,7 +157,9 @@ func hubTablesToYAML(t hubstore.Tables) *hubTablesYAML {
 // toStore liefert die Tabellen für den Import. Vor Format 4 gibt es keine
 // Accounts im Export; der Import lässt sie dann, wie sie sind. Vor Format 5
 // ist der User der Name des Accounts; ab Format 5 hat parseExport geprüft,
-// dass er dasteht (leer oder ungültig prüft hubstore.CheckTables).
+// dass er dasteht (leer oder ungültig prüft hubstore.CheckTables). Vor
+// Format 6 gibt es keine Scopes; ab Format 6 sind sie eine Liste, fehlend
+// leer (ihre Namen prüft hubstore.CheckTables).
 func (y *hubTablesYAML) toStore(format int) hubstore.Tables {
 	t := hubstore.Tables{Collections: []hubstore.Collection{}, Nodes: []hubstore.Node{}, Grants: []hubstore.Grant{},
 		Accounts: []hubstore.Account{}, KeepAccounts: format < accountsFormat}
@@ -161,7 +172,7 @@ func (y *hubTablesYAML) toStore(format int) hubstore.Tables {
 			CreatedAt: a.CreatedAt, CreatedBy: a.CreatedBy, Rights: []hubstore.AccountRight{}}
 		for _, r := range a.Rights {
 			acc.Rights = append(acc.Rights, hubstore.AccountRight{Collection: r.Collection,
-				Rights: contract.Rights{Write: r.Write, Supersede: r.Supersede}})
+				Rights: contract.Rights{Write: r.Write, Supersede: r.Supersede, Vendor: r.Vendor}})
 		}
 		t.Accounts = append(t.Accounts, acc)
 	}
@@ -297,7 +308,37 @@ func parseExport(data []byte) (exportFile, error) {
 	if err := checkAccountUsers(&root, exp.Format); err != nil {
 		return exportFile{}, err
 	}
+	if err := checkAccountVendor(&root, exp.Format); err != nil {
+		return exportFile{}, err
+	}
 	return exp, nil
+}
+
+// checkAccountVendor prüft die Scopes je Recht gegen die Fassung, am
+// YAML-Knoten: Vor Format 6 darf vendor nicht dastehen, in keiner Form (auch
+// nicht null oder leer). Ab Format 6 ist es eine Liste, fehlend oder null
+// leer; die Namen prüft hubstore.CheckTables.
+func checkAccountVendor(root *yaml.Node, format int) error {
+	if format >= vendorFormat {
+		return nil
+	}
+	accounts := partNode(root, "tables", "hub", "accounts")
+	if accounts == nil || accounts.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for i, item := range accounts.Content {
+		rights := mappingValue(item, "rights")
+		if rights == nil || rights.Kind != yaml.SequenceNode {
+			continue
+		}
+		for j, r := range rights.Content {
+			if mappingValue(r, "vendor") != nil {
+				return fmt.Errorf("Format %d kennt keinen Scope vendor (tables.hub.accounts[%d].rights[%d].vendor); ab Format %d",
+					format, i, j, vendorFormat)
+			}
+		}
+	}
+	return nil
 }
 
 // checkAccountUsers prüft den User je Account gegen die Fassung, am
