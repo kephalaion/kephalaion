@@ -180,7 +180,10 @@ Nacharbeit des Nutzers)
     `httpapi.NewClient(address, rootCAs)` mit TLS ≥ 1.2 und HTTP/1.1, Zertifikatsfehler gelten
     als „nicht erreicht“ und werden nie wiederholt; `node hub check` erklärt Zertifikatsfehler,
     502/503 des Proxys und die Host-Prüfung (403); Exportformat 7 mit `ca`
-    (`vertrag.md`, „HTTP“; `konzept.md`, „Kommunikation“);
+    (`vertrag.md`, „HTTP“; `konzept.md`, „Kommunikation“); Nachtrag nach Entscheidung des
+    Nutzers vom 2026-09-29: die Adresse darf einen Pfad als Präfix tragen
+    (`https://<name>/kephhub`, Caddy `handle_path`), `check` erklärt dazu 404 und 401 des
+    Proxys;
   - Hub unverändert, nur `reqlog` nennt hinter dem Proxy die Adresse des Aufrufers aus
     `X-Forwarded-For` (`via`); `serve` bleibt auf Loopback;
   - Doku: Caddyfile-Vorlage, zwei Zertifikatswege (Name mit Let's Encrypt; IP mit `tls
@@ -296,6 +299,18 @@ Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 018, Etappe 4 — Abnahme des HTTPS-Wegs auf der VM** (Nacharbeit des Nutzers, nicht
+  Teil des Laufs): Binary mit Task 018 auf VM und WSL, `node.db` beidseits neu anlegen
+  (Schema 5), Block `handle_path /kephhub/*` im Caddyfile der VM mit `header_up Host
+  {upstream_hostport}` und ohne `forward_auth`, `hub node add wsl-kleist`; in der WSL `node
+  hub add vm … --transport https --address
+  https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephhub` (Weg 1, ohne CA),
+  `node hub check vm`, `node collection add vm:test`, `node sync vm`, `create` über MCP;
+  `journalctl -u kephalaion` mit `via` und ohne Token, Caddy-Log 200 auf `/v1/…`, 404 daneben.
+  Schritte mit Ansible-Spalte: `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“.
+  Danach den Befund „Proxy setzt Host, Hub unverändert“ bestätigen oder widerlegen
+  (`material/befunde/transport-entfernt.md`, unbestaetigt bis dahin) und diesen Eintrag
+  abhaken; die Annahme zu LB/NAT vor `9.141.8.157` ebenso.
 - **Task 008:** Abgleich im Hintergrund mit einem echten Client über längere Zeit; der
   Race-Detector lief über `cmd/kephalaion` und `internal/node/...` sauber. (Der Weg, `node.db`
   nach einem Sprung der Schemafassung neu anzulegen — Review-Punkt 9, `init` bricht bei
