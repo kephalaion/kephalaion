@@ -39,11 +39,14 @@ eingerichtet sind — und läuft, bis SIGINT oder SIGTERM ihn beendet.
          Replica, create, write, delete und rename über den Hub — ist er
          nicht erreichbar, wird nichts gespeichert, gelesen wird weiter
 
-Beide lauschen bisher nur auf diesem Rechner (127.0.0.1, ::1, localhost):
-Klartext-HTTP verlässt den Rechner nicht, bis https und ssh kommen. Ein
-anderes listen bricht den Start ab. Beide beantworten nur Anfragen, deren
-Host dieser Rechner mit dem eigenen Port ist, sonst 403; ein Tunnel geht
-deshalb nur mit gleichem Port (ssh -L 7434:localhost:7434).
+Beide lauschen nur auf diesem Rechner (127.0.0.1, ::1, localhost):
+Klartext-HTTP verlässt den Rechner nicht. Ein anderes listen bricht den
+Start ab. Nodes anderer Rechner erreichen den Hub über einen Reverse-Proxy
+auf seinem Rechner, der TLS beendet und an den Hub auf Loopback weiterreicht
+(Transport https, siehe docs/installation.md). Beide beantworten nur
+Anfragen, deren Host dieser Rechner mit dem eigenen Port ist, sonst 403; der
+Proxy setzt Host deshalb auf die Loopback-Adresse des Hubs, ein Tunnel geht
+nur mit gleichem Port (ssh -L 7434:localhost:7434).
 
 Eine Sperre auf einer Datei neben jeder Datenbank (<db>.lock) verhindert einen
 zweiten serve auf derselben Rolle; die übrigen Kommandos laufen daneben wie
@@ -54,7 +57,7 @@ danach im Abstand sync_interval aus den settings des Nodes (Standard 30s,
 kephalaion config set node sync_interval 1m; 0 schaltet ab). Die Hub-Einträge
 liest jede Runde neu, node hub add|rm wirkt ohne Neustart; ein langsamer Hub
 hält die anderen nicht auf. Transport local nimmt den Hub desselben serve,
-http den Hub unter seiner Adresse; https und ssh werden noch übergangen.
+http und https den Hub unter seiner Adresse; ssh wird noch übergangen.
 Erfolg und letzter Fehler je Hub stehen in node.db (kephalaion status).
 kephalaion node sync läuft daneben wie immer. Nach einem Schreibvorgang über
 MCP (create, write, delete, rename) — gelungen oder mit unklarem Ausgang —
@@ -66,7 +69,8 @@ die Antwort im Werkzeug whoami mit (update) — aus seiner Sicht: global also
 der Weg des Verwalters. Die Antwort bleibt im Speicher.
 
 Logs gehen nach stderr: eine Zeile je Anfrage mit Methode, Pfad, Status,
-Dauer und den Namen von Node bzw. Account, bei einem Schreibvorgang über MCP
+Dauer und den Namen von Node bzw. Account, hinter einem Proxy die Adresse
+des Aufrufers aus X-Forwarded-For (via), bei einem Schreibvorgang über MCP
 dazu Vorgang, Hub und Fehlercode — nie ein Token, nie ein Inhalt. Vom
 Abgleich im Hintergrund eine Zeile, wenn Zeilen kamen, eine beim ersten Fehler
 eines Hubs und wenn sich die Art des Fehlers ändert, und eine, wenn es wieder
@@ -122,8 +126,9 @@ func checkServeListen(r config.Role, addr string) error {
 		return fmt.Errorf("%s: listen %q: erwartet host:port", r, addr)
 	}
 	if !loopback.IsHost(host) {
-		return fmt.Errorf("%s: listen %s: serve lauscht bisher nur auf diesem Rechner (127.0.0.1, ::1 oder localhost) — "+
-			"Klartext-HTTP verlässt den Rechner nicht, bis https und ssh kommen", r, addr)
+		return fmt.Errorf("%s: listen %s: serve lauscht nur auf diesem Rechner (127.0.0.1, ::1 oder localhost) — "+
+			"Klartext-HTTP verlässt den Rechner nicht; Nodes anderer Rechner erreichen den Hub über einen "+
+			"Reverse-Proxy (https, siehe docs/installation.md)", r, addr)
 	}
 	return nil
 }
@@ -350,7 +355,7 @@ func newNodeHandler(st nodestore.Store, update func() upgrade.Report, link mcpno
 // nodeHubLink ist der Weg der Werkzeuge des Nodes, die schreiben, zum Hub:
 // derselbe connector wie beim Abgleich — local nimmt hub, den Hub desselben
 // serve, wenn er ihn trägt —, und kick stößt den Abgleich eines Eintrags an.
-// Ein Transport, den der connector noch nicht kann, kommt als
+// Ein Transport, den der connector noch nicht kann (ssh), kommt als
 // mcpnode.ErrUnsupported an; jeder andere Fehler beim Verbinden heißt für
 // das Werkzeug: Hub nicht erreichbar.
 func nodeHubLink(cfg config.Config, hub hubstore.Store, kick func(nodestore.Hub)) mcpnode.HubLink {

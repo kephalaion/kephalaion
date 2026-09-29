@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -192,8 +193,8 @@ func TestMCPWriteThroughServe(t *testing.T) {
 	}
 
 	// Unklarer Ausgang: Der Hub hat geschrieben, die Antwort ging verloren.
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		return lostWrite{c}, err
 	})
 	wantWriteCode(t, "unklar", write("create", mcpnode.CreateInput{Collection: "fern:team-x", Name: "unklar.md",
@@ -433,7 +434,7 @@ func wantWriteCode(t *testing.T, what string, out mcpnode.WriteOutput, code, wan
 	}
 }
 
-// Über https schreibt der Node noch nicht: unsupported, ohne Anfrage.
+// Über ssh schreibt der Node noch nicht: unsupported, ohne Anfrage.
 func TestMCPWriteUnsupportedTransport(t *testing.T) {
 	e := newCommEnv(t)
 	link := nodeHubLink(config.Config{}, nil, nil)
@@ -441,10 +442,10 @@ func TestMCPWriteUnsupportedTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Transport = "https"
+	h.Transport, h.Address = "ssh", "keph@hub.example.org"
 	if _, _, err := link.Connect(context.Background(), h); err == nil || !strings.Contains(err.Error(), "noch nicht unterstützt") ||
 		!errors.Is(err, mcpnode.ErrUnsupported) {
-		t.Errorf("https: %v", err)
+		t.Errorf("ssh: %v", err)
 	}
 	h.Transport = "local"
 	if _, _, err := link.Connect(context.Background(), h); err == nil || errors.Is(err, mcpnode.ErrUnsupported) {

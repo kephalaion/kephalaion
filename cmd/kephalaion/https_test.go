@@ -2,13 +2,26 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
+	"github.com/kephalaion/kephalaion/internal/hub/replication"
 	"github.com/kephalaion/kephalaion/internal/ident"
+	"github.com/kephalaion/kephalaion/internal/loopback"
+	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
 	"github.com/kephalaion/kephalaion/internal/testcert"
 )
 
@@ -154,5 +167,199 @@ func TestExportImportCA(t *testing.T) {
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "3 Hubs")
 	if h, _ := nodeStore(t, cfgB).Hub(context.Background(), "vm"); h.CA != ca.PEM {
 		t.Errorf("nach Format 7: CA %q", h.CA)
+	}
+}
+
+// proxyHub ist „Proxy plus Hub“ für die Tests: ein Server — mit TLS, wenn
+// cert gesetzt ist — vor dem Hub-Handler hinter loopback.Guard. Ohne host
+// setzt er Host wie Caddy mit header_up Host {upstream_hostport} auf die
+// Loopback-Adresse mit dem eigenen Port; mit host reicht er diesen Host
+// durch, wie ein Proxy ohne die Zeile den Host des Aufrufers (die äußere
+// Adresse), und der Hub antwortet 403.
+func proxyHub(t *testing.T, e *commEnv, cert *tls.Certificate, host string) *httptest.Server {
+	t.Helper()
+	hub := loopback.Guard(httpapi.NewHandler(replication.New(hubStore(t, e.cfg))))
+	srv := httptest.NewUnstartedServer(nil)
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "localhost:" + port
+		if host != "" {
+			r.Host = host
+		}
+		hub.ServeHTTP(w, r)
+	})
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	if cert == nil {
+		srv.Start()
+	} else {
+		srv.TLS = &tls.Config{Certificates: []tls.Certificate{*cert}}
+		srv.StartTLS()
+	}
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// serverCert liefert ein Zertifikat als Zeiger für proxyHub.
+func serverCert(c tls.Certificate) *tls.Certificate { return &c }
+
+// addTLSHub trägt einen https-Eintrag für den Node laptop-tls ein, der
+// beide Collections darf, mit der CA aus caPEM (leer: System-Roots).
+func (e *commEnv) addTLSHub(t *testing.T, alias, address, caPEM string) {
+	t.Helper()
+	r := e.run(t, "hub", "node", "add", "laptop-tls")
+	r.want(t, 0)
+	tok := tokenFrom(t, r.out)
+	for _, coll := range []string{"team-x", "privat"} {
+		e.run(t, "hub", "node", "grant", "laptop-tls", coll).want(t, 0)
+	}
+	args := []string{"node", "hub", "add", alias, "--node", "laptop-tls", "--transport", "https", "--address", address,
+		"--token-stdin"}
+	if caPEM != "" {
+		args = append(args, "--ca-file", caFile(t, e.dir, alias+"-ca.pem", caPEM))
+	}
+	e.runIn(t, tok, args...).want(t, 0)
+	e.run(t, "node", "collection", "add", alias+":team-x").want(t, 0)
+}
+
+// node hub check über https: mit der richtigen CA erreichbar; sonst nennt es
+// den Grund im Klartext — CA nicht vertraut, falscher Name, abgelaufen, der
+// Proxy ohne Hub dahinter (502), die Host-Prüfung des Hubs (403). Am Hub
+// kommt bei einem Zertifikatsfehler nichts an.
+func TestNodeHubCheckHTTPS(t *testing.T) {
+	e := newCommEnv(t)
+	ca, other := testcert.NewCA(t, "Richtige CA"), testcert.NewCA(t, "Andere CA")
+	good := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "")
+	e.addTLSHub(t, "sicher", good.URL, ca.PEM)
+	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+good.URL+")",
+		"Node-Name:    laptop-tls", "erlaubt:      privat, team-x")
+	e.run(t, "node", "sync", "sicher").want(t, 0, "Hub sicher (hub_id", "team-x: abgeglichen")
+
+	set := func(args ...string) {
+		t.Helper()
+		e.run(t, append([]string{"node", "hub", "set", "sicher"}, args...)...).want(t, 0)
+	}
+	check := func(want ...string) {
+		t.Helper()
+		r := e.run(t, "node", "hub", "check", "sicher")
+		r.want(t, 1, want...)
+		if strings.Contains(r.out+r.errOut, "keph_") {
+			t.Errorf("Token in der Ausgabe:\n%s%s", r.out, r.errOut)
+		}
+	}
+	// Falsche CA, und gar keine (System-Roots) gegen die Test-CA.
+	set("--ca-file", caFile(t, e.dir, "andere.pem", other.PEM))
+	check("Hub sicher (https " + good.URL + "): Zertifikat von 127.0.0.1 nicht vertraut (Aussteller CN=Richtige CA; " +
+		"passt die CA aus --ca-file?) — x509: certificate signed by unknown authority")
+	set("--ca-file", "")
+	check("Zertifikat von 127.0.0.1 nicht vertraut (Aussteller CN=Richtige CA; --ca-file?)")
+	// Zertifikat für einen anderen Namen.
+	wrongName := proxyHub(t, e, serverCert(ca.ServerNow(t, "hub.example.org")), "")
+	set("--address", wrongName.URL, "--ca-file", caFile(t, e.dir, "richtig.pem", ca.PEM))
+	check("Zertifikat gilt nicht für 127.0.0.1 (ausgestellt für hub.example.org)")
+	// Abgelaufen.
+	expired := proxyHub(t, e, serverCert(ca.ServerExpired(t, "127.0.0.1")), "")
+	set("--address", expired.URL)
+	check("Zertifikat abgelaufen seit ")
+	// Proxy ohne Hub dahinter.
+	gateway := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "", http.StatusBadGateway)
+	}))
+	gateway.TLS = &tls.Config{Certificates: []tls.Certificate{ca.ServerNow(t, "127.0.0.1")}}
+	gateway.StartTLS()
+	t.Cleanup(gateway.Close)
+	set("--address", gateway.URL)
+	check("Proxy antwortet, aber der Hub dahinter nicht (HTTP 502: Bad Gateway): läuft kephalaion serve")
+	// Der Proxy setzt Host nicht, sondern reicht die äußere Adresse durch:
+	// die Host-Prüfung des Hubs.
+	noHost := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "9.141.8.157")
+	set("--address", noHost.URL)
+	check("Host-Prüfung des Hubs schlägt fehl (HTTP 403: Forbidden: Host \"9.141.8.157\" ist nicht dieser Rechner): " +
+		"setzt der Proxy Host auf die Loopback-Adresse des Hubs (header_up Host {upstream_hostport}, etwa localhost:7434)?")
+	// Über http (ein Tunnel mit anderem Port) bleibt die Meldung ohne Proxy.
+	plain := proxyHub(t, e, nil, "localhost:7434")
+	set("--transport", "http", "--address", plain.URL)
+	check("Hub sicher (http http://", "Host-Prüfung des Hubs schlägt fehl (HTTP 403: Forbidden: Host \"localhost:7434\" "+
+		"nennt nicht den Port, auf dem die Anfrage ankam): ein Tunnel geht nur mit gleichem Port")
+}
+
+// Über serve: ein https-Eintrag mit Test-CA gegen „Proxy plus Hub“ — der
+// Abgleich im Hintergrund holt Zeilen, create über MCP geht durch, und der
+// Anstoß danach bringt das Dokument in die Replica. Mit falscher CA steht die
+// Art des Fehlers einmal im Log, create meldet „nicht erreichbar“, und am
+// Hub kommt nichts an.
+func TestServeHTTPS(t *testing.T) {
+	slow(t, "serve, wartet auf Runden des Abgleichs (sync_interval 1s)")
+	e := newCommEnv(t)
+	ns := nodeStore(t, e.cfg)
+	ca, other := testcert.NewCA(t, "Richtige CA"), testcert.NewCA(t, "Andere CA")
+	var calls atomic.Int32
+	inner := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "")
+	counted := inner.Config.Handler
+	inner.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		counted.ServeHTTP(w, r)
+	})
+	e.addTLSHub(t, "sicher", inner.URL, ca.PEM)
+	e.runIn(t, "Inhalt", "hub", "doc", "put", "team-x", "a.md").want(t, 0)
+	e.run(t, "config", "set", "node", "sync_interval", "1s").want(t, 0)
+	// Nach sync_interval 0 sieht der Abgleich alle syncIdle nach, ob er
+	// wieder an ist; kurz, damit das Einschalten unten nicht 30 s wartet.
+	oldIdle := syncIdle
+	syncIdle = 100 * time.Millisecond
+	t.Cleanup(func() { syncIdle = oldIdle })
+	srv := startServe(t, portZero(t, e.cfg))
+	eventuallyLog(t, srv, "a.md in der Replica von sicher", func() bool { return e.docIs(t, "sicher:team-x", "a.md", "Inhalt") })
+	eventuallyLog(t, srv, "Logzeile zu sicher", func() bool {
+		return strings.Contains(srv.log.String(), "Abgleich sicher: ") && syncStatus(t, ns, "sicher").OKAt != 0
+	})
+
+	endpoint := "http://" + srv.addrs[config.Node] + mcpnode.Path
+	bob := map[string][2]string{"sicher": {"bob", e.tokens["bob"]}}
+	var out mcpnode.WriteOutput
+	mcpTool(t, endpoint, bob, "create", mcpnode.CreateInput{Collection: "sicher:team-x", Name: "neu.md", Content: "über TLS"}, &out)
+	if out.Error != nil || out.Revision == 0 || out.Updated == nil || out.Updated.By != "kleist" {
+		t.Fatalf("create über https: %+v", out)
+	}
+	e.run(t, "hub", "doc", "get", "team-x", "neu.md").want(t, 0, "über TLS")
+	// Der Anstoß ohne Runden: sync_interval 0, dann ein zweites create —
+	// danach hält der angestoßene Abgleich einen neuen Erfolg fest.
+	e.run(t, "config", "set", "node", "sync_interval", "0").want(t, 0)
+	eventuallyLog(t, srv, "Abgleich aus", func() bool {
+		return strings.Contains(srv.log.String(), "Abgleich im Hintergrund aus (sync_interval 0)")
+	})
+	time.Sleep(50 * time.Millisecond)
+	last := syncStatus(t, ns, "sicher").OKAt
+	mcpTool(t, endpoint, bob, "create", mcpnode.CreateInput{Collection: "sicher:team-x", Name: "zwei.md", Content: "zwei"}, &out)
+	if out.Error != nil {
+		t.Fatalf("zweites create: %+v", out)
+	}
+	eventuallyLog(t, srv, "angestoßener Abgleich nach create", func() bool { return syncStatus(t, ns, "sicher").OKAt > last })
+	if !e.docIs(t, "sicher:team-x", "zwei.md", "zwei") {
+		t.Error("zwei.md fehlt in der Replica")
+	}
+
+	// Falsche CA: einmal im Log, Fehlerart unreachable, create nicht
+	// erreichbar; am Hub kommt nichts mehr an.
+	before := calls.Load()
+	e.run(t, "node", "hub", "set", "sicher", "--ca-file", caFile(t, e.dir, "andere.pem", other.PEM)).want(t, 0)
+	e.run(t, "config", "set", "node", "sync_interval", "1s").want(t, 0)
+	eventuallyLog(t, srv, "Fehler in hub_sync", func() bool { return syncStatus(t, ns, "sicher").ErrKind == "unreachable" })
+	rounds(t, ns, "sicher", 2)
+	log := srv.log.String()
+	if n := countLines(log, "Abgleich sicher gescheitert"); n != 1 || !strings.Contains(log, "unknown authority") {
+		t.Errorf("%d Fehlerzeilen:\n%s", n, log)
+	}
+	mcpTool(t, endpoint, bob, "create", mcpnode.CreateInput{Collection: "sicher:team-x", Name: "drei.md", Content: "drei"}, &out)
+	wantWriteCode(t, "falsche CA", out, "unreachable", "Hub sicher nicht erreichbar, nichts gespeichert")
+	e.run(t, "hub", "doc", "get", "team-x", "drei.md").want(t, 1)
+	if n := calls.Load(); n != before {
+		t.Errorf("%d Anfragen kamen trotz falscher CA am Hub an", n-before)
+	}
+	if doc, text := e.docIs(t, "sicher:team-x", "neu.md", "über TLS"), "gelesen wird weiter"; !doc {
+		t.Error(text)
+	}
+	srv.stop(t)
+	if log := srv.log.String(); strings.Contains(log, "keph_") {
+		t.Errorf("Token im Log:\n%s", log)
 	}
 }

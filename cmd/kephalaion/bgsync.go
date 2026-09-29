@@ -21,9 +21,8 @@ var syncIdle = nodestore.DefaultSyncInterval
 // Runde gelesen). Die Einträge liest jede Runde neu aus node.db, node hub
 // add|rm wirkt also ohne Neustart. Jeder Eintrag gleicht in seiner eigenen
 // Goroutine ab: Ein langsamer oder hängender Hub hält die anderen nicht auf;
-// läuft sein Abgleich noch, übergeht ihn die nächste Runde. https und ssh
-// werden übergangen, mit einer Logzeile, wenn der Eintrag zum ersten Mal
-// auftaucht.
+// läuft sein Abgleich noch, übergeht ihn die nächste Runde. ssh wird
+// übergangen, mit einer Logzeile, wenn der Eintrag zum ersten Mal auftaucht.
 //
 // Die Umsetzung des Vertrags wählt wie bei node sync der connector; local
 // bekommt den Hub-Store desselben serve, wenn es ihn gibt.
@@ -61,7 +60,7 @@ type backgroundSync struct {
 	// outcome ist das letzte Ergebnis je Eintrag, nach entry_id; fehlt es,
 	// gab es seit dem Start noch keins.
 	outcome map[string]syncOutcome
-	// skipped hält die Einträge mit https oder ssh, die schon gemeldet sind.
+	// skipped hält die Einträge mit ssh, die schon gemeldet sind.
 	skipped map[string]bool
 	// interval ist der zuletzt gemeldete Abstand, badInterval der zuletzt
 	// gemeldete ungültige Wert; gemeldet wird nur eine Änderung.
@@ -153,7 +152,7 @@ func (b *backgroundSync) round(ctx context.Context) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, h := range hubs {
-		if h.Transport == nodestore.TransportHTTPS || h.Transport == nodestore.TransportSSH {
+		if h.Transport == nodestore.TransportSSH {
 			if !b.skipped[h.EntryID] {
 				b.skipped[h.EntryID] = true
 				b.log.Printf("Abgleich %s: Transport %s wird noch nicht unterstützt; übergangen", h.Name, h.Transport)
@@ -168,10 +167,10 @@ func (b *backgroundSync) round(ctx context.Context) {
 }
 
 // kick stößt den Abgleich eines Eintrags an, ohne zu warten — nach einem
-// Schreibvorgang über MCP. Läuft er schon, folgt ihm einer. https und ssh
-// übergeht er wie die Runden.
+// Schreibvorgang über MCP. Läuft er schon, folgt ihm einer. ssh übergeht er
+// wie die Runden.
 func (b *backgroundSync) kick(h nodestore.Hub) {
-	if h.Transport == nodestore.TransportHTTPS || h.Transport == nodestore.TransportSSH {
+	if h.Transport == nodestore.TransportSSH {
 		return
 	}
 	b.mu.Lock()

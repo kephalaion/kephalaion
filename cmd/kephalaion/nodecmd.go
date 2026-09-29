@@ -3,18 +3,23 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
 	nodestore "github.com/kephalaion/kephalaion/internal/node/store"
@@ -361,6 +366,67 @@ func describeTransport(h nodestore.Hub) string {
 	return h.Transport + " " + h.Address
 }
 
+// explainHubError übersetzt für node hub check, was whoami meldet: einen
+// Zertifikatsfehler (nicht vertraut, falscher Name, abgelaufen), die Antwort
+// eines Proxys, hinter dem der Hub nicht antwortet (502, 503, 504), und die
+// Host-Prüfung des Hubs (403 ohne Vertragsform). Alles andere bleibt, wie es
+// ist. Der Satz sagt, was zu tun ist; die Meldung von Go steht dahinter.
+func explainHubError(h nodestore.Hub, err error) error {
+	host := h.Address
+	if u, perr := url.Parse(h.Address); perr == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	var unknown x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var status *httpapi.StatusError
+	switch {
+	case errors.As(err, &unknown):
+		issuer := "unbekannt"
+		if unknown.Cert != nil {
+			issuer = unknown.Cert.Issuer.String()
+		}
+		hint := "--ca-file?"
+		if h.CA != "" {
+			hint = "passt die CA aus --ca-file?"
+		}
+		return fmt.Errorf("Zertifikat von %s nicht vertraut (Aussteller %s; %s) — %v", host, issuer, hint, unknown)
+	case errors.As(err, &hostErr):
+		return fmt.Errorf("Zertifikat gilt nicht für %s (ausgestellt für %s) — %v", host,
+			joinOrNone(certNames(hostErr.Certificate)), hostErr)
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired && invalid.Cert != nil:
+		if now := time.Now(); now.Before(invalid.Cert.NotBefore) {
+			return fmt.Errorf("Zertifikat gilt erst ab %s — %v", invalid.Cert.NotBefore.UTC().Format(time.RFC3339), invalid)
+		}
+		return fmt.Errorf("Zertifikat abgelaufen seit %s — %v", invalid.Cert.NotAfter.UTC().Format(time.RFC3339), invalid)
+	case errors.As(err, &status):
+		switch status.Status {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return fmt.Errorf("Proxy antwortet, aber der Hub dahinter nicht (%v): läuft kephalaion serve auf dem "+
+				"Rechner des Hubs, und zeigt der Proxy auf sein listen?", status)
+		case http.StatusForbidden:
+			if h.Transport == nodestore.TransportHTTPS {
+				return fmt.Errorf("Host-Prüfung des Hubs schlägt fehl (%v): setzt der Proxy Host auf die "+
+					"Loopback-Adresse des Hubs (header_up Host {upstream_hostport}, etwa localhost:7434)?", status)
+			}
+			return fmt.Errorf("Host-Prüfung des Hubs schlägt fehl (%v): ein Tunnel geht nur mit gleichem Port", status)
+		}
+	}
+	return err
+}
+
+// certNames sind die Namen und Adressen, für die ein Zertifikat gilt.
+func certNames(cert *x509.Certificate) []string {
+	if cert == nil {
+		return nil
+	}
+	names := append([]string{}, cert.DNSNames...)
+	for _, ip := range cert.IPAddresses {
+		names = append(names, ip.String())
+	}
+	return names
+}
+
 // readCAFile liest die Datei aus --ca-file; ein leerer Pfad ist keine CA.
 // Geprüft wird der Inhalt im Node-Store (CheckHub), wie beim Import.
 func readCAFile(path string) (string, error) {
@@ -494,7 +560,7 @@ func (c *command) hubCheck(ctx context.Context, s nodestore.Store, alias string)
 	resp, err := hub.Whoami(ctx, contract.WhoamiRequest{Version: contract.Version,
 		Auth: contract.NodeAuth{Node: h.NodeName, Token: h.Token}})
 	if err != nil {
-		return fmt.Errorf("Hub %s (%s): %w", alias, describeTransport(h), err)
+		return fmt.Errorf("Hub %s (%s): %w", alias, describeTransport(h), explainHubError(h, err))
 	}
 	if _, err := ulid.ParseStrict(resp.HubID); err != nil {
 		return fmt.Errorf("Hub %s nennt als hub_id %q, keine ULID", alias, resp.HubID)

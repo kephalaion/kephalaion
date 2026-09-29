@@ -114,14 +114,14 @@ func TestNodeSyncPerEntryErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runIn(t, tok, "node", "hub", "add", "fern", "--node", "laptop", "--transport", "https",
-		"--address", "https://hub.example.org", "--token-stdin", c).want(t, 0)
+	runIn(t, tok, "node", "hub", "add", "fern", "--node", "laptop", "--transport", "ssh",
+		"--address", "keph@hub.example.org", "--token-stdin", c).want(t, 0)
 	runT(t, "node", "collection", "add", "fern:wissen", c).want(t, 0)
 
 	r := runT(t, "node", "sync", c)
 	r.want(t, 1, "Hub eigen (hub_id "+hubID+"): 1 Seite", "wissen: abgeglichen, 1 Zeile, Revision 1",
 		"Hub fern: gescheitert")
-	if !strings.Contains(r.errOut, "node sync: Hub fern: Transport https wird noch nicht unterstützt") ||
+	if !strings.Contains(r.errOut, "node sync: Hub fern: Transport ssh wird noch nicht unterstützt") ||
 		strings.Contains(r.errOut, "eigen") {
 		t.Errorf("stderr:\n%s", r.errOut)
 	}
@@ -148,15 +148,15 @@ func TestNodeSyncPerEntryErrors(t *testing.T) {
 	}
 	r = runT(t, "node", "sync", c)
 	r.want(t, 1, "node sync: Hub eigen: Transport local verlangt einen Hub in derselben config",
-		"node sync: Hub fern: Transport https wird noch nicht unterstützt")
+		"node sync: Hub fern: Transport ssh wird noch nicht unterstützt")
 	// Die Replica bleibt; status zeigt ihren Stand.
-	runT(t, "status", c).want(t, 0, "hub_id:      "+hubID, "wissen: Revision 1", "fern: https https://hub.example.org")
+	runT(t, "status", c).want(t, 0, "hub_id:      "+hubID, "wissen: Revision 1", "fern: ssh keph@hub.example.org")
 }
 
 func TestNodeSyncUsage(t *testing.T) {
 	isolate(t)
 	runT(t, "node", "--help").want(t, 0, "kephalaion node sync", "node doc list|get")
-	runT(t, "node", "sync", "--help").want(t, 0, "noch nicht unterstützt", "Exit-Code ist dann 1")
+	runT(t, "node", "sync", "--help").want(t, 0, "https", "--ca-file", "noch nicht unterstützt", "Exit-Code ist dann 1")
 	runT(t, "node", "doc", "--help").want(t, 0, "node doc list", "SYSTEM:")
 	runT(t, "node", "doc").want(t, 2, "kephalaion node doc get")
 	runT(t, "node", "doc", "rm").want(t, 2, "Unbekanntes Kommando: node doc rm")

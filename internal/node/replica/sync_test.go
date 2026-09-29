@@ -2,7 +2,11 @@ package replica
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -823,4 +827,23 @@ func TestSyncCreateReplaced(t *testing.T) {
 		t.Errorf("Replica gehört zu %s, erwartet %s", got, h.EntryID)
 	}
 	e.checkMirror("a")
+}
+
+// Ein Zertifikatsfehler und eine Gegenseite ohne TLS zählen als nicht
+// erreicht: Der Handshake scheiterte, bevor etwas abgeschickt war.
+func TestHubKindTLS(t *testing.T) {
+	for name, err := range map[string]error{
+		"unbekannte CA":   &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}},
+		"falscher Name":   &tls.CertificateVerificationError{Err: x509.HostnameError{Host: "h"}},
+		"abgelaufen":      &tls.CertificateVerificationError{Err: x509.CertificateInvalidError{Reason: x509.Expired}},
+		"kein TLS":        tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"},
+		"Klartextantwort": http.ErrSchemeMismatch,
+	} {
+		if kind := hubKind(fmt.Errorf("Hub https://h: %w", err)); kind != KindUnreachable {
+			t.Errorf("%s: %q, erwartet unreachable", name, kind)
+		}
+	}
+	if kind := hubKind(errors.New("irgendwas")); kind != KindHub {
+		t.Errorf("sonstiges: %q", kind)
+	}
 }

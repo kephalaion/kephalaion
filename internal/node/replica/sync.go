@@ -2,9 +2,11 @@ package replica
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"slices"
 
 	"github.com/oklog/ulid/v2"
@@ -175,10 +177,14 @@ func kindOf(err error) ErrorKind {
 	return KindReplica
 }
 
-// hubKind ordnet einen Fehler aus dem Aufruf des Hubs ein.
+// hubKind ordnet einen Fehler aus dem Aufruf des Hubs ein. Ein
+// Zertifikatsfehler und eine Gegenseite ohne TLS zählen als nicht erreicht:
+// Der Handshake scheiterte, der Hub hat nichts gesehen.
 func hubKind(err error) ErrorKind {
 	var ce *contract.Error
 	var ne net.Error
+	var tlsErr *tls.CertificateVerificationError
+	var rec tls.RecordHeaderError
 	switch {
 	case errors.Is(err, contract.ErrUnauthenticated):
 		return KindUnauthenticated
@@ -186,7 +192,8 @@ func hubKind(err error) ErrorKind {
 		return KindVersion
 	case errors.As(err, &ce):
 		return KindHub
-	case errors.As(err, &ne), errors.Is(err, context.DeadlineExceeded):
+	case errors.As(err, &ne), errors.Is(err, context.DeadlineExceeded), errors.As(err, &tlsErr),
+		errors.As(err, &rec), errors.Is(err, http.ErrSchemeMismatch):
 		return KindUnreachable
 	}
 	return KindHub

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"net"
 	"os"
@@ -83,8 +84,8 @@ func (e *commEnv) docIs(t *testing.T, addr, name, content string) bool {
 // noRetry lässt http ohne Wiederholung laufen: Ein nicht erreichbarer Hub
 // kostet sonst Sekunden je Runde.
 func noRetry(t *testing.T) {
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		if err != nil {
 			return nil, err
 		}
@@ -126,8 +127,8 @@ func TestBackgroundSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.runIn(t, extTok, "node", "hub", "add", "extern", "--node", "laptop", "--transport", "https",
-		"--address", "https://hub.example.org", "--token-stdin").want(t, 0)
+	e.runIn(t, extTok, "node", "hub", "add", "extern", "--node", "laptop", "--transport", "ssh",
+		"--address", "keph@hub.example.org", "--token-stdin").want(t, 0)
 	srv := startServe(t, portZero(t, e.cfg))
 
 	// Die erste Runde läuft nach dem Start im Hintergrund und bringt die drei
@@ -155,9 +156,9 @@ func TestBackgroundSync(t *testing.T) {
 	if after := countLines(srv.log.String(), "Abgleich "); after != before {
 		t.Errorf("Runden ohne Änderung loggen:\n%s", srv.log.String())
 	}
-	// https wird übergangen: eine Zeile beim Start, nicht je Runde, und kein
+	// ssh wird übergangen: eine Zeile beim Start, nicht je Runde, und kein
 	// Stand.
-	if n := countLines(srv.log.String(), "Abgleich extern: Transport https wird noch nicht unterstützt; übergangen"); n != 1 {
+	if n := countLines(srv.log.String(), "Abgleich extern: Transport ssh wird noch nicht unterstützt; übergangen"); n != 1 {
 		t.Errorf("%d Zeilen zu extern:\n%s", n, srv.log.String())
 	}
 	if st := syncStatus(t, ns, "extern"); st != (nodestore.SyncStatus{}) {
@@ -311,8 +312,8 @@ func (h heldHub) Sync(ctx context.Context, req contract.SyncRequest) (contract.S
 // holdHTTP hält den ersten Abgleich über http an.
 func holdHTTP(t *testing.T) heldHub {
 	h := heldHub{once: &sync.Once{}, entered: make(chan struct{}), release: make(chan struct{})}
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		if err != nil {
 			return nil, err
 		}
@@ -425,8 +426,8 @@ func TestServeShutdownDeafHub(t *testing.T) {
 	e := newCommEnv(t)
 	ns := nodeStore(t, e.cfg)
 	deaf := deafHub{once: &sync.Once{}, entered: make(chan struct{}), release: make(chan struct{})}
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		if err != nil {
 			return nil, err
 		}
@@ -501,14 +502,14 @@ func (c syncCounter) Sync(ctx context.Context, req contract.SyncRequest) (contra
 
 // Der Anstoß nach einem Schreibvorgang gleicht einen Eintrag außer der Reihe
 // ab, auch ohne Runden (sync_interval 0). Kommt er, während der Abgleich
-// läuft, folgt genau einer — mehrere Anstöße fallen zusammen. https wird
+// läuft, folgt genau einer — mehrere Anstöße fallen zusammen. ssh wird
 // übergangen; nach dem Ende startet nichts mehr.
 func TestBackgroundSyncKick(t *testing.T) {
 	e := newCommEnv(t)
 	var calls atomic.Int32
 	h := holdHTTP(t)
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		if err != nil {
 			return nil, err
 		}
@@ -543,7 +544,7 @@ func TestBackgroundSyncKick(t *testing.T) {
 		t.Errorf("hub_sync: %+v", st)
 	}
 	extern := fern
-	extern.EntryID, extern.Transport = "01ANDERER", nodestore.TransportHTTPS
+	extern.EntryID, extern.Transport = "01ANDERER", nodestore.TransportSSH
 	bg.kick(extern)
 	cancel()
 	bg.kick(fern)

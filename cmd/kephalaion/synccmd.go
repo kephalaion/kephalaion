@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -35,11 +36,14 @@ will, verschwinden aus der Replica. Nennt der Hub eine andere hub_id als
 bisher, oder steht die Replica weiter als der Hub (aus einer Sicherung
 zurückgespielt?), wird sie geleert und von vorn abgeglichen.
 
-Transporte: local (der Hub derselben config, im selben Prozess) und http (ein
-Hub auf diesem Rechner, der mit kephalaion serve lauscht). Bei Fehlern des
-Netzes wiederholt http jede Seite bis zu dreimal. Für https und ssh meldet
-sync „noch nicht unterstützt“. Scheitert ein Eintrag, laufen die übrigen
-weiter; der Exit-Code ist dann 1.
+Transporte: local (der Hub derselben config, im selben Prozess), http (ein
+Hub auf diesem Rechner, der mit kephalaion serve lauscht) und https (ein Hub
+auf einem anderen Rechner hinter einem Reverse-Proxy, der TLS beendet; das
+Zertifikat prüft der Node gegen die System-Roots oder die CA des Eintrags,
+--ca-file). Bei Fehlern des Netzes wiederholen http und https jede Seite bis
+zu dreimal, bei einem Zertifikatsfehler nie. Für ssh meldet sync
+„noch nicht unterstützt“. Scheitert ein Eintrag, laufen die übrigen weiter;
+der Exit-Code ist dann 1.
 
 Optionen:
   --config pfad   Ort der config (siehe kephalaion node init --help)
@@ -66,8 +70,9 @@ Optionen:
 // cmd/kephalaion; internal/node kennt nur contract.Hub. Für local nimmt er
 // hub, wenn der Aufrufer ihn mitgibt (serve mit beiden Rollen), sonst öffnet
 // er den Hub der eigenen config beim ersten Bedarf, einmal für alle
-// Einträge; close schließt nur, was er selbst geöffnet hat. Für http nimmt er
-// den Client aus internal/contract/httpapi. https und ssh gibt es noch nicht.
+// Einträge; close schließt nur, was er selbst geöffnet hat. Für http und
+// https nimmt er den Client aus internal/contract/httpapi — bei https mit der
+// CA des Eintrags, sonst mit den System-Roots. ssh gibt es noch nicht.
 type connector struct {
 	ctx context.Context
 	cfg config.Config
@@ -80,26 +85,32 @@ type connector struct {
 }
 
 // errTransportUnsupported meldet einen Transport, den der connector noch
-// nicht kann (https, ssh).
+// nicht kann (ssh).
 var errTransportUnsupported = errors.New("noch nicht unterstützt")
 
-// connectHTTP liefert die Umsetzung über HTTP; Tests ersetzen sie, etwa um
-// einen unklaren Ausgang herbeizuführen.
-var connectHTTP = func(address string) (contract.Hub, error) {
-	return httpapi.NewClient(address, nil)
+// connectHTTP liefert die Umsetzung über HTTP, mit rootCAs für https (nil:
+// die System-Roots); Tests ersetzen sie, etwa um einen unklaren Ausgang
+// herbeizuführen.
+var connectHTTP = func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+	return httpapi.NewClient(address, rootCAs)
 }
 
 func (l *connector) connect(h nodestore.Hub) (contract.Hub, error) {
 	switch h.Transport {
 	case nodestore.TransportLocal:
-	case nodestore.TransportHTTP:
-		// Die Adresse hat der Node-Store geprüft: http nur auf diesem Rechner.
+	case nodestore.TransportHTTP, nodestore.TransportHTTPS:
+		// Adresse und CA hat der Node-Store geprüft: http nur auf diesem
+		// Rechner, https mit https:// und einer lesbaren CA.
 		if err := nodestore.CheckHub(h, true); err != nil {
 			return nil, err
 		}
-		return connectHTTP(h.Address)
+		pool, err := certPool(h)
+		if err != nil {
+			return nil, err
+		}
+		return connectHTTP(h.Address, pool)
 	default:
-		return nil, fmt.Errorf("Transport %s wird %w; bisher gehen local und http", h.Transport, errTransportUnsupported)
+		return nil, fmt.Errorf("Transport %s wird %w; bisher gehen local, http und https", h.Transport, errTransportUnsupported)
 	}
 	if l.cfg.Section(config.Hub) == nil {
 		return nil, errors.New("Transport local verlangt einen Hub in derselben config, dort ist keiner " +
@@ -116,6 +127,23 @@ func (l *connector) connect(h nodestore.Hub) (contract.Hub, error) {
 		return nil, l.err
 	}
 	return localHub{newLocalHub(l.hub)}, nil
+}
+
+// certPool liefert die CA eines https-Eintrags als Pool, oder nil für die
+// System-Roots.
+func certPool(h nodestore.Hub) (*x509.CertPool, error) {
+	if h.CA == "" {
+		return nil, nil
+	}
+	certs, err := nodestore.ParseCA(h.CA)
+	if err != nil {
+		return nil, fmt.Errorf("Hub %s: %w", h.Name, err)
+	}
+	pool := x509.NewCertPool()
+	for _, c := range certs {
+		pool.AddCert(c)
+	}
+	return pool, nil
 }
 
 // newLocalHub liefert die Seite des Hubs über dem eigenen Store; Tests

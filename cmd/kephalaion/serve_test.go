@@ -140,6 +140,16 @@ func TestServe(t *testing.T) {
 	if code := post(token, token); code != 401 {
 		t.Errorf("Token als Name: HTTP %d", code)
 	}
+	// Hinter einem Proxy: die Adresse des Aufrufers aus X-Forwarded-For im Log.
+	req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/v1/whoami", strings.NewReader("{}"))
+	req.Header.Set(httpapi.HeaderNode, "laptop")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Forwarded-For", "9.141.8.157, 10.0.0.1")
+	if resp, err := http.DefaultClient.Do(req); err != nil {
+		t.Fatal(err)
+	} else {
+		resp.Body.Close()
+	}
 	// Der Hub prüft Host wie der Node: dieser Rechner mit dem eigenen Port.
 	_, port, _ := net.SplitHostPort(srv.addrs[config.Hub])
 	for host, want := range map[string]int{"localhost:" + port: 200, "evil.example:" + port: 403,
@@ -169,7 +179,8 @@ func TestServe(t *testing.T) {
 	srv.stop(t)
 	log := srv.log.String()
 	for _, want := range []string{"hub lauscht auf 127.0.0.1:", "node lauscht auf 127.0.0.1:",
-		"hub POST /v1/whoami 200", "node=laptop", "hub POST /v1/whoami 401", "node=(ungültig)", "beendet"} {
+		"hub POST /v1/whoami 200", "node=laptop", "hub POST /v1/whoami 401", "node=(ungültig)", "beendet",
+		" via=9.141.8.157 node=laptop"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)
 		}
@@ -208,7 +219,7 @@ func TestServeLoopbackOnly(t *testing.T) {
 // schreiben.
 func TestServeHelp(t *testing.T) {
 	runT(t, "serve", "--help").want(t, 0, "/v1/sync und", "/v1/create, /v1/write, /v1/delete, /v1/rename",
-		"create, write, delete und rename über den Hub", "nie ein Inhalt")
+		"create, write, delete und rename über den Hub", "nie ein Inhalt", "Reverse-Proxy", "X-Forwarded-For")
 }
 
 // Beenden per Signal: serve über die Kommandozeile, SIGTERM an den eigenen

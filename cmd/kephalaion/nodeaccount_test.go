@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -226,7 +227,7 @@ func TestAccountRotateBothTransports(t *testing.T) {
 }
 
 // hookHTTP ersetzt connectHTTP für einen Test.
-func hookHTTP(t *testing.T, fn func(address string) (contract.Hub, error)) {
+func hookHTTP(t *testing.T, fn func(address string, rootCAs *x509.CertPool) (contract.Hub, error)) {
 	t.Helper()
 	old := connectHTTP
 	connectHTTP = fn
@@ -252,14 +253,16 @@ func (l lostAnswer) Rotate(ctx context.Context, req contract.RotateRequest) (con
 func TestAccountRotatePending(t *testing.T) {
 	e := newCommEnv(t)
 	apply := true
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		return lostAnswer{Hub: c, apply: apply}, err
 	})
 
 	// Eindeutig gescheitert: Datei bleibt, .pending weg.
 	file := e.tokenFile(t, "bob", e.tokens["alice"])
-	hookHTTP(t, func(address string) (contract.Hub, error) { return httpapi.NewClient(address, nil) })
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		return httpapi.NewClient(address, rootCAs)
+	})
 	e.run(t, "node", "account", "rotate", "fern", "bob", "--token-file", file).want(t, 1, "Token-Datei bleibt unverändert")
 	if readFileToken(t, file) != e.tokens["alice"] {
 		t.Error("Datei verändert")
@@ -270,8 +273,8 @@ func TestAccountRotatePending(t *testing.T) {
 
 	// Unklar, der Hub hat rotiert: beide bleiben, rotate ist gesperrt, check
 	// übernimmt das neue.
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		return lostAnswer{Hub: c, apply: apply}, err
 	})
 	file = e.tokenFile(t, "bob", e.tokens["bob"])
@@ -351,8 +354,8 @@ func TestAccountRotateNoRetry(t *testing.T) {
 	}
 	// Ein Abgleich dagegen wird wiederholt.
 	calls.Store(0)
-	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address, nil)
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
 		if err == nil {
 			c.Backoff = 1
 		}

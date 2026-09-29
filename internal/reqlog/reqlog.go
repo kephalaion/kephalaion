@@ -1,8 +1,9 @@
 // Package reqlog schreibt je HTTP-Anfrage eine Zeile ins Log: Zeit, Rolle,
-// Methode, Pfad, Status, Dauer und die Namen, die der Handler dazu vermerkt
+// Methode, Pfad, Status, Dauer, hinter einem Proxy die Adresse des Aufrufers
+// (via, aus X-Forwarded-For) und die Namen, die der Handler dazu vermerkt
 // (Node, Account). Namen kommen nur ins Log, wenn sie der Namensregel folgen,
 // sonst maskiert (ident.LogName); ein Token steht nie darin — Header und
-// Bodys schreibt reqlog nicht.
+// Bodys schreibt reqlog sonst nicht.
 //
 // Das Paket ist neutral und kennt weder Hub noch Node.
 package reqlog
@@ -11,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -69,7 +71,10 @@ func (l *Logger) Printf(format string, a ...any) {
 }
 
 // Middleware schreibt nach next eine Zeile je Anfrage; role steht vorn
-// (hub, node).
+// (hub, node). Trägt die Anfrage X-Forwarded-For, steht die erste Adresse
+// daraus als via dabei: Hinter einem Reverse-Proxy ist der Aufrufer sonst
+// immer Loopback. Der Dienst nimmt nur Verbindungen von Loopback an; ein
+// gefälschter Header eines lokalen Prozesses ist nur eine falsche Logzeile.
 func (l *Logger) Middleware(role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := l.now()
@@ -82,9 +87,23 @@ func (l *Logger) Middleware(role string, next http.Handler) http.Handler {
 		if notes != "" {
 			notes = " " + notes
 		}
-		l.Printf("%s %s %s %d %s%s", role, r.Method, r.URL.EscapedPath(), rec.status,
-			l.now().Sub(start).Round(time.Microsecond), notes)
+		l.Printf("%s %s %s %d %s%s%s", role, r.Method, r.URL.EscapedPath(), rec.status,
+			l.now().Sub(start).Round(time.Microsecond), via(r), notes)
 	})
+}
+
+// via liefert " via=<adresse>" aus X-Forwarded-For (die erste Adresse),
+// leer ohne den Header; was keine IP-Adresse ist, wird maskiert.
+func via(r *http.Request) string {
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return ""
+	}
+	first, _, _ := strings.Cut(xff, ",")
+	if ip := net.ParseIP(strings.TrimSpace(first)); ip != nil {
+		return " via=" + ip.String()
+	}
+	return " via=(ungültig)"
 }
 
 // recorder merkt sich den Status und reicht Flush weiter, damit gestreamte
