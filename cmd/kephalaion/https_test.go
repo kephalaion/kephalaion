@@ -242,8 +242,10 @@ func (e *commEnv) addTLSHub(t *testing.T, alias, address, caPEM string) {
 // node hub check über https: mit der richtigen CA erreichbar; sonst nennt es
 // den Grund im Klartext — CA nicht vertraut, falscher Name, abgelaufen, der
 // Proxy ohne Hub dahinter (502), die Host-Prüfung des Hubs (403). Am Hub
-// kommt bei einem Zertifikatsfehler nichts an.
+// kommt bei einem Zertifikatsfehler nichts an. Ohne Wiederholung: Der
+// 502-Fall kostete sonst 3,5 s Backoff, an der Meldung ändert das nichts.
 func TestNodeHubCheckHTTPS(t *testing.T) {
+	noRetry(t)
 	e := newCommEnv(t)
 	ca, other := testcert.NewCA(t, "Richtige CA"), testcert.NewCA(t, "Andere CA")
 	good := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "")
