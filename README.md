@@ -201,7 +201,8 @@ kephalaion status       # Collections, Accounts und Nodes am Hub, Hubs und Colle
 
 Ohne `--create` trägt `node hub add` einen Node ein, den der Hub schon kennt: Name mit
 `--node`, Token über die Standardeingabe (`--token-stdin`). Ein Hub auf einem anderen Rechner
-ist `https` (`--address https://<host>`): TLS beendet ein Reverse-Proxy auf seinem Rechner,
+ist `https` (`--address https://<host>[/<pfad>]`, der Pfad ist der Präfix am Proxy, etwa
+`/kephhub`): TLS beendet ein Reverse-Proxy auf seinem Rechner,
 das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA (`--ca-file
 <pfad>`, gespeichert wird der Inhalt); `node hub check` erklärt Zertifikatsfehler, einen Proxy
 ohne Hub dahinter und die Host-Prüfung — Aufbau in

@@ -403,7 +403,10 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 ## HTTP
 
 - **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/sync`,
-  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`. Die Fassung im Pfad ist die Fassung
+  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename` — relativ zur Adresse des
+  Hub-Eintrags: Trägt sie einen Pfad (`https://host/kephhub`), ist er ein Präfix, der Client
+  schickt `…/kephhub/v1/whoami`, und ein Proxy davor nimmt ihn weg (Caddy: `handle_path`);
+  der Hub selbst sieht immer `/v1/…`. Die Fassung im Pfad ist die Fassung
   des Vertrags. Eine fremde Fassung (`/v2/…`, auch `/v0/…`) beantwortet der Hub mit 404 und
   `unsupported_version`, vor der Anmeldung; ein unbekannter Vorgang ist 404 mit `invalid`, noch
   vor dem Lesen des Bodys; eine andere Methode als POST 405.

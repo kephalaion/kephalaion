@@ -61,8 +61,10 @@ Transporte:
   http    nur auf diesem Rechner: http://localhost:<port> (auch 127.0.0.1,
           [::1]), ein Hub, der mit kephalaion serve lauscht — Klartext, deshalb
           nur Loopback
-  https   https://<host>[:<port>], ein Hub auf einem anderen Rechner hinter
-          einem Reverse-Proxy, der TLS beendet (docs/installation.md). Das
+  https   https://<host>[:<port>][/<pfad>], ein Hub auf einem anderen Rechner
+          hinter einem Reverse-Proxy, der TLS beendet (docs/installation.md).
+          Ein Pfad ist der Präfix, unter dem der Proxy den Hub anbietet (etwa
+          /kephhub); die Vorgänge liegen dann unter <adresse>/v1/…. Das
           Zertifikat prüft der Node gegen die System-Roots oder, mit
           --ca-file, gegen die dort genannte CA; scheitert die Prüfung, geht
           kein Token hinaus. Kein Client-Zertifikat
@@ -410,6 +412,15 @@ func explainHubError(h nodestore.Hub, err error) error {
 					"Loopback-Adresse des Hubs (header_up Host {upstream_hostport}, etwa localhost:7434)?", status)
 			}
 			return fmt.Errorf("Host-Prüfung des Hubs schlägt fehl (%v): ein Tunnel geht nur mit gleichem Port", status)
+		case http.StatusNotFound:
+			// Der Hub antwortet auf einen falschen Pfad mit invalid (das ist
+			// contract.ErrUnknownOperation, kein StatusError); ein 404 ohne
+			// Vertragsform kommt vom Proxy.
+			return fmt.Errorf("der Proxy kennt den Pfad nicht (%v): stimmt der Präfix in der Adresse "+
+				"(etwa https://host/kephhub), und steht die Route zum Hub im Proxy?", status)
+		case http.StatusUnauthorized:
+			return fmt.Errorf("eine Anmeldung des Proxys, nicht der Hub (%v): die Route zum Hub muss ohne "+
+				"forward_auth stehen — Nodes weisen sich mit dem Token beim Hub aus", status)
 		}
 	}
 	return err

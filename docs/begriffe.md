@@ -85,7 +85,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   `local` (Funktionsaufruf im selben Prozess, mit denselben Prüfungen). Dazu `http` ohne TLS,
   nur für `localhost` — zum Testen des HTTP-Wegs auf einem Rechner.
 - **https** — Transport zu einem Hub auf einem anderen Rechner: `--address
-  https://<host>[:<port>]`. Der Node prüft das Zertifikat gegen die System-Roots oder, mit
+  https://<host>[:<port>][/<pfad>]`; ein Pfad ist der Präfix, unter dem der Proxy den Hub
+  anbietet (`/kephhub`), die Vorgänge liegen unter `<adresse>/v1/…`. Der Node prüft das
+  Zertifikat gegen die System-Roots oder, mit
   `--ca-file`, gegen die **ca** des Eintrags; TLS mindestens 1.2, HTTP/1.1, kein
   Client-Zertifikat — die Identität bleibt das Token. Scheitert die Prüfung, geht kein Token
   hinaus; der Abgleich hält das als `unreachable` fest, `node hub check` nennt den Grund.

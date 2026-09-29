@@ -238,3 +238,29 @@ func TestTLSRefused(t *testing.T) {
 		t.Errorf("Verbindung abgelehnt: %v", err)
 	}
 }
+
+// Ein Pfad in der Adresse ist ein Präfix: Der Client schickt
+// <adresse>/v1/<vorgang>, ein Proxy davor nimmt den Präfix weg.
+func TestClientPathPrefix(t *testing.T) {
+	hub := &echoHub{}
+	var seen atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.URL.Path)
+		http.StripPrefix("/kephhub", NewHandler(hub)).ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv.URL+"/kephhub/")
+	resp, err := c.Whoami(context.Background(), contract.WhoamiRequest{Version: 1, Auth: auth})
+	if err != nil || resp.Node != "laptop" {
+		t.Fatalf("whoami hinter Präfix: %+v, %v", resp, err)
+	}
+	if p := seen.Load(); p != "/kephhub/v1/whoami" {
+		t.Errorf("Pfad am Server %v, erwartet /kephhub/v1/whoami", p)
+	}
+	// Ohne Präfix im Eintrag landet die Anfrage daneben: 404 mit invalid,
+	// also ein unbekannter Vorgang aus Sicht des Clients.
+	c = newClient(t, srv.URL)
+	if _, err := c.Whoami(context.Background(), contract.WhoamiRequest{Version: 1, Auth: auth}); err == nil {
+		t.Error("whoami ohne Präfix gelang")
+	}
+}

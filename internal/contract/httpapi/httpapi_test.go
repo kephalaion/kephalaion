@@ -246,9 +246,16 @@ func TestParsePathAndClientAddress(t *testing.T) {
 			t.Errorf("parsePath(%q) = %d, %q, %v", p, v, op, ok)
 		}
 	}
-	for _, bad := range []string{"localhost:7434", "ftp://x", "http://", "http://x/pfad", "http://u:p@x"} {
+	for _, bad := range []string{"localhost:7434", "ftp://x", "http://", "http://x/pfad?x=1", "http://x/#f", "http://u:p@x"} {
 		if _, err := NewClient(bad, nil); err == nil {
 			t.Errorf("NewClient(%q) angenommen", bad)
+		}
+	}
+	for addr, base := range map[string]string{"http://x": "http://x", "http://x/": "http://x", "https://x:8443/kephhub": "https://x:8443/kephhub",
+		"https://x/kephhub/": "https://x/kephhub", "https://x/a/b//": "https://x/a/b"} {
+		c, err := NewClient(addr, nil)
+		if err != nil || c.base != base {
+			t.Errorf("NewClient(%q): base %q, %v; erwartet %q", addr, c.base, err, base)
 		}
 	}
 }

@@ -303,6 +303,12 @@ https://9.141.8.157 {
 
 - Nur `/v1/*` geht zum Hub, alles andere ist 404 — der Proxy zeigt nach außen nichts vom
   Hub, was der Vertrag nicht kennt.
+- Bedient der Proxy schon andere Dienste unter demselben Namen (eine Anmeldung per
+  `forward_auth` davor, eine Webseite), bekommt der Hub einen **Präfix**: statt `handle
+  /v1/*` ein `handle_path /kephhub/*` mit demselben Inhalt, vor dem Sammel-`handle` und ohne
+  `forward_auth` (Nodes sind Maschinen und weisen sich per Token aus). `handle_path` nimmt
+  `/kephhub` weg, der Hub sieht `/v1/…`; der Node trägt die Adresse mit dem Präfix ein
+  (`--address https://<name>/kephhub`), der Client hängt `/v1/<vorgang>` an.
 - `header_up Host {upstream_hostport}` schickt `Host: localhost:7434`; genau das verlangt der
   Hub (`vertrag.md`, „Host“). Ohne die Zeile antwortet er 403, und `node hub check` sagt es.
 - `request_body max_size 8MiB` liegt über den 7 MiB, die der Hub für einen Schreibvorgang
@@ -366,8 +372,10 @@ kephalaion node sync vm
 `node hub check` nennt, was schiefgeht: „Zertifikat von … nicht vertraut (Aussteller …;
 --ca-file?)“, „Zertifikat gilt nicht für …“, „Zertifikat abgelaufen seit …“, „Proxy
 antwortet, aber der Hub dahinter nicht (HTTP 502)“ (läuft `kephalaion serve`?),
-„Host-Prüfung des Hubs schlägt fehl (HTTP 403)“ (fehlt `header_up Host`?). Der Port 443 ist
-in der Adresse weglassbar. Am Hub steht jede Anfrage im Log mit der Adresse des Aufrufers aus
+„Host-Prüfung des Hubs schlägt fehl (HTTP 403)“ (fehlt `header_up Host`?), „der Proxy kennt
+den Pfad nicht (HTTP 404)“ (stimmt der Präfix, steht die Route?), „eine Anmeldung des
+Proxys, nicht der Hub (HTTP 401)“ (die Route steht hinter `forward_auth`; eine Weiterleitung
+zur Anmeldung meldet der Client als 3xx). Der Port 443 ist in der Adresse weglassbar. Am Hub steht jede Anfrage im Log mit der Adresse des Aufrufers aus
 `X-Forwarded-For` (`via`), ohne Token; im Caddy-Log stehen 200 auf `/v1/…` und 404 daneben.
 
 ### Ansible

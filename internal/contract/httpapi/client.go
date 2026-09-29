@@ -44,23 +44,29 @@ type Client struct {
 var _ contract.Hub = (*Client)(nil)
 
 // NewClient liefert einen Client für den Hub unter address (http://… oder
-// https://…, ohne Pfad). Welche Adressen ein Node benutzen darf, prüft er
-// selbst; der Client nimmt, was er bekommt. Bei https prüft er das Zertifikat
+// https://…, wahlweise mit einem Pfad als Präfix: Hinter einem Proxy, der
+// mehrere Dienste bedient, liegt der Hub etwa unter https://host/kephhub, und
+// der Proxy nimmt den Präfix weg; die Vorgänge stehen dann unter
+// <adresse>/v1/<vorgang>). Keine Query, kein User. Welche Adressen ein Node
+// benutzen darf, prüft er selbst; der Client nimmt, was er bekommt. Bei
+// https prüft er das Zertifikat
 // des Hubs gegen rootCAs, ohne (nil) gegen die System-Roots; TLS mindestens
 // 1.2, kein Client-Zertifikat. Gesprochen wird HTTP/1.1, auch über TLS:
 // HTTP/2 brächte hier nichts, und seine Fehler sähen anders aus.
 func NewClient(address string, rootCAs *x509.CertPool) (*Client, error) {
 	u, err := url.Parse(address)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
-		return nil, fmt.Errorf("Adresse %q: erwartet http://host:port oder https://host:port", address)
+		u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return nil, fmt.Errorf("Adresse %q: erwartet http://host[:port][/pfad] oder https://host[:port][/pfad]", address)
 	}
+	// Der Pfad ist ein Präfix ohne Schrägstrich am Ende; /v1/… kommt dahinter.
+	u.Path, u.RawPath = strings.TrimRight(u.Path, "/"), ""
 	// Die Standard-Transportschicht bittet von selbst um gzip und packt aus.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
 	tr.ForceAttemptHTTP2 = false
 	return &Client{
-		base: strings.TrimSuffix(u.String(), "/"),
+		base: u.String(),
 		// Keiner Weiterleitung folgen: Go striche bei fremdem Host zwar
 		// Authorization, schickte aber den Body mit — bei rotate samt dem
 		// Token des Accounts. Die 3xx-Antwort selbst ist ein Fehler.

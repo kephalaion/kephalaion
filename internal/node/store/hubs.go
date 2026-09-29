@@ -131,14 +131,15 @@ func CheckHub(h Hub, hubInConfig bool) error {
 		}
 	case TransportHTTP:
 		u, err := url.Parse(h.Address)
-		if err != nil || u.Scheme != "http" || u.Host == "" || !localHosts[u.Hostname()] {
+		if err != nil || u.Scheme != "http" || u.Host == "" || !localHosts[u.Hostname()] || !plainURL(u) {
 			return fmt.Errorf("Hub %s: Transport http verlangt eine Adresse http:// auf localhost, "+
-				"127.0.0.1 oder ::1, etwa http://localhost:8080 (sonst https)", h.Name)
+				"127.0.0.1 oder ::1, etwa http://localhost:8080, ohne Query (sonst https)", h.Name)
 		}
 	case TransportHTTPS:
 		u, err := url.Parse(h.Address)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			return fmt.Errorf("Hub %s: Transport https verlangt eine Adresse https://…", h.Name)
+		if err != nil || u.Scheme != "https" || u.Host == "" || !plainURL(u) {
+			return fmt.Errorf("Hub %s: Transport https verlangt eine Adresse https://host[:port][/pfad], "+
+				"ohne Query und ohne User", h.Name)
 		}
 	case TransportSSH:
 		if h.Address == "" {
@@ -150,6 +151,14 @@ func CheckHub(h Hub, hubInConfig bool) error {
 		return fmt.Errorf("Hub %s: unbekannter Transport %q; erlaubt sind local, http, https, ssh", h.Name, h.Transport)
 	}
 	return nil
+}
+
+// plainURL sagt, ob eine Hub-Adresse nur aus Schema, Host und wahlweise
+// einem Pfad besteht — der Pfad ist ein Präfix, hinter dem der Client
+// /v1/<vorgang> anhängt (ein Proxy nimmt ihn weg). Query, Fragment und User
+// haben in einer Hub-Adresse nichts verloren.
+func plainURL(u *url.URL) bool {
+	return u.RawQuery == "" && u.Fragment == "" && u.User == nil
 }
 
 // ParseCA liest die Zertifikate einer CA aus PEM-Text: mindestens ein Block
