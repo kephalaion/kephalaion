@@ -580,11 +580,12 @@ WSL aus einem Terminal der WSL — dann landet sie im VS-Code-Server der WSL, wo
 muss (`extensionKind: workspace`):
 
 ```sh
-cd vscode && npx --yes @vscode/vsce package --skip-license
-code --install-extension kephalaion-0.0.5.vsix
+make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie mit code
 ```
 
-Danach „Developer: Reload Window“.
+Danach „Developer: Reload Window“. Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce`
+kommt per `npx`). Auf einem SSH-Remote oder in einem Devcontainer gehört sie ebenso dorthin,
+wo der Node läuft: dort aus einem Terminal von VS Code installieren.
 
 - **Einrichtung braucht sie keine.** Die Adresse des Nodes liest sie aus `listen` im
   Abschnitt `node:` der config (Einstellung `kephalaion.nodeUrl` zum Überschreiben), Account
@@ -618,11 +619,12 @@ Go in der Version aus der `toolchain`-Zeile von `go.mod`; ein älteres Go lädt 
 nach.
 
 ```sh
-make check        # gofmt, go vet, alle Tests, Syntax von install.sh
-make check-quick  # dasselbe ohne die langsamen Tests (go test -short), für Zwischenstände
-make dist         # alle vier Plattformen und SHA256SUMS nach dist/
-make dev-install  # diese Plattform bauen, ~/.local/bin/kephalaion ersetzen, laufenden Dienst neu starten
-make              # alle Targets
+make check          # gofmt, go vet, alle Tests, Syntax von install.sh
+make check-quick    # dasselbe ohne die langsamen Tests (go test -short), für Zwischenstände
+make dist           # alle vier Plattformen und SHA256SUMS nach dist/
+make dev-install    # diese Plattform bauen, ~/.local/bin/kephalaion ersetzen, laufenden Dienst neu starten
+make vscode-install # VS-Code-Erweiterung bauen und mit code installieren (braucht Node.js)
+make                # alle Targets
 ```
 
 CI prüft jeden Push auf `dev` und `main` auf Linux (samt Cross-Build aller vier Plattformen
