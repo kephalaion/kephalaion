@@ -32,9 +32,10 @@ User eines Linux-Rechners (System-Unit aus `service unit --system`, von Hand ode
 Ansible) — global bisher nur für User auf dem Rechner selbst, ohne Devcontainer. Die config
 wird ohne Angabe gefunden, `upgrade --check [--json]` und `whoami` sagen, ob es eine neue
 Version gibt und wie das Upgrade geht; ein CI-Job für macOS ist gebaut, derzeit aber
-abgeschaltet. Noch nicht gebaut: `https`
-und `ssh`, Suche, die übrigen Werkzeuge zum Schreiben (`create_numbered`, Stufe 3) und das
-Lauschen auf der Docker-Bridge. Die Überlegungen
+abgeschaltet. Seit Task 018 erreicht ein Node einen Hub auf einem anderen Rechner über
+`https`: TLS beendet ein Reverse-Proxy auf dem Rechner des Hubs, der Hub bleibt auf Loopback
+(„Kommunikation“). Noch nicht gebaut: `ssh`, Suche, die übrigen Werkzeuge zum Schreiben
+(`create_numbered`, Stufe 3) und das Lauschen auf der Docker-Bridge. Die Überlegungen
 entstanden in k-playbook und sind am 2026-09-25 hierher umgezogen.
 Begriffe nach [`begriffe.md`](begriffe.md): Sie sind englisch, die Dokumentation ist deutsch.
 
@@ -162,7 +163,8 @@ wo ihre Datenbank liegt und wo ihr Dienst lauscht — mehr nicht:
 hub:                          # nur auf dem Rechner des Hubs
   db: sqlite:///home/kleist/.local/share/kephalaion/hub.db
   # später: postgres://keph@db.intern/kephalaion
-  listen: 127.0.0.1:7434      # für Nodes anderer Rechner später 0.0.0.0:7434 (mit https)
+  listen: 127.0.0.1:7434      # bleibt Loopback; Nodes anderer Rechner kommen über einen
+                              # Reverse-Proxy auf diesem Rechner (https, Task 018)
 node:
   db: sqlite:///home/kleist/.local/share/kephalaion/node.db
   listen: 127.0.0.1:7433      # MCP für Clients
@@ -172,11 +174,13 @@ node:
 - **`listen` — entschieden am 2026-09-25, zuvor in `settings` vorgesehen:** wo `serve` für
   diese Rolle lauscht. Es gehört zum „wo“ wie der Ort der Datenbank, und `serve` braucht es
   beim Start. Standard Node `127.0.0.1:7433`, Hub `127.0.0.1:7434`; `init` schreibt den Wert
-  sichtbar in die Datei, `--listen` weicht ab. Nach außen lauscht nur, wer es ausdrücklich
-  einträgt. **Bis `https` und `ssh` gebaut sind, lauscht `serve` für beide Rollen nur auf
+  sichtbar in die Datei, `--listen` weicht ab. **`serve` lauscht für beide Rollen nur auf
   Loopback** (`127.0.0.1`, `::1`, `localhost`) und bricht sonst beim Start ab — Klartext-HTTP
-  verlässt den Rechner nicht (Task 005). Ein Node-Eintrag mit `http` für den Test auf einem
-  Rechner nennt die Adresse des Hubs: `http://localhost:7434`.
+  verlässt den Rechner nicht (Task 005). Das bleibt auch mit `https`: Nodes anderer Rechner
+  erreichen den Hub über einen Reverse-Proxy auf seinem Rechner, der TLS beendet und an
+  `127.0.0.1:7434` weiterreicht (entschieden am 2026-09-28, Task 018; siehe „Kommunikation“).
+  Ein Node-Eintrag mit `http` für den Test auf einem Rechner nennt die Adresse des Hubs:
+  `http://localhost:7434`.
 - **Alles andere steht in der Datenbank der Rolle** und wird nur über die CLI geändert:
   die Hubs eines Nodes mit Transport und Token, die Collections, die ein Node haben will, am
   Hub Collections, Nodes und Accounts. Eine Quelle, eine Prüfung.
@@ -199,12 +203,14 @@ node:
   (siehe „Speicherung“); `node.db`
   selbst hält die Einstellungen des Nodes und in einer eigenen Tabelle `hubs` seine Hubs:
   Name (den der Node als Alias vergibt), den Namen, unter dem der Hub den Node kennt
-  (`node_name`), Transport, Adresse, Token, SSH-Schlüssel, `hub_id` (eine Kopie, maßgeblich
+  (`node_name`), Transport, Adresse, Token, bei `https` die CA (der Text aus `--ca-file`,
+  nicht der Pfad; leer heißt System-Roots), SSH-Schlüssel, `hub_id` (eine Kopie, maßgeblich
   ist die in der Replica). `node hub rm` löscht die Replica mit, `config import` die Replicas
   der Aliase, die im Export fehlen.
 
-- **Zwei Umsetzungen des Vertrags:** über HTTP — direkt per TLS oder durch SSH getunnelt, das
-  ist derselbe Client mit anderem Verbindungsaufbau — und lokal als Funktionsaufruf. Der Node
+- **Zwei Umsetzungen des Vertrags:** über HTTP — per TLS zu einem Reverse-Proxy vor dem Hub
+  (`https`) oder durch SSH getunnelt (`ssh`, geparkt), das ist derselbe Client mit anderem
+  Verbindungsaufbau — und lokal als Funktionsaufruf. Der Node
   kennt nur die Schnittstelle, nicht die Umsetzung. `transport: local` ist ein Eintrag in der
   Liste der Hubs wie jeder andere; daneben kann derselbe Node entfernte Hubs bedienen.
 - **Der lokale Weg prüft genauso.** Auch beim Funktionsaufruf trägt der Node sein eigenes
@@ -219,8 +225,8 @@ node:
   Leser in der Datei des einzigen Schreibers. Die doppelten Daten sind wenige Megabyte. Der
   Abgleich ist lokal sofort da; statt eines Ereignisstroms genügt ein Signal im Prozess.
 - **Der Hub bleibt extern erreichbar**, wenn eingestellt — für Nodes anderer Rechner —, und
-  wird zugleich lokal direkt aufgerufen. Extern erst mit `https` oder `ssh`; bis dahin nur
-  Loopback.
+  wird zugleich lokal direkt aufgerufen. Extern über einen Reverse-Proxy auf seinem Rechner
+  (`https`, Task 018); der Hub selbst bleibt auf Loopback, `ssh` kommt später.
 - **Die Kopplung ist gewollt.** Ein Absturz oder Update betrifft beide Rollen; im Code bleiben
   sie getrennt: Der Hub kennt den Node nicht, der Node kennt den Hub nur über die
   Schnittstelle.
@@ -295,16 +301,28 @@ Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung i
 MCP; es ist zustandslos, die Revision trägt der Node. Gebaut ist es als `POST /v1/whoami`,
 `/v1/rotate`, `/v1/sync` und — seit Task 014 — `/v1/create`, `/v1/write`, `/v1/delete`,
 `/v1/rename` (Einzelheiten in [`vertrag.md`](vertrag.md), „HTTP“), der Node meldet
-sich mit `X-Keph-Node` und `Authorization: Bearer <token>` an. Benutzbar ist es bisher nur als
-Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs auf einem Rechner.
+sich mit `X-Keph-Node` und `Authorization: Bearer <token>` an. Auf einem Rechner ist es
+Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem anderen Rechner
+`https`.
 
-- **Direkt über TLS.** Neue Revisionen meldet der Hub über einen Ereignisstrom (Server-Sent
-  Events) oder Long-Polling; das Delta holt der Node danach selbst.
-- **Über SSH.** Der Node hält eine stehende SSH-Verbindung (Go-Bibliothek, kein externes
-  `ssh`), mit Keepalive und Neuaufbau, und tunnelt dasselbe HTTP zum Hub, der dann nur auf
-  `localhost` lauscht.
+- **Über einen Reverse-Proxy (entschieden am 2026-09-28, gebaut in Task 018).** Zuerst hieß
+  es hier „direkt über TLS“: der Hub lauscht nach außen und trägt Zertifikat und Schlüssel.
+  Stattdessen bleibt der Hub auf Loopback und ohne TLS-Code; nach außen spricht ein
+  Reverse-Proxy auf demselben Rechner (Caddy), der TLS beendet und an `localhost:7434`
+  weiterreicht — mit `Host` auf diese Adresse gesetzt, damit die Loopback-Prüfung des Hubs
+  gilt. Zertifikate, ACME und Härtung liegen so bei einem dafür gebauten Werkzeug, der
+  Hub-Code bleibt klein, und ein älterer Hub bedient jeden Node, der `https` kann. Die
+  Node-Seite prüft das Zertifikat gegen die System-Roots oder eine mitgegebene CA
+  (`--ca-file`), TLS mindestens 1.2, kein Client-Zertifikat; scheitert die Prüfung, geht kein
+  Token hinaus. Die Zertifikatswege und das Caddyfile stehen in
+  [`installation.md`](installation.md). Neue Revisionen meldet der Hub später über einen
+  Ereignisstrom (Server-Sent Events) oder Long-Polling; das Delta holt der Node danach selbst.
+- **Über SSH (geparkt).** Der Node hält eine stehende SSH-Verbindung (Go-Bibliothek, kein
+  externes `ssh`), mit Keepalive und Neuaufbau, und tunnelt dasselbe HTTP zum Hub auf
+  Loopback. Derselbe Anschluss wie `https` (`connector` in `cmd/kephalaion`); Entwurf in
+  k-playbook-local.
 - **Die Identität ist immer das Token.** Der Transport verschlüsselt und bringt durch die
-  Firewall, mehr nicht. Ein SSH-Schlüssel ist kein zweites Rechtemodell.
+  Firewall, mehr nicht. Ein SSH-Schlüssel ist kein zweites Rechtemodell, eine CA auch nicht.
 
 **k-playbook ↔ Kephalaion.** Zusammenlegen ist nicht sinnvoll: k-playbook wird je Projekt
 installiert, Kephalaion je Rechner, und Kephalaion ist auch ohne k-playbook nützlich.
@@ -551,7 +569,7 @@ der Abstand bleibt dann als Rückfallebene.
 Gebaut in Task 008: Der Abstand ist `sync_interval` in den `settings` des Nodes (Go-Dauer,
 mindestens `1s`, `0` schaltet ab), gesetzt mit `kephalaion config set node sync_interval 1m`
 und je Runde gelesen. Die Hub-Einträge liest jede Runde neu; jeder Eintrag gleicht für sich
-ab, ein hängender Hub hält die anderen nicht auf; `https` und `ssh` werden übergangen. `local`
+ab, ein hängender Hub hält die anderen nicht auf; `ssh` wird übergangen. `local`
 nimmt den Hub desselben `serve`. Das Log nennt einen Abgleich nur, wenn Zeilen kamen, einen
 Fehler beim ersten Mal nach dem Start, beim Übergang von Erfolg zu Fehler und wenn sich seine
 Art ändert, und die Erholung. Der Stand je Hub steht in `hub_sync` (letzter Erfolg, letzter
@@ -764,7 +782,7 @@ Token in der Nutzerkonfiguration mit engen Rechten, nie im Repository.
   kann; der Node gleicht danach ab, und der Aufrufer sieht nach. Früher stand hier, der Node
   wiederhole mit wachsendem Abstand und melde danach „nichts gespeichert“ — das lässt sich ohne
   einen Schlüssel, an dem der Hub eine Wiederholung erkennt, nicht halten. Ein solcher
-  Schlüssel kommt, wenn überhaupt, mit `https` und `ssh`.
+  Schlüssel kommt, wenn überhaupt, später; `https` (Task 018) hat ihn nicht gebracht.
 
 ## Authentifizierung
 
@@ -786,7 +804,7 @@ Geheimnisse. Unbekannter Name und falsches Token bekommen dieselbe Antwort.
 | Strecke | Wie oft | Schutz |
 |---|---|---|
 | MCP-Konfiguration des Clients → Node | je Anfrage, als Header | nur `127.0.0.1`, Datei mit `0600`; die KI sieht es nicht |
-| Node → Hub | je Vorgang in fremdem Namen | TLS oder SSH; bisher nur `http` auf Loopback |
+| Node → Hub | je Vorgang in fremdem Namen | auf einem Rechner `local` oder `http` auf Loopback; zu einem anderen `https`: TLS bis zum Reverse-Proxy auf dem Rechner des Hubs (Zertifikat gegen System-Roots oder `--ca-file`), dahinter Loopback |
 
 Das Token steht nie in einem Tool-Call.
 
@@ -904,7 +922,7 @@ Dienste, mehrere Ports, mehrere MCP-Einträge je Client.
 - **Der Node ist auf jedem Hub ein eigener Eintrag** in `nodes`, mit eigenem Token und
   eigener Rotation.
   Seine Datenbank führt eine Liste von Hubs: Name, sein eigener Name am Hub, Adresse, Transport
-  (`https`, `http`, `ssh`, `local`), SSH-Schlüssel, Token.
+  (`https`, `http`, `ssh`, `local`), CA bei `https`, SSH-Schlüssel, Token.
 - **Abgleich je Hub.** Ist ein Hub nicht erreichbar, laufen die anderen weiter.
 - **Ein Client trägt mehrere Paare aus Name und Token**, je Hub höchstens eins. Die Suche
   geht über alle Collections, die diese Accounts lesen dürfen.
@@ -1259,6 +1277,7 @@ CREATE TABLE hubs (
   address     TEXT,                    -- leer bei local
   token       TEXT,                    -- das eigene Token des Nodes bei diesem Hub
   ssh_key     TEXT,
+  ca          TEXT,                    -- bei https die CA als PEM-Text, sonst System-Roots
   hub_id      TEXT                     -- Kopie; maßgeblich ist db_info der Replica
 );
 CREATE TABLE hub_collections (         -- was der Node von diesem Hub haben will
@@ -1759,7 +1778,7 @@ Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und
   und Verzeichnis zugleich (`path_conflict`), nicht gefunden (`not_found`), Recht fehlt
   (`forbidden`), nicht lesbar (`not_readable`). Die Werkzeuge melden dazu `unreachable` (Hub
   nicht erreicht, nichts gespeichert), `outcome_unknown` (Ausgang unklar), `unsupported` (der
-  Hub kennt den Vorgang nicht, oder `https`/`ssh`; nichts gespeichert) und `internal` (ein
+  Hub kennt den Vorgang nicht, oder `ssh`; nichts gespeichert) und `internal` (ein
   Fehler des Nodes selbst — `node.db`, Replica nicht lesbar; nichts abgeschickt).
   `account_unauthenticated` des Hubs wird am Node `not_readable`, `unauthenticated` und
   `unsupported_version` gehen durch. Form: `isError`, die Meldung als Text und
@@ -1866,7 +1885,9 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 - **Persönliche Verzeichnisse:** vorgemerkt (siehe „Collections, Accounts, Rechte“). Offen, ob
   es sie braucht, wer die Eigenschaft setzt und wie eine Übergabe an einen anderen User geht.
 - **Erreichbarkeit:** entschieden — Verschlüsselung ist Pflicht, der Transport ist wählbar
-  (HTTPS, SSH, lokal im selben Prozess). Offen ist, welcher entfernte zuerst gebaut wird.
+  (HTTPS, SSH, lokal im selben Prozess). Entschieden am 2026-09-28: `https` zuerst, über
+  einen Reverse-Proxy vor dem Hub (gebaut in Task 018); `ssh` später, am selben Anschluss.
+  Offen: die Begrenzung von Fehlversuchen, jetzt wo der Hub nach außen spricht.
 - **Node als Dienst:** entschieden — er läuft ständig, pro User als Benutzerdienst oder
   global als Systemdienst; k-playbook prüft beim Briefing zusätzlich. Eingerichtet mit
   systemd, auf macOS (nur pro User) mit launchd (2026-09-26, „Installation und Betrieb“;

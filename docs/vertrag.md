@@ -451,9 +451,11 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   Status und Text.
 - **Host:** Der Hub beantwortet nur Anfragen, deren `Host` dieser Rechner (`localhost`,
   `127.0.0.1`, `[::1]`) mit dem Port ist, auf dem die Anfrage ankam — dieselbe Prüfung wie am
-  Node vor `/mcp`. Sonst antwortet er 403 ohne Vertragsform, noch vor Pfad und Anmeldung. Ein
-  Tunnel geht damit nur mit gleichem Port (`ssh -L 7434:localhost:7434`), bis `ssh` und `https`
-  als Transport kommen.
+  Node vor `/mcp`. Sonst antwortet er 403 ohne Vertragsform, noch vor Pfad und Anmeldung.
+  Hinter einem Reverse-Proxy (Transport `https`) setzt der Proxy `Host` auf die
+  Loopback-Adresse des Hubs (Caddy: `header_up Host {upstream_hostport}`, also
+  `localhost:7434`); die Regel bleibt, der Hub weiß nichts vom Proxy. Ein Tunnel geht nur mit
+  gleichem Port (`ssh -L 7434:localhost:7434`). `node hub check` erklärt den 403.
 - **Log:** eine Zeile je Anfrage mit Methode, Pfad, Status, Dauer, Node- und Account-Namen;
   Namen, die der Namensregel nicht folgen, erscheinen maskiert. Nie ein Token, nie ein Body —
   also auch nie der Inhalt eines Dokuments.
@@ -468,9 +470,13 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 - **Wiederherstellung aus einer Sicherung** braucht eine neue `hub_id` (siehe oben).
 - **Kein Schlüssel für Wiederholungen.** Nach unklarem Ausgang eines Schreibvorgangs sieht der
   Aufrufer nach, statt zu wiederholen. Ein Schlüssel, an dem der Hub eine Wiederholung erkennt,
-  kommt, wenn überhaupt, mit `https` und `ssh`.
+  kommt, wenn überhaupt, später; `https` (Task 018) hat ihn nicht gebracht, hinter einem
+  Proxy sind 502 und 503 weitere unklare Ausgänge.
 - **Ein Hub vor Task 014 und große Schreibvorgänge.** Ein solcher Hub liest den Body vor dem
   Vorgang und begrenzt ihn auf 1 MiB; einen größeren Schreibvorgang beantwortet er mit 413
   (`invalid`) statt als unbekannten Vorgang.
 - **Fehlversuche werden nicht begrenzt.** Ein Node kann beliebig viele Account-Tokens
-  probieren; er muss dafür aber selbst angemeldet sein. Eine Begrenzung kommt später.
+  probieren; er muss dafür aber selbst angemeldet sein. Eine Begrenzung kommt später. Seit
+  der Hub hinter einem Reverse-Proxy nach außen spricht (`https`), wird sie dringlicher: Der
+  Proxy begrenzt nichts (Caddy ohne Plugin); Übergang ist fail2ban auf das Zugriffslog des
+  Proxys (401/403 auf `/v1/`), siehe [`installation.md`](installation.md).

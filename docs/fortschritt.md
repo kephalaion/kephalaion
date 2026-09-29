@@ -1,6 +1,7 @@
 # Fortschritt
 
-Stand: 2026-09-28 (Tasks 001–016 abgeschlossen; 001–015 in `done/`, 016 ausgeführt)
+Stand: 2026-09-29 (Tasks 001–016 abgeschlossen; 018 Etappen 1–3 ausgeführt, Etappe 4 ist
+Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -170,9 +171,31 @@ Stand: 2026-09-28 (Tasks 001–016 abgeschlossen; 001–015 in `done/`, 016 ausg
     und Fortsetzen, `pull` mit `diff -r` ohne Unterschied, Account nur mit `write`
     abgewiesen (Befund `vendor-scope-und-dir-push-pull.md`).
 
+- **Task 018 — Transport `https`: Node zu einem Hub hinter einem Reverse-Proxy** (2026-09-29,
+  Etappen 1–3):
+  - Node-Seite: `connector`, Abgleich im Hintergrund, `kick` und `nodeHubLink` behandeln
+    `https` wie `http`, nur über TLS; je Hub-Eintrag optional eine CA (`node hub add|set
+    --ca-file`, gespeichert als Text in `hubs.ca`, Node-Schema 5; `show` mit Subject,
+    Gültigkeit, Fingerabdruck, `list` mit Spalte CA), sonst die System-Roots;
+    `httpapi.NewClient(address, rootCAs)` mit TLS ≥ 1.2 und HTTP/1.1, Zertifikatsfehler gelten
+    als „nicht erreicht“ und werden nie wiederholt; `node hub check` erklärt Zertifikatsfehler,
+    502/503 des Proxys und die Host-Prüfung (403); Exportformat 7 mit `ca`
+    (`vertrag.md`, „HTTP“; `konzept.md`, „Kommunikation“);
+  - Hub unverändert, nur `reqlog` nennt hinter dem Proxy die Adresse des Aufrufers aus
+    `X-Forwarded-For` (`via`); `serve` bleibt auf Loopback;
+  - Doku: Caddyfile-Vorlage, zwei Zertifikatswege (Name mit Let's Encrypt; IP mit `tls
+    internal` oder eigener CA), Freigabe der Ports, Ansible, Node-Seite, bekannte Grenze
+    (Fehlversuche) und der Weg zum Neuanlegen von `node.db` (`installation.md`, „Hub für Nodes
+    anderer Rechner“ und „Neue Schemafassung“; README, „Einrichten“);
+  - Tests ohne Netz gegen „Proxy plus Hub“ (`internal/testcert`, `httptest` mit `StartTLS`):
+    richtige, falsche und keine CA, falscher Name, abgelaufen, `serve` mit `https`-Eintrag
+    (Abgleich, `create` über MCP, Anstoß, falsche CA). Abnahme auf der VM: Etappe 4, siehe
+    „Zu testen“ (Befund `material/befunde/transport-entfernt.md`).
+
 ## In Arbeit
 
-Nichts.
+- **Task 018, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
+  `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“; siehe „Zu testen“.
 
 ## Zu tun
 
@@ -234,14 +257,17 @@ Nichts.
     `read`; Ereignisstrom (SSE/Long-Polling, Todo #10);
   - Stufe 2, Rest nach Task 014: `create_numbered`;
   - Stufe 3: `append`, `replace_section`, `supersede`, `replace_directory`;
-  - Transporte `https` und `ssh`; Hub außerhalb von Loopback;
+  - Transport `ssh` (Entwurf geparkt in `k-playbook-local/inbox/chat/`, derselbe Anschluss
+    wie `https` im `connector`); der Hub bleibt auf Loopback, nach außen spricht der Proxy;
   - Lauschen auf der Docker-Bridge für Devcontainer — die globale Installation erreichen bis
     dahin nur User auf dem Rechner selbst (Task 011);
   - PostgreSQL-Umsetzung des Hub-Stores (DDL, `BIGINT`);
   - Migrationsrahmen, sobald Daten bleiben müssen;
   - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;
   - Markdown-Export des Stores;
-  - Begrenzung von Fehlversuchen bei der Anmeldung.
+  - Begrenzung von Fehlversuchen bei der Anmeldung — dringlicher, seit der Hub hinter dem
+    Proxy nach außen spricht (Task 018); Übergang fail2ban auf das Caddy-Log
+    (`installation.md`, „Bekannte Grenze“).
 - **Kleinere Punkte aus dem Review von Task 008** (`done/008-…`, „Code-Review“, Vorschläge 3–12):
   - `reset` prüft nur `entry_id`, nicht die alte `hub_id` — doppeltes Verwerfen bei zwei
     parallelen Resets (3);
@@ -270,11 +296,11 @@ Nichts.
 
 ## Zu testen
 
-- **Task 008:** Schemafassung +1 für `node.db` (4) und Replica (3): Vor dem Update
-  `config export` mit dem alten Binary, danach `node init` neu und `config import` (Task 008,
-  Review-Punkt 9, offen) — wie man neu anlegt, obwohl `node init` bei eingetragener Rolle
-  abbricht, ist nirgends beschrieben. Abgleich im Hintergrund mit einem echten Client über längere Zeit;
-  Der Race-Detector lief über `cmd/kephalaion` und `internal/node/...` sauber.
+- **Task 008:** Abgleich im Hintergrund mit einem echten Client über längere Zeit; der
+  Race-Detector lief über `cmd/kephalaion` und `internal/node/...` sauber. (Der Weg, `node.db`
+  nach einem Sprung der Schemafassung neu anzulegen — Review-Punkt 9, `init` bricht bei
+  eingetragener Rolle ab —, steht seit Task 018 im README, „Einrichten“, und in
+  `installation.md`, „Neue Schemafassung“; geschlossen.)
 
 - **Erster Security-PR von Dependabot** gegen `main`: lokal nach `dev` holen und prüfen, ob
   GitHub ihn nach dem Release als gemergt markiert — auch wenn Dependabot den Branch rebased
@@ -313,7 +339,6 @@ Nichts.
   siehe „Zu tun“, Update-Hinweis.
 - **Name:** TMview-Recherche (griechische nationale Marken, wegen Kefalaio). Marke erst bei Entscheidung zur Vermarktung (siehe Konzept, „Der Name“).
 - **Release-Signatur** statt nur `SHA256SUMS` (cosign/minisign/Attestations) — wann?
-- **Welcher entfernte Transport zuerst:** `https` oder `ssh`?
 - **Obergrenze je Schreibvorgang** oder Datenstrom für große `sync`-Seiten über HTTP.
 - **Verwaltung über MCP:** eigenes Recht (`admin` je Hub?), wer am Node verwalten darf, ob
   Werkzeuge nur mit Recht erscheinen, Token-Ausgabe ohne KI-Kontext.

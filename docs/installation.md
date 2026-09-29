@@ -48,6 +48,8 @@ Installation pro User zu entfernen (unten).
 **Global ist bisher nur für User auf dem Rechner selbst gebaut:** Der Node lauscht auf
 Loopback (`127.0.0.1:7433`), das teilen alle User eines Rechners. Devcontainer erreichen ihn
 noch nicht; dafür fehlt das Lauschen auf der Docker-Bridge (`konzept.md`, „Kommunikation“).
+Der Hub dagegen ist von anderen Rechnern erreichbar — über einen Reverse-Proxy auf seinem
+Rechner, siehe „Hub für Nodes anderer Rechner“.
 
 ## Pro User
 
@@ -245,8 +247,9 @@ sudo install -o alice -g alice -m 0600 "$DIR/alice.token" ~alice/.config/kephala
 sudo rm -r "$DIR"
 ```
 
-Liegt der Hub auf einem anderen Rechner, trägt `node hub add` ihn mit Transport und Token des
-Nodes ein (README, „Hub und Node auf einem Rechner“); das Token kommt über
+Liegt der Hub auf einem anderen Rechner, trägt `node hub add` ihn mit Transport `https`,
+Adresse, gegebenenfalls `--ca-file` und dem Token des Nodes ein („Hub für Nodes anderer
+Rechner“ unten; README, „Hub und Node auf einem Rechner“); das Token kommt über
 `--token-stdin`, nie als Argument.
 
 ### Verwalten
@@ -260,6 +263,220 @@ Fehlers an der Datenbank, den Hinweis auf die globale Installation (Exit-Code 0)
 Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) an `http://127.0.0.1:7433/mcp`, siehe README,
 „serve und MCP“.
+
+## Hub für Nodes anderer Rechner: hinter einem Reverse-Proxy
+
+Der Hub lauscht nur auf Loopback und spricht kein TLS — das bleibt so. Ein Node auf einem
+anderen Rechner erreicht ihn über einen **Reverse-Proxy auf dem Rechner des Hubs** (hier
+Caddy), der nach außen `https` spricht, TLS beendet und `/v1/*` an `localhost:7434`
+weiterreicht. Der Hub braucht dafür keine Änderung und keine Einstellung: Der Proxy setzt
+`Host` auf die Loopback-Adresse des Hubs, damit dessen Host-Prüfung gilt (entschieden am
+2026-09-28, [`konzept.md`](konzept.md), „Kommunikation“). Die Identität bleibt das Token;
+TLS verschlüsselt und weist den Server aus. Ein Node, dessen Zertifikatsprüfung scheitert,
+schickt kein Token.
+
+### Caddyfile
+
+`/etc/caddy/Caddyfile` (apt-Paket `caddy`, eigene Unit, bindet 443 selbst — die Unit trägt
+`CAP_NET_BIND_SERVICE`). Vorlage für Weg 2 (nur IP, Caddys eigene CA); für Weg 1 steht der
+Name statt der IP, und die Zeile `tls internal` entfällt:
+
+```text
+https://9.141.8.157 {
+    tls internal
+    handle /v1/* {
+        request_body {
+            max_size 8MiB
+        }
+        reverse_proxy localhost:7434 {
+            header_up Host {upstream_hostport}
+        }
+    }
+    handle {
+        respond 404
+    }
+    log {
+        output file /var/log/caddy/kephalaion.log
+    }
+}
+```
+
+- Nur `/v1/*` geht zum Hub, alles andere ist 404 — der Proxy zeigt nach außen nichts vom
+  Hub, was der Vertrag nicht kennt.
+- `header_up Host {upstream_hostport}` schickt `Host: localhost:7434`; genau das verlangt der
+  Hub (`vertrag.md`, „Host“). Ohne die Zeile antwortet er 403, und `node hub check` sagt es.
+- `request_body max_size 8MiB` liegt über den 7 MiB, die der Hub für einen Schreibvorgang
+  annimmt; Caddys Zeitlimits lassen eine `sync`-Seite von bis zu 10 Minuten durch (Standard:
+  keine Grenze für die Antwort des Upstreams). TLS mindestens 1.2 ist Caddys Standard.
+- Das Zugriffslog als Datei ist die Grundlage für fail2ban (siehe „Bekannte Grenze“).
+- Prüfen vor dem Einspielen: `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`,
+  danach `systemctl reload caddy`.
+
+### Zertifikat: zwei Wege
+
+Der Code kann beide; welcher gilt, entscheidet der Betrieb.
+
+1. **Mit Namen (empfohlen, sobald es einen gibt).** Ein DNS-Name auf der öffentlichen IP —
+   in Azure ein DNS-Label (`<label>.<region>.cloudapp.azure.com`) oder ein eigener Name. Caddy
+   holt das Zertifikat selbst bei Let's Encrypt: per HTTP-01 muss **Port 80 für alle offen**
+   sein (nur für die Prüfung, dort gibt es keine Inhalte; auch bei jeder Verlängerung), oder
+   per DNS-01 mit dem DNS-Plugin des Anbieters (nicht für `cloudapp.azure.com`, die Zone
+   gehört Azure). Die Nodes brauchen keine CA: `node hub add … --address https://<name>` ohne
+   `--ca-file`, das Zertifikat gilt gegen die System-Roots. Nur mit dem Namen, nicht mit der
+   IP — das Zertifikat gilt für den Namen.
+2. **Ohne Namen (nur IP).** Let's Encrypt scheidet aus. Entweder Caddys eigene CA (`tls
+   internal`: Caddy stellt auch für eine IP-Adresse ein Zertifikat aus) oder eine eigene,
+   offline geführte CA mit einem Server-Zertifikat mit IP-SAN (`tls /etc/caddy/hub.crt
+   /etc/caddy/hub.key`). Das CA-Zertifikat geht an jeden Node: bei `tls internal` liegt es
+   auf dem Rechner des Hubs unter
+   `/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`; der Node trägt es mit
+   `--ca-file` ein (gespeichert wird der Inhalt, nicht der Pfad). Wechselt Caddy seine CA
+   (Neuinstallation), müssen die Nodes die neue bekommen (`node hub set … --ca-file`).
+
+### Freigabe der Ports
+
+| Port | Für wen | Wofür |
+|---|---|---|
+| 443 | die Rechner der Nodes (Allowlist, wie bei SSH) | `https` zum Proxy |
+| 80 | alle | nur bei Weg 1: die Prüfung durch Let's Encrypt |
+
+In Azure geschieht das in der NSG vor der VM. Steht vor der VM ein Load Balancer, NAT oder
+eine Firewall (der Metadatendienst nennt am NIC keine öffentliche IP), braucht der Port auch
+dort eine Regel — auf der VM zu bestätigen.
+
+### Node-Seite
+
+```sh
+# Am Hub: ein Node je Rechner; das Token geht per SSH zum Rechner des Nodes, nie als Argument.
+kephalaion hub node add wsl-kleist
+kephalaion hub node grant wsl-kleist test
+
+# Am Node (Weg 1, Name):
+read -rs TOKEN; printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
+  --transport https --address https://hub.example.org --token-stdin; unset TOKEN
+# Am Node (Weg 2, IP mit CA):
+printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
+  --transport https --address https://9.141.8.157 --ca-file ~/vm-ca.pem --token-stdin
+
+kephalaion node hub check vm          # erreichbar, hub_id, Node-Name, erlaubte Collections
+kephalaion node collection add vm:test
+kephalaion node sync vm
+```
+
+`node hub check` nennt, was schiefgeht: „Zertifikat von … nicht vertraut (Aussteller …;
+--ca-file?)“, „Zertifikat gilt nicht für …“, „Zertifikat abgelaufen seit …“, „Proxy
+antwortet, aber der Hub dahinter nicht (HTTP 502)“ (läuft `kephalaion serve`?),
+„Host-Prüfung des Hubs schlägt fehl (HTTP 403)“ (fehlt `header_up Host`?). Der Port 443 ist
+in der Adresse weglassbar. Am Hub steht jede Anfrage im Log mit der Adresse des Aufrufers aus
+`X-Forwarded-For` (`via`), ohne Token; im Caddy-Log stehen 200 auf `/v1/…` und 404 daneben.
+
+### Ansible
+
+Zu den Aufgaben oben kommen für den Rechner des Hubs (alles wiederholbar; die NSG liegt
+außerhalb der VM, etwa in Terraform):
+
+```yaml
+- name: Reverse-Proxy vor dem Hub (Caddy)
+  hosts: kephalaion
+  become: true
+  vars:
+    caddy_site: "https://9.141.8.157"   # Weg 1: "https://hub.example.org"
+    caddy_tls: "tls internal"           # Weg 1: ""; eigene CA: "tls /etc/caddy/hub.crt /etc/caddy/hub.key"
+  tasks:
+    - name: Caddy-Repo (Schlüssel und Quelle)
+      ansible.builtin.deb822_repository:
+        name: caddy-stable
+        types: deb
+        uris: https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+        suites: any-version
+        components: main
+        signed_by: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+
+    - name: Caddy
+      ansible.builtin.apt:
+        name: caddy
+        update_cache: true
+
+    - name: Zertifikat und Schlüssel der eigenen CA
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/caddy/{{ item }}"
+        owner: caddy
+        group: caddy
+        mode: "0600"
+      loop: [hub.crt, hub.key]
+      when: caddy_tls is search('^tls /')
+      notify: caddy neu laden
+
+    - name: Caddyfile
+      ansible.builtin.template:
+        src: Caddyfile.j2
+        dest: /etc/caddy/Caddyfile
+        owner: root
+        group: root
+        mode: "0644"
+        validate: caddy validate --config %s --adapter caddyfile
+      notify: caddy neu laden
+
+    - name: Caddy läuft
+      ansible.builtin.systemd:
+        name: caddy
+        enabled: true
+        state: started
+
+  handlers:
+    - name: caddy neu laden
+      ansible.builtin.systemd:
+        name: caddy
+        state: reloaded
+```
+
+`Caddyfile.j2` ist die Vorlage oben mit `{{ caddy_site }}` in der ersten Zeile und
+`{{ caddy_tls }}` an der Stelle von `tls internal` (leer bei Weg 1). Bei `tls internal`
+holt ein Lauf das CA-Zertifikat für die Nodes mit `ansible.builtin.slurp` von
+`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`; das Token je Node bleibt
+Handarbeit (`hub node add`, Übergabe per SSH).
+
+### Bekannte Grenze
+
+Der Hub begrenzt Fehlversuche nicht ([`vertrag.md`](vertrag.md), „Bekannte Grenzen“); nach
+außen wird das dringlicher. Caddy hat ohne Plugin keine Ratenbegrenzung. Übergang: fail2ban
+auf `/var/log/caddy/kephalaion.log` (401 und 403 auf `/v1/`), die Allowlist in der NSG, und
+die Begrenzung am Hub als eigene Aufgabe.
+
+### Auf dem Rechner des Hubs zu bestätigen
+
+Zwei Annahmen dieser Anleitung sind nur aus der Caddy-Dokumentation belegt, nicht im Betrieb:
+dass `header_up Host {upstream_hostport}` beim Hub als `Host: localhost:7434` ankommt (sonst
+403, siehe `node hub check`), und ob die öffentliche IP über LB/NAT kommt und dort eine
+eigene Freigabe braucht.
+
+## Neue Schemafassung: node.db neu anlegen
+
+Migrationen gibt es noch nicht; ein Sprung der Schemafassung (zuletzt `node.db` 4 → 5 mit
+`hubs.ca`, Task 018) heißt: Das neue Binary lehnt die vorhandene `node.db` ab, sie ist neu
+anzulegen. `init` überschreibt nicht und bricht ab, solange die Rolle in der config steht —
+deshalb in dieser Reihenfolge, global als Systembenutzer:
+
+```sh
+K="sudo -u kephalaion kephalaion"
+$K config export --output /var/lib/kephalaion/keph-config.yaml   # 1. mit dem ALTEN Binary (Tokens, 0600)
+# 2. das neue Binary installieren (oben), dann:
+sudo systemctl stop kephalaion                                    # 3. serve stoppen
+sudo rm /var/lib/kephalaion/node.db /var/lib/kephalaion/node.db.lock
+sudo rm -r /var/lib/kephalaion/replicas                           # 4. node.db und die Replicas daneben
+sudo -u kephalaion $EDITOR /etc/kephalaion/config.yaml            # 5. den Abschnitt node: herausnehmen
+$K node init --config /etc/kephalaion/config.yaml \
+  --db sqlite:///var/lib/kephalaion/node.db --listen 127.0.0.1:7433   # 6. neu anlegen
+$K config import /var/lib/kephalaion/keph-config.yaml             # 7. Hub-Einträge samt Tokens zurück
+sudo rm /var/lib/kephalaion/keph-config.yaml
+sudo systemctl start kephalaion                                   # 8. die Replicas gleichen sich neu ab
+```
+
+Die Hub-Einträge behalten ihre Tokens über Export und Import, `hub.db` bleibt unberührt, die
+Replicas legt der erste Abgleich neu an. Pro User dasselbe ohne `sudo` mit den Orten unter
+`~/.local/share/kephalaion/` und `kephalaion service uninstall` bzw. `install` statt
+`systemctl` (README, „Einrichten“).
 
 ## Upgrade: was Kephalaion meldet
 
@@ -351,6 +568,7 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`), `kephalaion:kephalaion`, `0700` |
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
+| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/v1/*` nach `localhost:7434` mit `header_up Host {upstream_hostport}`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
 
 Reihenfolge und Regeln:
 

@@ -173,8 +173,8 @@ Kommandos:
   collection   die Collections, die der Node von seinen Hubs haben will
   account      ersetzt das Token eines Accounts am Hub (rotate) und prüft es
                (check)
-  sync         gleicht die Replicas mit den Hubs ab (Transport local und http);
-               serve tut das im Hintergrund selbst
+  sync         gleicht die Replicas mit den Hubs ab (Transport local, http und
+               https); serve tut das im Hintergrund selbst
   doc          listet und liest Dokumente aus der Replica
   dir          gleicht einen lokalen Ordner mit einem Verzeichnis einer
                Collection ab, als Client des Nodes über MCP: push ersetzt den
@@ -251,8 +251,9 @@ Optionen:
                       ~/.local/share/kephalaion/%[1]s.db
                       (postgres://… ist noch nicht unterstützt)
   --listen host:port  wo kephalaion serve für diese Rolle lauscht; ohne Angabe
-                      %[2]s (nur dieser Rechner). serve lauscht bisher
-                      nur auf 127.0.0.1, ::1 oder localhost.
+                      %[2]s (nur dieser Rechner). serve lauscht nur auf
+                      127.0.0.1, ::1 oder localhost; Nodes anderer Rechner
+                      erreichen den Hub über einen Reverse-Proxy davor (https).
   --config pfad       Ort der config; sonst $KEPHALAION_CONFIG,
                       $XDG_CONFIG_HOME/kephalaion/config.yaml bzw.
                       ~/.config/kephalaion/config.yaml

@@ -26,8 +26,10 @@ wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und `rename`
 wird über den Hub, mit Rechten je Collection —, und gleicht als Node im Hintergrund ab.
 Accounts tauschen ihr Token am Node (`node account rotate`); `node whoami` zeigt, wen der Node
 kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
-ein, zum Lesen und Schreiben. Noch nicht gebaut: `https` und `ssh`, Suche, weitere Werkzeuge
-(`create_numbered`, `append`, `replace_section`, `supersede`, `replace_directory`).
+ein, zum Lesen und Schreiben. Ein Node auf einem anderen Rechner erreicht den Hub über
+`https`: TLS beendet ein Reverse-Proxy vor dem Hub, der auf Loopback bleibt
+([`docs/installation.md`](docs/installation.md)). Noch nicht gebaut: `ssh`, Suche, weitere
+Werkzeuge (`create_numbered`, `append`, `replace_section`, `supersede`, `replace_directory`).
 
 ## Was gebraucht wird (grob)
 
@@ -122,8 +124,9 @@ kephalaion hub init --listen 127.0.0.1:7500        # anderer Port
 `~/.config/kephalaion/config.yaml` ein (ohne `--config` nur pro User: Ist der Rechner global
 eingerichtet, bricht es ab), mit `db:` und `listen:` — wo `kephalaion serve` für
 die Rolle lauscht; Standard Node `127.0.0.1:7433`, Hub `127.0.0.1:7434`. `serve` lauscht
-bisher nur auf `127.0.0.1`, `::1` oder `localhost`: Klartext-HTTP verlässt den Rechner nicht,
-bis `https` und `ssh` kommen. Steht die Rolle schon dort oder gibt es die
+nur auf `127.0.0.1`, `::1` oder `localhost`: Klartext-HTTP verlässt den Rechner nicht; für
+Nodes anderer Rechner steht ein Reverse-Proxy vor dem Hub (`https`, siehe
+[`docs/installation.md`](docs/installation.md)). Steht die Rolle schon dort oder gibt es die
 Datenbankdatei schon, bricht es ab. Die Orte folgen `XDG_CONFIG_HOME` und `XDG_DATA_HOME`;
 eine andere config wählt `--config` oder `KEPHALAION_CONFIG`. PostgreSQL ist vorgesehen, aber
 noch nicht unterstützt.
@@ -142,10 +145,26 @@ kephalaion config import keph-config.yaml            # in eingerichtete Rollen z
 Migrationen gibt es noch nicht: Passt die Schemafassung einer Datenbank nicht zum
 Binary, ist sie neu anzulegen; die Einstellungen rettet `config export`/`import`, die Inhalte
 nicht. Dokumente am Hub sind wieder einzuspielen (`hub import`); eine Replica mit fremder
-Schemafassung verwirft der Abgleich selbst und gleicht sie neu ab. Mit dem Abgleich im
-Hintergrund stieg `node.db` auf Schemafassung 4 (neu: `hubs.entry_id`, `hub_sync`): die
-Einstellungen vor dem Update mit dem alten Binary per `config export` sichern und nach dem
-Neuanlegen mit `config import` zurückholen.
+Schemafassung verwirft der Abgleich selbst und gleicht sie neu ab. Mit `https` stieg
+`node.db` auf Schemafassung 5 (neu: `hubs.ca`; Fassung 4 brachte `hubs.entry_id` und
+`hub_sync`) — jede vorhandene `node.db` lehnt das Binary ab. Der Weg, in dieser Reihenfolge
+(`init` überschreibt nicht und bricht bei eingetragener Rolle ab):
+
+```sh
+kephalaion config export --output keph-config.yaml   # 1. mit dem ALTEN Binary; enthält Tokens, 0600
+kephalaion service uninstall                          # 2. serve stoppen (global: sudo systemctl stop kephalaion)
+rm ~/.local/share/kephalaion/node.db*                 # 3. node.db (samt -wal, -shm, .lock) und die Replicas daneben
+rm -r ~/.local/share/kephalaion/replicas
+$EDITOR ~/.config/kephalaion/config.yaml              # 4. den Abschnitt node: von Hand herausnehmen
+kephalaion node init --db sqlite://$HOME/.local/share/kephalaion/node.db --listen 127.0.0.1:7433   # 5. neu, mit dem neuen Binary
+kephalaion config import keph-config.yaml             # 6. Hub-Einträge samt Tokens, Collections, settings
+kephalaion service install                            # 7. serve starten; die Replicas gleichen sich neu ab
+```
+
+Die Hub-Einträge behalten ihre Tokens über Export und Import; die Replicas legt der erste
+Abgleich neu an. Global dasselbe als Systembenutzer mit `--config /etc/kephalaion/config.yaml`
+und `--db sqlite:///var/lib/kephalaion/node.db` ([`docs/installation.md`](docs/installation.md),
+„Neue Schemafassung“).
 
 ### Hub und Node auf einem Rechner
 
@@ -181,9 +200,14 @@ kephalaion status       # Collections, Accounts und Nodes am Hub, Hubs und Colle
 ```
 
 Ohne `--create` trägt `node hub add` einen Node ein, den der Hub schon kennt: Name mit
-`--node`, Token über die Standardeingabe (`--token-stdin`). `https` (`--address https://…`)
-und `ssh` (`--address [user@]host[:port]`, optional `--ssh-key`) lassen sich eintragen, aber
-noch nicht benutzen. Namen von Collections, Nodes, Accounts und Hub-Aliasen bestehen aus
+`--node`, Token über die Standardeingabe (`--token-stdin`). Ein Hub auf einem anderen Rechner
+ist `https` (`--address https://<host>`): TLS beendet ein Reverse-Proxy auf seinem Rechner,
+das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA (`--ca-file
+<pfad>`, gespeichert wird der Inhalt); `node hub check` erklärt Zertifikatsfehler, einen Proxy
+ohne Hub dahinter und die Host-Prüfung — Aufbau in
+[`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“. `ssh`
+(`--address [user@]host[:port]`, optional `--ssh-key`) lässt sich eintragen, aber noch nicht
+benutzen. Namen von Collections, Nodes, Accounts und Hub-Aliasen bestehen aus
 `a–z`, `0–9`, `.`, `_` und `-`, beginnen mit Buchstabe oder Ziffer, haben höchstens 63 Zeichen
 und nicht den Präfix `system`; Nodes und Accounts heißen nicht `admin` und teilen sich die
 Namen. Die Hilfe zeigt alle Kommandos: `kephalaion hub node --help`,
@@ -191,9 +215,9 @@ Namen. Die Hilfe zeigt alle Kommandos: `kephalaion hub node --help`,
 
 `config export` sichert auch die Collections, Nodes und Accounts (nur mit Hash, Accounts samt
 User und Rechten je Collection) und die Hubs des Nodes samt ihrem Token im Klartext — die Datei
-entsteht deshalb mit `0600`. Das Exportformat ist 6 (`format: 6`; seit 6 je Recht die Scopes
-`vendor`, ältere Fassungen lesen sich ohne sie), `user` je Account ist dort
-Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
+entsteht deshalb mit `0600`. Das Exportformat ist 7 (`format: 7`; seit 7 je Hub-Eintrag die
+CA als `ca`, seit 6 je Recht die Scopes `vendor`, ältere Fassungen lesen sich ohne beides und
+dürfen sie nicht tragen), `user` je Account ist dort Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
 Format 4 setzt den User jedes Accounts auf dessen Namen, einer vor Format 4 lässt die Accounts
 unberührt, einer im Format 1 ersetzt nur die `settings`, einer im Format 2 geht nur, wenn er am
 Node keine Hub-Einträge enthält — ihnen fehlt `node_name`. Dokumente und Replicas gehören nicht zum
@@ -266,8 +290,10 @@ Account-Namen, bei einem Schreibvorgang über MCP Vorgang, Hub und Fehlercode �
 nie ein Inhalt) und endet mit SIGINT oder SIGTERM. Eine Sperre auf `<db>.lock` neben jeder Datenbank verhindert
 einen zweiten `serve` auf derselben Rolle; alle anderen Kommandos laufen daneben, auch
 `node sync`, `node hub rm|add` und `config import`. Beide Rollen beantworten nur
-Anfragen, deren `Host` dieser Rechner mit dem eigenen Port ist, sonst 403; ein SSH-Tunnel zum
-Hub geht deshalb nur mit gleichem Port (`ssh -L 7434:localhost:7434 …`).
+Anfragen, deren `Host` dieser Rechner mit dem eigenen Port ist, sonst 403; ein Reverse-Proxy
+davor setzt `Host` deshalb auf `localhost:7434`, ein SSH-Tunnel zum Hub geht nur mit gleichem
+Port (`ssh -L 7434:localhost:7434 …`). Hinter einem Proxy nennt die Logzeile die Adresse des
+Aufrufers aus `X-Forwarded-For` (`via`).
 
 ```sh
 kephalaion service install         # als Dienst; oder von Hand, etwa zum Testen:
@@ -279,7 +305,7 @@ Als Node gleicht `serve` seine Replicas selbst ab: beim Start je Hub-Eintrag, da
 Abstand `sync_interval` aus den `settings` des Nodes — Standard 30 s, mindestens `1s`, `0`
 schaltet ab; `config set` wirkt ohne Neustart. Die Hub-Einträge liest jede Runde neu, `node
 hub add|rm` wirkt also sofort; ein langsamer Hub hält die anderen nicht auf. `local` nimmt den
-Hub desselben `serve`, `http` den unter seiner Adresse; `https` und `ssh` werden noch
+Hub desselben `serve`, `http` und `https` den unter seiner Adresse; `ssh` wird noch
 übergangen (eine Logzeile beim Start). Das Log nennt einen Abgleich nur, wenn Zeilen kamen,
 einen Fehler beim ersten Mal und wenn sich seine Art ändert, und die Erholung:
 
@@ -407,7 +433,7 @@ dem Code, nicht nach der Meldung:
 | `invalid` | ungültig: Name, Inhalt (kein UTF-8, ein NUL-Byte, über 1 MiB), ein Verzeichnis ohne `recursive` |
 | `unreachable` | der Hub ist nicht erreicht worden, nichts gespeichert; gelesen wird weiter |
 | `outcome_unknown` | abgeschickt, aber keine brauchbare Antwort — gespeichert sein kann es; nicht wiederholen, nach dem angestoßenen Abgleich mit `read` nachsehen |
-| `unsupported` | der Hub kann noch nicht schreiben, oder sein Transport (`https`, `ssh`) ist noch nicht gebaut; nichts gespeichert |
+| `unsupported` | der Hub kann noch nicht schreiben, oder sein Transport (`ssh`) ist noch nicht gebaut; nichts gespeichert |
 | `internal` | ein Fehler des Nodes selbst (`node.db`, Replica nicht lesbar); nichts abgeschickt |
 
 Dazu reicht der Node `unauthenticated` (der Hub nimmt den Node nicht an) und
@@ -497,9 +523,11 @@ node: eingerichtet
       Abgleich:    zuletzt gelungen 2026-09-26 10:15:02
 ```
 
-`node sync` geht über `local` (der Hub derselben config, im selben Prozess) und über `http`
-(ein Hub auf diesem Rechner mit laufendem `serve`; bei Fehlern des Netzes wiederholt es jede
-Seite bis zu dreimal). Für `https` und `ssh` meldet es „noch nicht unterstützt“, ohne
+`node sync` geht über `local` (der Hub derselben config, im selben Prozess), über `http`
+(ein Hub auf diesem Rechner mit laufendem `serve`) und über `https` (ein Hub auf einem
+anderen Rechner hinter einem Reverse-Proxy); bei Fehlern des Netzes wiederholen `http` und
+`https` jede Seite bis zu dreimal, bei einem Zertifikatsfehler nie. Für `ssh` meldet es
+„noch nicht unterstützt“, ohne
 `hub:`-Abschnitt in der config scheitert auch `local`. Ein gescheiterter Eintrag hält die
 übrigen nicht auf; die Meldung steht auf stderr, und der Exit-Code ist 1 — hier mit dem
 Eintrag `test` (`http`), während `serve` nicht läuft:
