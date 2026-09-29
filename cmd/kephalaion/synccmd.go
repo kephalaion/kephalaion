@@ -86,7 +86,7 @@ var errTransportUnsupported = errors.New("noch nicht unterstützt")
 // connectHTTP liefert die Umsetzung über HTTP; Tests ersetzen sie, etwa um
 // einen unklaren Ausgang herbeizuführen.
 var connectHTTP = func(address string) (contract.Hub, error) {
-	return httpapi.NewClient(address)
+	return httpapi.NewClient(address, nil)
 }
 
 func (l *connector) connect(h nodestore.Hub) (contract.Hub, error) {

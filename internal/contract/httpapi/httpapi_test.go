@@ -85,7 +85,7 @@ func (e *echoHub) Sync(_ context.Context, req contract.SyncRequest) (contract.Sy
 
 func newClient(t *testing.T, url string) *Client {
 	t.Helper()
-	c, err := NewClient(url)
+	c, err := NewClient(url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestParsePathAndClientAddress(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"localhost:7434", "ftp://x", "http://", "http://x/pfad", "http://u:p@x"} {
-		if _, err := NewClient(bad); err == nil {
+		if _, err := NewClient(bad, nil); err == nil {
 			t.Errorf("NewClient(%q) angenommen", bad)
 		}
 	}

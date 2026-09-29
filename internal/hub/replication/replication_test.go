@@ -48,7 +48,7 @@ func newFixtureOver(t *testing.T, transport string) *fixture {
 	if transport == "http" {
 		srv := httptest.NewServer(httpapi.NewHandler(f.hub))
 		t.Cleanup(srv.Close)
-		c, err := httpapi.NewClient(srv.URL)
+		c, err := httpapi.NewClient(srv.URL, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

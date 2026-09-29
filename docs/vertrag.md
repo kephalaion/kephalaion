@@ -429,17 +429,26 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   Abgleichs kann eine große Revision ganz tragen. Der Server liest Kopf und Body innerhalb von
   10 s bzw. 60 s und darf eine Antwort bis zu 10 Minuten lang schreiben. Der Client wartet auf
   `whoami`, `rotate` und die Schreibvorgänge 30 s, auf eine Seite von `sync` 10 Minuten.
+- **TLS (Transport `https`):** Der Client prüft das Zertifikat des Hubs gegen die System-Roots
+  oder, wenn der Hub-Eintrag eine CA trägt (`--ca-file`), nur gegen diese; TLS mindestens 1.2,
+  HTTP/1.1, kein Client-Zertifikat — die Identität bleibt das Token. Scheitert die Prüfung
+  (CA nicht vertraut, Name passt nicht, abgelaufen), geht keine Anfrage und kein Token hinaus.
+  TLS beendet ein Reverse-Proxy vor dem Hub ([`installation.md`](installation.md), „Hub für
+  Nodes anderer Rechner“); der Hub selbst spricht nur `http` auf Loopback.
 - **Wiederholung:** `whoami` und `sync` wiederholt der Client bei Fehlern des Transports und
-  bei 5xx bis zu dreimal, mit wachsendem Abstand (0,5 s, 1 s, 2 s). `rotate` und die
-  Schreibvorgänge nie.
+  bei 5xx bis zu dreimal, mit wachsendem Abstand (0,5 s, 1 s, 2 s) — nicht bei einem
+  Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate` und die Schreibvorgänge nie.
 - **Weiterleitungen:** Der Client folgt keiner Weiterleitung. Eine 3xx-Antwort ist ein Fehler,
   ohne Wiederholung; bei `rotate` und den Schreibvorgängen ein eindeutiger — der Hub hat nicht
   ausgeführt, und Body und Token gehen an kein anderes Ziel.
-- **Unklarer Ausgang bei `rotate` und den Schreibvorgängen:** Kam die Verbindung nicht zustande
-  oder antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code
-  des Vertrags und bei 404 mit `invalid` (unbekannter Vorgang). Jeder andere Fehler nach dem
-  Abschicken — Zeitüberschreitung, abgebrochene Verbindung, unlesbare Antwort, 5xx — ist unklar
-  (`contract.ErrOutcomeUnknown`).
+- **Unklarer Ausgang bei `rotate` und den Schreibvorgängen:** Kam die Verbindung nicht zustande,
+  scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
+  antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code des
+  Vertrags und bei 404 mit `invalid` (unbekannter Vorgang). Jeder andere Fehler nach dem
+  Abschicken — Zeitüberschreitung, abgebrochene Verbindung, unlesbare Antwort, 5xx, auch ein
+  502 oder 503 eines Proxys — ist unklar (`contract.ErrOutcomeUnknown`). Eine Antwort ohne
+  Code des Vertrags (Proxy, Host-Prüfung) trägt der Client als `httpapi.StatusError` mit
+  Status und Text.
 - **Host:** Der Hub beantwortet nur Anfragen, deren `Host` dieser Rechner (`localhost`,
   `127.0.0.1`, `[::1]`) mit dem Port ist, auf dem die Anfrage ankam — dieselbe Prüfung wie am
   Node vor `/mcp`. Sonst antwortet er 403 ohne Vertragsform, noch vor Pfad und Anmeldung. Ein

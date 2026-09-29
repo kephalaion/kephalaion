@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,8 +45,11 @@ var _ contract.Hub = (*Client)(nil)
 
 // NewClient liefert einen Client für den Hub unter address (http://… oder
 // https://…, ohne Pfad). Welche Adressen ein Node benutzen darf, prüft er
-// selbst; der Client nimmt, was er bekommt.
-func NewClient(address string) (*Client, error) {
+// selbst; der Client nimmt, was er bekommt. Bei https prüft er das Zertifikat
+// des Hubs gegen rootCAs, ohne (nil) gegen die System-Roots; TLS mindestens
+// 1.2, kein Client-Zertifikat. Gesprochen wird HTTP/1.1, auch über TLS:
+// HTTP/2 brächte hier nichts, und seine Fehler sähen anders aus.
+func NewClient(address string, rootCAs *x509.CertPool) (*Client, error) {
 	u, err := url.Parse(address)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
 		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
@@ -52,6 +57,8 @@ func NewClient(address string) (*Client, error) {
 	}
 	// Die Standard-Transportschicht bittet von selbst um gzip und packt aus.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
+	tr.ForceAttemptHTTP2 = false
 	return &Client{
 		base: strings.TrimSuffix(u.String(), "/"),
 		// Keiner Weiterleitung folgen: Go striche bei fremdem Host zwar
@@ -220,8 +227,10 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 	req.Header.Set("Authorization", "Bearer "+auth.Token)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		// Die url.Error nennt Methode und Adresse, keine Header.
-		return &callError{err: fmt.Errorf("Hub %s: %w", c.base, unwrapURL(err)), sent: !notSent(err), retry: true}
+		// Die url.Error nennt Methode und Adresse, keine Header. Ein
+		// Zertifikatsfehler bleibt, so oft man es versucht: keine
+		// Wiederholung.
+		return &callError{err: fmt.Errorf("Hub %s: %w", c.base, unwrapURL(err)), sent: !notSent(err), retry: !certError(err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -250,6 +259,11 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 	}
 	msg := eb.Message
 	if msg == "" {
+		// Kein Vertrag: der Text der Antwort, wie ihn ein Proxy oder die
+		// Host-Prüfung schreibt, in einer Zeile.
+		msg = strings.Join(strings.Fields(string(data)), " ")
+	}
+	if msg == "" {
 		msg = http.StatusText(resp.StatusCode)
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -258,19 +272,54 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 		return &callError{err: fmt.Errorf("Hub %s antwortet mit HTTP %d (Weiterleitung nach %q); "+
 			"der Client folgt keinen Weiterleitungen", c.base, resp.StatusCode, resp.Header.Get("Location"))}
 	}
-	return &callError{err: fmt.Errorf("Hub %s antwortet mit HTTP %d: %s", c.base, resp.StatusCode, msg),
+	return &callError{err: fmt.Errorf("Hub %s antwortet mit %w", c.base, &StatusError{Status: resp.StatusCode, Message: msg}),
 		sent: true, retry: resp.StatusCode >= 500}
 }
 
+// StatusError ist eine Antwort ohne Code des Vertrags: ein Status, den nicht
+// der Hub, sondern etwas davor gegeben hat (ein Proxy mit 502 oder 503, die
+// Host-Prüfung mit 403), oder ein Fehler des Hubs, der kein Fehler des
+// Vertrags ist (500 mit internal). Message ist der Text der Antwort, gekürzt.
+type StatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *StatusError) Error() string {
+	msg := e.Message
+	if len(msg) > 200 {
+		msg = msg[:200] + "…"
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.Status, msg)
+}
+
 // notSent sagt, ob ein Fehler von http.Client.Do sicher vor dem Abschicken
-// entstand: Die Verbindung kam nicht zustande.
+// entstand: Die Verbindung kam nicht zustande, oder der TLS-Handshake
+// scheiterte — am Zertifikat, oder weil die Gegenseite kein TLS spricht.
 func notSent(err error) bool {
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "dial" {
 		return true
 	}
 	var dns *net.DNSError
-	return errors.As(err, &dns)
+	if errors.As(err, &dns) {
+		return true
+	}
+	// Die Gegenseite spricht kein TLS: Go meldet die Klartext-Antwort auf
+	// den Handshake als ErrSchemeMismatch, anderes als RecordHeaderError.
+	var rec tls.RecordHeaderError
+	return certError(err) || errors.Is(err, http.ErrSchemeMismatch) || errors.As(err, &rec)
+}
+
+// certError sagt, ob ein Fehler von http.Client.Do ein Zertifikatsfehler
+// ist: unbekannte CA, falscher Name, abgelaufen. Er tritt im Handshake auf,
+// vor dem Abschicken, und bleibt bei jedem Versuch.
+func certError(err error) bool {
+	var verify *tls.CertificateVerificationError
+	var unknown x509.UnknownAuthorityError
+	var host x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	return errors.As(err, &verify) || errors.As(err, &unknown) || errors.As(err, &host) || errors.As(err, &invalid)
 }
 
 // unwrapURL nimmt die Hülle von url.Error ab; sie wiederholte Methode und

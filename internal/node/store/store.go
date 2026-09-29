@@ -24,8 +24,8 @@ const Role = string(config.Node)
 
 // SchemaVersion ist die Schemafassung, die dieses Binary erwartet. Es gibt
 // noch keine Migrationen: Passt die Fassung nicht, ist die Datenbank neu
-// anzulegen.
-const SchemaVersion = 4
+// anzulegen. Fassung 5 bringt hubs.ca (Task 018).
+const SchemaVersion = 5
 
 // Info beschreibt eine geöffnete Node-Datenbank.
 type Info struct {
@@ -94,8 +94,9 @@ type Store interface {
 // „Datenmodell“ im Konzept: seine Hubs und die Collections, die er von ihnen
 // haben will. Beides gleicht sich nicht ab. entry_id ist die Kennung des
 // Eintrags, beim Anlegen vergeben und nie wieder vergeben (ULID); an sie ist
-// das Schreiben des Abgleichs gebunden. hub_sync ist der Stand des Abgleichs
-// je Eintrag — abgeleitet, nicht im Export.
+// das Schreiben des Abgleichs gebunden. ca ist bei https die CA als PEM-Text,
+// gegen die der Node das Zertifikat des Hubs prüft. hub_sync ist der Stand
+// des Abgleichs je Eintrag — abgeleitet, nicht im Export.
 const sqliteSchema = `
 CREATE TABLE hubs (
   name        TEXT PRIMARY KEY,
@@ -105,6 +106,7 @@ CREATE TABLE hubs (
   address     TEXT,
   token       TEXT,
   ssh_key     TEXT,
+  ca          TEXT,
   hub_id      TEXT
 );
 CREATE TABLE hub_collections (

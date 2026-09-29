@@ -46,7 +46,7 @@ func TestHubAccountGrantVendor(t *testing.T) {
 	runT(t, "hub", "account", "--help").want(t, 0, "--vendor")
 }
 
-// Export im Format 6 trägt die Scopes; der Import nimmt sie mit und prüft
+// Export ab Format 6 trägt die Scopes; der Import nimmt sie mit und prüft
 // ihre Namen. Ein Export im Format 5 liest sich ohne Scopes; trägt er
 // welche, bricht der Import ab.
 func TestExportImportVendor(t *testing.T) {
@@ -63,7 +63,7 @@ func TestExportImportVendor(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
-	for _, want := range []string{"format: 6", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
+	for _, want := range []string{"format: 7", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}
@@ -85,13 +85,13 @@ func TestExportImportVendor(t *testing.T) {
 		t.Fatalf("Export ohne %q:\n%s", kpVendor, data)
 	}
 	for _, c := range []struct{ name, content, want string }{
-		{"F5 mit vendor", strings.Replace(data, "format: 6", "format: 5", 1),
+		{"F5 mit vendor", strings.Replace(toFormat6(t, data), "format: 6", "format: 5", 1),
 			"Format 5 kennt keinen Scope vendor (tables.hub.accounts[0].rights[0].vendor)"},
 		{"F5 mit vendor leer", strings.Replace(toFormat5(t, data), "supersede: false", "supersede: false\n            vendor: []", 1),
 			"Format 5 kennt keinen Scope vendor"},
 		{"F5 mit vendor null", strings.Replace(toFormat5(t, data), "supersede: false", "supersede: false\n            vendor:", 1),
 			"Format 5 kennt keinen Scope vendor"},
-		{"F4 mit vendor", strings.Replace(dropLines(t, data, "        user: "), "format: 6", "format: 4", 1),
+		{"F4 mit vendor", strings.Replace(dropLines(t, toFormat6(t, data), "        user: "), "format: 6", "format: 4", 1),
 			"Format 4 kennt keinen Scope vendor"},
 		{"ungültiger Name", strings.Replace(data, kpVendor, "\n            vendor:\n              - K-Playbook", 1),
 			"Account kp in team-x: Scope vendor/<name> \"K-Playbook\": ungültiger Name"},
@@ -114,12 +114,12 @@ func TestExportImportVendor(t *testing.T) {
 			}
 		}
 	}
-	// Format 6: die Scopes kommen mit, in die Zeilen und die gemerkten
+	// Format 7: die Scopes kommen mit, in die Zeilen und die gemerkten
 	// Rechte; fehlt vendor, ist es leer.
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "3 Accounts")
 	got, want := hubTables(t, cfgB).Accounts, hubTables(t, cfgA).Accounts
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Accounts nach Format 6:\n%+v\nerwartet\n%+v", got, want)
+		t.Errorf("Accounts nach Format 7:\n%+v\nerwartet\n%+v", got, want)
 	}
 	var content string
 	if err := rawHub(t, b).QueryRow(`SELECT content FROM documents WHERE name = 'SYSTEM:A:kp' AND deleted = 0`).Scan(&content); err != nil {

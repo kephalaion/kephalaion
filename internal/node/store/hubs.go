@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
@@ -49,6 +51,11 @@ type Hub struct {
 	Address   string
 	Token     string
 	SSHKey    string
+	// CA ist bei https die Zertifizierungsstelle, gegen die der Node das
+	// Zertifikat des Hubs prüft: ein oder mehrere Zertifikate als PEM, der
+	// Text selbst, nicht ein Pfad — der Node läuft global unter einem anderen
+	// User als der Verwalter. Leer heißt: die System-Roots.
+	CA string
 	// HubID ist leer bis zum ersten Kontakt.
 	HubID       string
 	Collections []string
@@ -61,6 +68,7 @@ type HubUpdate struct {
 	Transport *string
 	Address   *string
 	SSHKey    *string
+	CA        *string
 }
 
 // Wanted ist eine Zeile in hub_collections: der Node will die Collection
@@ -100,6 +108,14 @@ func CheckHub(h Hub, hubInConfig bool) error {
 	if h.SSHKey != "" && h.Transport != TransportSSH {
 		return fmt.Errorf("Hub %s: --ssh-key gibt es nur bei Transport ssh", h.Name)
 	}
+	if h.CA != "" {
+		if h.Transport != TransportHTTPS {
+			return fmt.Errorf("Hub %s: --ca-file gibt es nur bei Transport https", h.Name)
+		}
+		if _, err := ParseCA(h.CA); err != nil {
+			return fmt.Errorf("Hub %s: %w", h.Name, err)
+		}
+	}
 	if h.HubID != "" {
 		if _, err := ulid.ParseStrict(h.HubID); err != nil {
 			return fmt.Errorf("Hub %s: hub_id %q ist keine ULID", h.Name, h.HubID)
@@ -134,6 +150,33 @@ func CheckHub(h Hub, hubInConfig bool) error {
 		return fmt.Errorf("Hub %s: unbekannter Transport %q; erlaubt sind local, http, https, ssh", h.Name, h.Transport)
 	}
 	return nil
+}
+
+// ParseCA liest die Zertifikate einer CA aus PEM-Text: mindestens ein Block
+// CERTIFICATE, jeder parsebar; andere Blöcke (ein Schlüssel etwa) sind ein
+// Fehler. Dieselbe Prüfung für node hub add|set --ca-file und den Import.
+func ParseCA(text string) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	rest := []byte(text)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("--ca-file: erwartet nur Zertifikate (CERTIFICATE), nicht %s", block.Type)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("--ca-file: Zertifikat %d nicht lesbar: %v", len(certs)+1, err)
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, errors.New("--ca-file: kein Zertifikat gefunden (erwartet PEM mit -----BEGIN CERTIFICATE-----)")
+	}
+	return certs, nil
 }
 
 // checkHubs prüft alle Hub-Einträge zusammen: jeder für sich, Namen
@@ -189,12 +232,12 @@ func CheckTables(t Tables, hubInConfig bool) error {
 // Abfragen des Nodes. Hier ist SQLite-Eigenes erlaubt; nötig ist es nicht.
 const (
 	qHubsAll = `SELECT name, entry_id, node_name, transport, COALESCE(address, ''), COALESCE(token, ''),
-		COALESCE(ssh_key, ''), COALESCE(hub_id, '') FROM hubs ORDER BY name`
+		COALESCE(ssh_key, ''), COALESCE(ca, ''), COALESCE(hub_id, '') FROM hubs ORDER BY name`
 	qHubGet = `SELECT name, entry_id, node_name, transport, COALESCE(address, ''), COALESCE(token, ''),
-		COALESCE(ssh_key, ''), COALESCE(hub_id, '') FROM hubs WHERE name = ?`
-	qHubInsert = `INSERT INTO hubs (name, entry_id, node_name, transport, address, token, ssh_key, hub_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	qHubUpdate = `UPDATE hubs SET node_name = ?, transport = ?, address = ?, ssh_key = ? WHERE name = ?`
+		COALESCE(ssh_key, ''), COALESCE(ca, ''), COALESCE(hub_id, '') FROM hubs WHERE name = ?`
+	qHubInsert = `INSERT INTO hubs (name, entry_id, node_name, transport, address, token, ssh_key, ca, hub_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	qHubUpdate = `UPDATE hubs SET node_name = ?, transport = ?, address = ?, ssh_key = ?, ca = ? WHERE name = ?`
 	qHubToken  = `UPDATE hubs SET token = ? WHERE name = ?`
 	qHubID     = `UPDATE hubs SET hub_id = ? WHERE name = ? AND entry_id = ?`
 	qHubDelete = `DELETE FROM hubs WHERE name = ?`
@@ -218,7 +261,7 @@ func nullable(v string) any {
 
 func scanHub(sc interface{ Scan(...any) error }) (Hub, error) {
 	var h Hub
-	err := sc.Scan(&h.Name, &h.EntryID, &h.NodeName, &h.Transport, &h.Address, &h.Token, &h.SSHKey, &h.HubID)
+	err := sc.Scan(&h.Name, &h.EntryID, &h.NodeName, &h.Transport, &h.Address, &h.Token, &h.SSHKey, &h.CA, &h.HubID)
 	return h, err
 }
 
@@ -357,15 +400,15 @@ func (s *sqliteStore) AddHub(ctx context.Context, h Hub, hubInConfig bool) error
 			return err
 		}
 		_, err := tx.ExecContext(ctx, qHubInsert, h.Name, h.EntryID, h.NodeName, h.Transport, nullable(h.Address), h.Token,
-			nullable(h.SSHKey), nil)
+			nullable(h.SSHKey), nullable(h.CA), nil)
 		return err
 	})
 }
 
 // ApplyUpdate liefert den Eintrag nach einer Änderung: Ein Wechsel des
 // Transports verwirft, was zum neuen nicht passt (die Adresse bei local, den
-// Schlüssel außer bei ssh); danach gelten die angegebenen Felder. hub_id und
-// Token bleiben.
+// Schlüssel außer bei ssh, die CA außer bei https); danach gelten die
+// angegebenen Felder. hub_id und Token bleiben.
 func ApplyUpdate(h Hub, u HubUpdate) Hub {
 	if u.Transport != nil && *u.Transport != h.Transport {
 		h.Transport = *u.Transport
@@ -375,12 +418,18 @@ func ApplyUpdate(h Hub, u HubUpdate) Hub {
 		if h.Transport != TransportSSH {
 			h.SSHKey = ""
 		}
+		if h.Transport != TransportHTTPS {
+			h.CA = ""
+		}
 	}
 	if u.Address != nil {
 		h.Address = *u.Address
 	}
 	if u.SSHKey != nil {
 		h.SSHKey = *u.SSHKey
+	}
+	if u.CA != nil {
+		h.CA = *u.CA
 	}
 	if u.NodeName != nil {
 		h.NodeName = *u.NodeName
@@ -398,7 +447,8 @@ func (s *sqliteStore) SetHub(ctx context.Context, name string, u HubUpdate, hubI
 		if err := checkWithOthers(ctx, tx, h, hubInConfig); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, qHubUpdate, h.NodeName, h.Transport, nullable(h.Address), nullable(h.SSHKey), name)
+		_, err = tx.ExecContext(ctx, qHubUpdate, h.NodeName, h.Transport, nullable(h.Address), nullable(h.SSHKey),
+			nullable(h.CA), name)
 		return err
 	})
 }
@@ -549,7 +599,7 @@ func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, ta
 				id = ulid.Make().String()
 			}
 			if _, err := tx.ExecContext(ctx, qHubInsert, h.Name, id, h.NodeName, h.Transport, nullable(h.Address), h.Token,
-				nullable(h.SSHKey), nullable(h.HubID)); err != nil {
+				nullable(h.SSHKey), nullable(h.CA), nullable(h.HubID)); err != nil {
 				return fmt.Errorf("Hub %s: %w", h.Name, err)
 			}
 		}

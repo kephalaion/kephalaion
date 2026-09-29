@@ -353,7 +353,7 @@ func overHTTP(t *testing.T, st store.Store, wrap func(http.Handler) http.Handler
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	c, err := httpapi.NewClient(srv.URL)
+	c, err := httpapi.NewClient(srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestWriteRefused(t *testing.T) {
 	ctx := context.Background()
 	acc := f.writers(t)
 	srv := httptest.NewServer(httpapi.NewHandler(f.hub))
-	c, err := httpapi.NewClient(srv.URL)
+	c, err := httpapi.NewClient(srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -84,7 +84,7 @@ func (e *commEnv) docIs(t *testing.T, addr, name, content string) bool {
 // kostet sonst Sekunden je Runde.
 func noRetry(t *testing.T) {
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +312,7 @@ func (h heldHub) Sync(ctx context.Context, req contract.SyncRequest) (contract.S
 func holdHTTP(t *testing.T) heldHub {
 	h := heldHub{once: &sync.Once{}, entered: make(chan struct{}), release: make(chan struct{})}
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -426,7 +426,7 @@ func TestServeShutdownDeafHub(t *testing.T) {
 	ns := nodeStore(t, e.cfg)
 	deaf := deafHub{once: &sync.Once{}, entered: make(chan struct{}), release: make(chan struct{})}
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -508,7 +508,7 @@ func TestBackgroundSyncKick(t *testing.T) {
 	var calls atomic.Int32
 	h := holdHTTP(t)
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		if err != nil {
 			return nil, err
 		}

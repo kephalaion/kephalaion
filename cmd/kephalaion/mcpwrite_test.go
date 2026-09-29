@@ -193,7 +193,7 @@ func TestMCPWriteThroughServe(t *testing.T) {
 
 	// Unklarer Ausgang: Der Hub hat geschrieben, die Antwort ging verloren.
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		return lostWrite{c}, err
 	})
 	wantWriteCode(t, "unklar", write("create", mcpnode.CreateInput{Collection: "fern:team-x", Name: "unklar.md",

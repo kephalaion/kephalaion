@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/oklog/ulid/v2"
@@ -18,12 +22,12 @@ import (
 
 const nodeHubUsage = `Aufruf:
   kephalaion node hub add   <alias> --node <name am hub> --transport local|http|https|ssh
-                            [--address adresse] [--ssh-key pfad] --token-stdin
+                            [--address adresse] [--ca-file pfad] [--ssh-key pfad] --token-stdin
   kephalaion node hub add   <alias> --node <name am hub> --transport local --create
   kephalaion node hub check <alias>
   kephalaion node hub list
   kephalaion node hub show  <alias>
-  kephalaion node hub set   <alias> [--node …] [--transport …] [--address …] [--ssh-key …]
+  kephalaion node hub set   <alias> [--node …] [--transport …] [--address …] [--ca-file …] [--ssh-key …]
   kephalaion node hub token <alias> --token-stdin
   kephalaion node hub rm    <alias>
 
@@ -34,10 +38,14 @@ Kommandos:
           direkt ein, ohne es anzuzeigen
   check   fragt den Hub, wer dieser Node für ihn ist (whoami): erreichbar,
           Node-Name, erlaubte Collections; merkt beim ersten Kontakt die
-          hub_id — nennt der Hub eine andere als die Replica, wird sie geleert
+          hub_id — nennt der Hub eine andere als die Replica, wird sie geleert.
+          Bei https nennt es Zertifikatsfehler, eine Antwort des Proxys ohne
+          Hub (502, 503) und die Host-Prüfung des Hubs (403) im Klartext
   list    zeigt alle Hubs
-  show    zeigt einen Hub samt gewünschten Collections
-  set     ändert Node-Namen, Transport, Adresse oder Schlüssel; der Rest bleibt
+  show    zeigt einen Hub samt gewünschten Collections; bei https die CA
+          (Subject, Gültigkeit, SHA-256-Fingerabdruck je Zertifikat)
+  set     ändert Node-Namen, Transport, Adresse, CA oder Schlüssel; der Rest
+          bleibt
   token   ersetzt das Token dieses Nodes beim Hub
   rm      entfernt den Eintrag samt seinen gewünschten Collections und seiner
           Replica
@@ -48,11 +56,15 @@ Transporte:
   http    nur auf diesem Rechner: http://localhost:<port> (auch 127.0.0.1,
           [::1]), ein Hub, der mit kephalaion serve lauscht — Klartext, deshalb
           nur Loopback
-  https   https://<host>[:<port>]
-  ssh     [user@]host[:port], dazu optional --ssh-key
+  https   https://<host>[:<port>], ein Hub auf einem anderen Rechner hinter
+          einem Reverse-Proxy, der TLS beendet (docs/installation.md). Das
+          Zertifikat prüft der Node gegen die System-Roots oder, mit
+          --ca-file, gegen die dort genannte CA; scheitert die Prüfung, geht
+          kein Token hinaus. Kein Client-Zertifikat
+  ssh     [user@]host[:port], dazu optional --ssh-key; noch nicht gebaut
 
 Wechselt set den Transport, fällt weg, was nicht passt: die Adresse bei local,
-der Schlüssel außer bei ssh.
+die CA außer bei https, der Schlüssel außer bei ssh.
 
 Das Token liest --token-stdin als eine Zeile von der Standardeingabe; als
 Argument wird es nie übergeben. Angezeigt wird es nur gekürzt.
@@ -62,6 +74,10 @@ Optionen:
                      dem Token meldet sich der Node beim Hub an (Pflicht bei add)
   --transport art    local, http, https oder ssh
   --address adresse  Adresse des Hubs, je nach Transport
+  --ca-file pfad     nur bei https: ein oder mehrere Zertifikate (PEM), gegen
+                     die der Node das Zertifikat des Hubs prüft, statt der
+                     System-Roots. Gespeichert wird der Inhalt der Datei, nicht
+                     ihr Pfad; --ca-file "" bei set entfernt die CA wieder
   --ssh-key pfad     SSH-Schlüssel, nur bei ssh
   --token-stdin      Token von der Standardeingabe lesen
   --create           den Node am Hub derselben config anlegen (nur local); das
@@ -92,6 +108,7 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			nodeName := c.fs.String("node", "", "")
 			transport := c.fs.String("transport", "", "")
 			address := c.fs.String("address", "", "")
+			caFile := c.fs.String("ca-file", "", "")
 			sshKey := c.fs.String("ssh-key", "", "")
 			tokenStdin := c.fs.Bool("token-stdin", false, "")
 			create := c.fs.Bool("create", false, "")
@@ -113,6 +130,14 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				h := nodestore.Hub{Name: pos[0], NodeName: *nodeName, Transport: *transport, Address: *address, SSHKey: *sshKey}
 				// Erst alles andere prüfen, dann stdin lesen.
 				if err := ident.CheckName("Hub", h.Name); err != nil {
+					return err
+				}
+				ca, err := readCAFile(*caFile)
+				if err != nil {
+					return err
+				}
+				h.CA = ca
+				if err := nodestore.CheckHub(withPlaceholderToken(h), hubInConfig); err != nil {
 					return err
 				}
 				if *create {
@@ -148,9 +173,13 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 					return nil
 				}
 				tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "ALIAS\tNODE\tTRANSPORT\tADRESSE\tTOKEN\tHUB_ID\tCOLLECTIONS")
+				fmt.Fprintln(tw, "ALIAS\tNODE\tTRANSPORT\tADRESSE\tCA\tTOKEN\tHUB_ID\tCOLLECTIONS")
 				for _, h := range hubs {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", h.Name, h.NodeName, h.Transport, orDash(h.Address),
+					ca := "–"
+					if h.CA != "" {
+						ca = "ja"
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", h.Name, h.NodeName, h.Transport, orDash(h.Address), ca,
 						ident.MaskToken(h.Token), hubIDOrNone(h.HubID), joinOrNone(h.Collections))
 				}
 				return tw.Flush()
@@ -167,6 +196,9 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "  Node-Name:    %s\n", h.NodeName)
 				fmt.Fprintf(stdout, "  Transport:    %s\n", h.Transport)
 				fmt.Fprintf(stdout, "  Adresse:      %s\n", orDash(h.Address))
+				if h.Transport == nodestore.TransportHTTPS {
+					fmt.Fprintf(stdout, "  CA:           %s\n", describeCA(h.CA))
+				}
 				if h.Transport == nodestore.TransportSSH {
 					fmt.Fprintf(stdout, "  SSH-Schlüssel: %s\n", orDash(h.SSHKey))
 				}
@@ -181,6 +213,7 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			nodeName := c.fs.String("node", "", "")
 			transport := c.fs.String("transport", "", "")
 			address := c.fs.String("address", "", "")
+			caFile := c.fs.String("ca-file", "", "")
 			sshKey := c.fs.String("ssh-key", "", "")
 			return c.nodeDo(a, func(ctx context.Context, s nodestore.Store, hubInConfig bool, pos []string) error {
 				var upd nodestore.HubUpdate
@@ -193,11 +226,19 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				if c.isSet("address") {
 					upd.Address = address
 				}
+				if c.isSet("ca-file") {
+					// --ca-file "" entfernt die CA.
+					ca, err := readCAFile(*caFile)
+					if err != nil {
+						return err
+					}
+					upd.CA = &ca
+				}
 				if c.isSet("ssh-key") {
 					upd.SSHKey = sshKey
 				}
 				if upd == (nodestore.HubUpdate{}) {
-					return errors.New("nichts zu ändern; erwartet --node, --transport, --address oder --ssh-key")
+					return errors.New("nichts zu ändern; erwartet --node, --transport, --address, --ca-file oder --ssh-key")
 				}
 				if err := s.SetHub(ctx, pos[0], upd, hubInConfig); err != nil {
 					return err
@@ -318,6 +359,56 @@ func describeTransport(h nodestore.Hub) string {
 		return h.Transport
 	}
 	return h.Transport + " " + h.Address
+}
+
+// readCAFile liest die Datei aus --ca-file; ein leerer Pfad ist keine CA.
+// Geprüft wird der Inhalt im Node-Store (CheckHub), wie beim Import.
+func readCAFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("--ca-file: %w", err)
+	}
+	if _, err := nodestore.ParseCA(string(data)); err != nil {
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	return string(data), nil
+}
+
+// withPlaceholderToken liefert den Eintrag mit einem gültigen Token, um ihn
+// vor dem Lesen des echten von stdin zu prüfen.
+func withPlaceholderToken(h nodestore.Hub) nodestore.Hub {
+	placeholder, err := ident.NewToken()
+	if err == nil {
+		h.Token = placeholder
+	}
+	return h
+}
+
+// describeCA beschreibt die CA eines Eintrags für show: je Zertifikat
+// Subject, Gültigkeit und SHA-256-Fingerabdruck; ohne CA „–“ (System-Roots).
+func describeCA(ca string) string {
+	if ca == "" {
+		return "– (System-Roots)"
+	}
+	certs, err := nodestore.ParseCA(ca)
+	if err != nil {
+		return "nicht lesbar: " + err.Error()
+	}
+	lines := make([]string, 0, len(certs))
+	for _, cert := range certs {
+		sum := sha256.Sum256(cert.Raw)
+		hexSum := hex.EncodeToString(sum[:])
+		parts := make([]string, 0, len(hexSum)/2)
+		for i := 0; i+1 < len(hexSum); i += 2 {
+			parts = append(parts, hexSum[i:i+2])
+		}
+		lines = append(lines, fmt.Sprintf("%s, gültig %s – %s, SHA-256 %s", cert.Subject.String(),
+			cert.NotBefore.UTC().Format("2006-01-02"), cert.NotAfter.UTC().Format("2006-01-02"), strings.Join(parts, ":")))
+	}
+	return strings.Join(lines, "\n                ")
 }
 
 func hubIDOrNone(id string) string {

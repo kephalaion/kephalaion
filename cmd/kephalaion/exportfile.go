@@ -22,9 +22,11 @@ import (
 // Import, wie sie sind. Format 5 bringt den User je Account, dort Pflicht; ein
 // Import von Format 4 setzt ihn auf den Namen des Accounts. Format 6 bringt
 // je Recht die Scopes vendor/<name> (vendor, eine Liste); ein Export davor
-// darf sie nicht tragen und liest sich ohne Scopes.
+// darf sie nicht tragen und liest sich ohne Scopes. Format 7 bringt je
+// Hub-Eintrag des Nodes die CA (ca, PEM-Text, bei https); ein Export davor
+// darf sie nicht tragen und liest sich ohne CA.
 const (
-	exportFormat    = 6
+	exportFormat    = 7
 	minExportFormat = 1
 	// accountsFormat ist die erste Fassung mit Accounts.
 	accountsFormat = 4
@@ -32,6 +34,8 @@ const (
 	userFormat = 5
 	// vendorFormat ist die erste Fassung mit den Scopes vendor/<name>.
 	vendorFormat = 6
+	// caFormat ist die erste Fassung mit der CA je Hub-Eintrag.
+	caFormat = 7
 )
 
 // exportFile ist der Inhalt einer Exportdatei: die config, die settings je
@@ -110,6 +114,9 @@ type nodeTablesYAML struct {
 	HubCollections []wantedYAML `yaml:"hub_collections"`
 }
 
+// hubYAML ist ein Hub-Eintrag des Nodes im Export. CA ist ab Format 7 die
+// CA als PEM-Text (mehrzeilig, öffentlich), leer ohne; davor darf das Feld
+// nicht dastehen — das prüft parseExport am YAML-Knoten.
 type hubYAML struct {
 	Name      string `yaml:"name"`
 	NodeName  string `yaml:"node_name"`
@@ -117,6 +124,7 @@ type hubYAML struct {
 	Address   string `yaml:"address"`
 	Token     string `yaml:"token"`
 	SSHKey    string `yaml:"ssh_key"`
+	CA        string `yaml:"ca"`
 	HubID     string `yaml:"hub_id"`
 }
 
@@ -193,7 +201,7 @@ func nodeTablesToYAML(t nodestore.Tables) *nodeTablesYAML {
 	out := &nodeTablesYAML{Hubs: []hubYAML{}, HubCollections: []wantedYAML{}}
 	for _, h := range t.Hubs {
 		out.Hubs = append(out.Hubs, hubYAML{Name: h.Name, NodeName: h.NodeName, Transport: h.Transport, Address: h.Address,
-			Token: h.Token, SSHKey: h.SSHKey, HubID: h.HubID})
+			Token: h.Token, SSHKey: h.SSHKey, CA: h.CA, HubID: h.HubID})
 	}
 	for _, w := range t.Wanted {
 		out.HubCollections = append(out.HubCollections, wantedYAML(w))
@@ -201,11 +209,14 @@ func nodeTablesToYAML(t nodestore.Tables) *nodeTablesYAML {
 	return out
 }
 
+// toStore liefert die Tabellen des Nodes für den Import. Vor Format 7 gibt
+// es keine CA; ab Format 7 hat parseExport geprüft, dass sie nur dort steht
+// (Inhalt und Transport prüft nodestore.CheckTables).
 func (y *nodeTablesYAML) toStore() nodestore.Tables {
 	t := nodestore.Tables{Hubs: []nodestore.Hub{}, Wanted: []nodestore.Wanted{}}
 	for _, h := range y.Hubs {
 		t.Hubs = append(t.Hubs, nodestore.Hub{Name: h.Name, NodeName: h.NodeName, Transport: h.Transport, Address: h.Address,
-			Token: h.Token, SSHKey: h.SSHKey, HubID: h.HubID})
+			Token: h.Token, SSHKey: h.SSHKey, CA: h.CA, HubID: h.HubID})
 	}
 	for _, w := range y.HubCollections {
 		t.Wanted = append(t.Wanted, nodestore.Wanted(w))
@@ -311,7 +322,30 @@ func parseExport(data []byte) (exportFile, error) {
 	if err := checkAccountVendor(&root, exp.Format); err != nil {
 		return exportFile{}, err
 	}
+	if err := checkHubCA(&root, exp.Format); err != nil {
+		return exportFile{}, err
+	}
 	return exp, nil
+}
+
+// checkHubCA prüft die CA je Hub-Eintrag gegen die Fassung, am YAML-Knoten:
+// Vor Format 7 darf ca nicht dastehen, in keiner Form (auch nicht null oder
+// leer). Ab Format 7 ist es Text, fehlend oder null leer; Inhalt und
+// Transport prüft nodestore.CheckTables.
+func checkHubCA(root *yaml.Node, format int) error {
+	if format >= caFormat {
+		return nil
+	}
+	hubs := partNode(root, "tables", "node", "hubs")
+	if hubs == nil || hubs.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for i, item := range hubs.Content {
+		if mappingValue(item, "ca") != nil {
+			return fmt.Errorf("Format %d kennt keine CA (tables.node.hubs[%d].ca); ab Format %d", format, i, caFormat)
+		}
+	}
+	return nil
 }
 
 // checkAccountVendor prüft die Scopes je Recht gegen die Fassung, am

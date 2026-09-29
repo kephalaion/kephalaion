@@ -12,6 +12,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kephalaion/kephalaion/internal/ident"
+	"github.com/kephalaion/kephalaion/internal/testcert"
 )
 
 func newStore(t *testing.T) Store {
@@ -37,6 +38,8 @@ func ptr(s string) *string { return &s }
 
 func TestTransportRules(t *testing.T) {
 	tok := token(t)
+	ca, ca2 := testcert.NewCA(t, "Test-CA").PEM, testcert.NewCA(t, "Zweite CA").PEM
+	const key = "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIA==\n-----END EC PRIVATE KEY-----\n"
 	cases := []struct {
 		name  string
 		h     Hub
@@ -59,6 +62,13 @@ func TestTransportRules(t *testing.T) {
 		{"ssh mit Schlüssel", Hub{Transport: "ssh", Address: "hub", SSHKey: "/k/id"}, false, true},
 		{"ssh ohne Adresse", Hub{Transport: "ssh"}, false, false},
 		{"Schlüssel bei https", Hub{Transport: "https", Address: "https://h", SSHKey: "/k"}, false, false},
+		{"https mit CA", Hub{Transport: "https", Address: "https://h", CA: ca}, false, true},
+		{"https mit zwei CAs", Hub{Transport: "https", Address: "https://h", CA: ca + ca2}, false, true},
+		{"https mit kaputter CA", Hub{Transport: "https", Address: "https://h", CA: "kein PEM"}, false, false},
+		{"https mit Schlüssel statt CA", Hub{Transport: "https", Address: "https://h", CA: key}, false, false},
+		{"CA bei http", Hub{Transport: "http", Address: "http://localhost:1", CA: ca}, false, false},
+		{"CA bei ssh", Hub{Transport: "ssh", Address: "h", CA: ca}, false, false},
+		{"CA bei local", Hub{Transport: "local", CA: ca}, true, false},
 		{"unbekannt", Hub{Transport: "ftp", Address: "ftp://h"}, false, false},
 		{"ohne Transport", Hub{}, true, false},
 	}
@@ -429,5 +439,105 @@ func TestImportRemovesStaleReplicas(t *testing.T) {
 	}
 	if gone("team") {
 		t.Error("Replica team entfernt, obwohl der Alias bleibt")
+	}
+}
+
+// ParseCA liest ein oder mehrere Zertifikate; anderes ist ein Fehler, der
+// sagt, was fehlt.
+func TestParseCA(t *testing.T) {
+	ca, ca2 := testcert.NewCA(t, "Eins"), testcert.NewCA(t, "Zwei")
+	certs, err := ParseCA(ca.PEM + "\n" + ca2.PEM)
+	if err != nil || len(certs) != 2 || certs[0].Subject.CommonName != "Eins" || certs[1].Subject.CommonName != "Zwei" {
+		t.Errorf("ParseCA = %d Zertifikate, %v", len(certs), err)
+	}
+	for _, bad := range []struct{ name, text, want string }{
+		{"leer", "", "kein Zertifikat"},
+		{"Text", "hallo", "kein Zertifikat"},
+		{"Schlüssel", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n", "nicht PRIVATE KEY"},
+		{"kaputt", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", "Zertifikat 1 nicht lesbar"},
+		{"zweites kaputt", ca.PEM + "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", "Zertifikat 2 nicht lesbar"},
+	} {
+		if _, err := ParseCA(bad.text); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%s: %v, erwartet %q", bad.name, err, bad.want)
+		}
+	}
+}
+
+// Die CA eines https-Eintrags: gespeichert als Text, geändert und entfernt
+// mit set, verworfen beim Wechsel des Transports, im Import geprüft.
+func TestHubCA(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	tok := token(t)
+	ca, ca2 := testcert.NewCA(t, "Eins").PEM, testcert.NewCA(t, "Zwei").PEM
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AddHub(ctx, Hub{Name: "fern", NodeName: "laptop", Transport: "https", Address: "https://h", CA: "x", Token: tok}, false); err == nil {
+		t.Fatal("kaputte CA angenommen")
+	}
+	must(s.AddHub(ctx, Hub{Name: "fern", NodeName: "laptop", Transport: "https", Address: "https://h", CA: ca, Token: tok}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != ca {
+		t.Errorf("CA nach add: %q", h.CA)
+	}
+	if hubs, _ := s.Hubs(ctx); len(hubs) != 1 || hubs[0].CA != ca {
+		t.Errorf("Hubs: %+v", hubs)
+	}
+	must(s.SetHub(ctx, "fern", HubUpdate{CA: ptr(ca2)}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != ca2 {
+		t.Errorf("CA nach set: %q", h.CA)
+	}
+	if err := s.SetHub(ctx, "fern", HubUpdate{CA: ptr("kaputt")}, false); err == nil {
+		t.Error("kaputte CA per set angenommen")
+	}
+	if h, _ := s.Hub(ctx, "fern"); h.CA != ca2 {
+		t.Errorf("nach Abweisung verändert: %q", h.CA)
+	}
+	// Adresse ändern lässt die CA stehen.
+	must(s.SetHub(ctx, "fern", HubUpdate{Address: ptr("https://h2")}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != ca2 || h.Address != "https://h2" {
+		t.Errorf("nach Adresse: %+v", h)
+	}
+	// Wechsel auf ssh verwirft sie, zurück auf https bleibt sie weg.
+	must(s.SetHub(ctx, "fern", HubUpdate{Transport: ptr("ssh"), Address: ptr("h")}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != "" || h.Transport != "ssh" {
+		t.Errorf("nach Wechsel auf ssh: %+v", h)
+	}
+	must(s.SetHub(ctx, "fern", HubUpdate{Transport: ptr("https"), Address: ptr("https://h")}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != "" {
+		t.Errorf("CA nach Rückwechsel: %q", h.CA)
+	}
+	// Leer entfernt sie; bei einem anderen Transport wird sie abgewiesen.
+	must(s.SetHub(ctx, "fern", HubUpdate{CA: ptr(ca)}, false))
+	must(s.SetHub(ctx, "fern", HubUpdate{CA: ptr("")}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != "" {
+		t.Errorf("CA nach Entfernen: %q", h.CA)
+	}
+	if err := s.SetHub(ctx, "fern", HubUpdate{Transport: ptr("ssh"), Address: ptr("h"), CA: ptr(ca)}, false); err == nil ||
+		!strings.Contains(err.Error(), "nur bei Transport https") {
+		t.Errorf("CA bei ssh: %v", err)
+	}
+	// Wechsel auf https mit CA in einem Zug.
+	must(s.SetHub(ctx, "fern", HubUpdate{Transport: ptr("ssh"), Address: ptr("h")}, false))
+	must(s.SetHub(ctx, "fern", HubUpdate{Transport: ptr("https"), Address: ptr("https://h"), CA: ptr(ca)}, false))
+	if h, _ := s.Hub(ctx, "fern"); h.CA != ca {
+		t.Errorf("CA nach Wechsel auf https: %q", h.CA)
+	}
+
+	// Import: geprüft wie die CLI, gespeichert wie add.
+	tables := Tables{Hubs: []Hub{{Name: "a", NodeName: "laptop", Transport: "https", Address: "https://h", CA: ca2, Token: tok}}}
+	must(s.Import(ctx, map[string]string{}, &tables, false))
+	if got, _ := s.Tables(ctx); len(got.Hubs) != 1 || got.Hubs[0].CA != ca2 {
+		t.Errorf("Tables nach Import: %+v", got)
+	}
+	bad := Tables{Hubs: []Hub{{Name: "a", NodeName: "laptop", Transport: "http", Address: "http://localhost:1", CA: ca, Token: tok}}}
+	if err := s.Import(ctx, map[string]string{}, &bad, false); err == nil {
+		t.Error("Import mit CA bei http angenommen")
+	}
+	if got, _ := s.Tables(ctx); len(got.Hubs) != 1 || got.Hubs[0].CA != ca2 {
+		t.Errorf("Tables nach abgewiesenem Import: %+v", got)
 	}
 }

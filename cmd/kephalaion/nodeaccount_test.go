@@ -253,13 +253,13 @@ func TestAccountRotatePending(t *testing.T) {
 	e := newCommEnv(t)
 	apply := true
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		return lostAnswer{Hub: c, apply: apply}, err
 	})
 
 	// Eindeutig gescheitert: Datei bleibt, .pending weg.
 	file := e.tokenFile(t, "bob", e.tokens["alice"])
-	hookHTTP(t, func(address string) (contract.Hub, error) { return httpapi.NewClient(address) })
+	hookHTTP(t, func(address string) (contract.Hub, error) { return httpapi.NewClient(address, nil) })
 	e.run(t, "node", "account", "rotate", "fern", "bob", "--token-file", file).want(t, 1, "Token-Datei bleibt unverändert")
 	if readFileToken(t, file) != e.tokens["alice"] {
 		t.Error("Datei verändert")
@@ -271,7 +271,7 @@ func TestAccountRotatePending(t *testing.T) {
 	// Unklar, der Hub hat rotiert: beide bleiben, rotate ist gesperrt, check
 	// übernimmt das neue.
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		return lostAnswer{Hub: c, apply: apply}, err
 	})
 	file = e.tokenFile(t, "bob", e.tokens["bob"])
@@ -352,7 +352,7 @@ func TestAccountRotateNoRetry(t *testing.T) {
 	// Ein Abgleich dagegen wird wiederholt.
 	calls.Store(0)
 	hookHTTP(t, func(address string) (contract.Hub, error) {
-		c, err := httpapi.NewClient(address)
+		c, err := httpapi.NewClient(address, nil)
 		if err == nil {
 			c.Backoff = 1
 		}
