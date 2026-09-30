@@ -291,3 +291,49 @@ func TestReadWritableDirs(t *testing.T) {
 		t.Errorf("Struktur ohne Verzeichnis-Scopes: %s", raw)
 	}
 }
+
+// rights in whoami trägt je Angabe genau ein Element, auch wenn ein
+// Verzeichnis-Scope Komma und Leerzeichen im Namen hat (Task 021, Review):
+// Die Liste entsteht aus den Rechten (contract.Rights.List), nicht aus ihrem
+// Text. Ein Scope vendor/<name> daneben bleibt ein eigenes Element.
+func TestWhoamiRightsDirWithComma(t *testing.T) {
+	e := newDocEnv(t)
+	e.tokens["keph/komma"] = token(t)
+	rights, err := contract.NormalizeRights(contract.Rights{Vendor: []string{"k-playbook"}, Dirs: []string{"a, b", "docs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.hubs["keph"].grant("komma", "wissen", e.tokens["keph/komma"], rights)
+	e.sync(t)
+
+	var who WhoamiOutput
+	res, errText := e.call(t, pairOf(e, "keph", "komma"), "whoami", struct{}{}, &who)
+	if errText != "" {
+		t.Fatal(errText)
+	}
+	var got *HubInfo
+	for i := range who.Hubs {
+		if who.Hubs[i].Hub == "keph" {
+			got = &who.Hubs[i]
+		}
+	}
+	want := []CollectionRights{{Collection: "wissen", Address: "keph:wissen",
+		Rights: []string{"read", "vendor/k-playbook", "dir a, b/", "dir docs/"}, Dirs: []string{"a, b", "docs"}}}
+	if got == nil || !reflect.DeepEqual(got.Collections, want) {
+		t.Errorf("whoami: %+v", got)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"dirs":["a, b","docs"],"rights":["read","vendor/k-playbook","dir a, b/","dir docs/"]`) {
+		t.Errorf("Struktur: %s", raw)
+	}
+	// Der Textteil bleibt der von contract.Rights.String.
+	var text string
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !strings.Contains(text, "keph:wissen (read, vendor/k-playbook, dir a, b/, dir docs/)") {
+		t.Errorf("Text:\n%s", text)
+	}
+}

@@ -43,10 +43,18 @@ type Rights struct {
 	Dirs      []string `json:"dirs,omitempty"`
 }
 
-// String nennt die Rechte, read immer zuerst, die Scopes zuletzt — erst
-// vendor/<name>, dann die Verzeichnis-Scopes als „dir <pfad>/“: „read,
-// write, vendor/k-playbook, dir docs/“.
-func (r Rights) String() string {
+// String nennt die Rechte als Text: die Angaben von List, mit „, “ verbunden
+// — „read, write, vendor/k-playbook, dir docs/“. Nur zum Anzeigen: Ein
+// Verzeichnis-Scope darf Komma und Leerzeichen tragen, der Text lässt sich
+// deshalb nicht wieder in die Angaben zerlegen. Wer sie einzeln braucht,
+// nimmt List.
+func (r Rights) String() string { return strings.Join(r.List(), ", ") }
+
+// List nennt die Rechte einzeln, je Angabe genau ein Element: read immer
+// zuerst, dann write und supersede, die Scopes zuletzt — erst vendor/<name>,
+// dann die Verzeichnis-Scopes als „dir <pfad>/“ (DirScopeLabel). String
+// beruht auf dieser Liste; Wortlaut und Reihenfolge stehen nur hier.
+func (r Rights) List() []string {
 	out := []string{"read"}
 	if r.Write {
 		out = append(out, "write")
@@ -60,7 +68,7 @@ func (r Rights) String() string {
 	for _, d := range r.Dirs {
 		out = append(out, DirScopeLabel(d))
 	}
-	return strings.Join(out, ", ")
+	return out
 }
 
 // DirScopeLabel nennt einen Verzeichnis-Scope so, wie String ihn zeigt: „dir

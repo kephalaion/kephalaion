@@ -435,6 +435,31 @@ func TestDirScope(t *testing.T) {
 			t.Errorf("%+v: %q, erwartet %q", c.r, got, c.want)
 		}
 	}
+	// Einzeln (List): je Angabe genau ein Element, im Wortlaut und in der
+	// Reihenfolge von String — auch wenn ein Verzeichnis Komma und
+	// Leerzeichen trägt; der Text ließe sich dann nicht mehr zerlegen.
+	for _, c := range []struct {
+		r    Rights
+		want []string
+	}{
+		{Rights{}, []string{"read"}},
+		{Rights{Write: true, Supersede: true, Vendor: []string{"a", "b"}, Dirs: []string{"docs", "tief/er"}},
+			[]string{"read", "write", "supersede", "vendor/a", "vendor/b", "dir docs/", "dir tief/er/"}},
+		{Rights{Vendor: []string{"k-playbook"}, Dirs: []string{"a, b", "c, dir d/e"}},
+			[]string{"read", "vendor/k-playbook", "dir a, b/", "dir c, dir d/e/"}},
+	} {
+		n, err := NormalizeRights(c.r)
+		if err != nil {
+			t.Errorf("%+v abgelehnt: %v", c.r, err)
+			continue
+		}
+		if got := n.List(); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%+v: List %q, erwartet %q", c.r, got, c.want)
+		}
+		if got, want := n.String(), strings.Join(c.want, ", "); got != want {
+			t.Errorf("%+v: %q, erwartet %q", c.r, got, want)
+		}
+	}
 	if !(Rights{Dirs: []string{"b", "a"}}).Equal(Rights{Dirs: []string{"a", "b", "a"}}) || !(Rights{}).Equal(Rights{Dirs: []string{}}) {
 		t.Error("gleiche Verzeichnis-Scopes gelten als verschieden")
 	}
