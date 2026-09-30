@@ -266,12 +266,27 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
 
 ## Zu tun
 
-- **Nach Task 016:** `push` außerhalb von `vendor/` freigeben, sobald sich der Abgleich
-  bewährt hat (`konzept.md`, „Einen Ordner abgleichen“); das Update von `vendor/k-playbook/`
-  und das Überlagern macht k-playbook. Die Erweiterung für VS Code merkt sich `writable` je
+- **Nach Task 016:** Die Sperre von `push` auf `vendor/` bleibt (entschieden am 2026-09-30);
+  weitere Ziele nur als einzeln freigegebene Verzeichnisse, Task 021 (`konzept.md`, „Einen
+  Ordner abgleichen“). Das Update von `vendor/k-playbook/` und das Überlagern macht k-playbook. Die Erweiterung für VS Code merkt sich `writable` je
   Collection aus dem letzten `read` (`extension.js`, `this.writable`) — unter `vendor/` kann
   die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen Dokuments abhängen; `stat`
   je Dokument ist richtig (Befund `vendor-scope-und-dir-push-pull.md`).
+
+- **Devcontainer an den Node des Hosts** (entschieden am 2026-09-30, `konzept.md`,
+  „Devcontainer“): (1) der Node nimmt `host.docker.internal` mit seinem Port als `Host` an,
+  `Origin` bleibt geprüft — heute 403, sonst geht alles schon (unter WSL mit Docker Desktop
+  probiert: MCP und `node dir pull` aus einem Container); (2) `KEPHALAION_NODE_HOST`: `node
+  dir` und die Erweiterung für VS Code nehmen den Port aus `listen` der eingebundenen config
+  und den Host aus der Variable (heute nimmt die Erweiterung `listen` unverändert,
+  `extension.js`, `nodeUrl`); Hilfe und Meldung von `--node` nennen noch „nur dieser Rechner“
+  (`dircmd.go`, `endpoint`); (3) `kephalaion node mcp-config`: gibt den Eintrag für die
+  MCP-Clients aus — Form je Client und der Weg des Tokens ohne Klartext in einer Datei sind
+  noch zu klären; (4) Kephalaion damit in den MCP-Clients eintragen, auf dem Host und im
+  Container (Sache von k-playbook) — auf der WSL trägt ihn bisher kein KI-Client ein; (5) Doku
+  für den Container nach der Skizze in `konzept.md` (Binary per `install.sh`, config und
+  `tokens/` des Hosts nur lesbar eingebunden); (6) auf dem Mac probieren. Befund
+  `material/befunde/mcp-von-aussen.md`.
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
@@ -327,8 +342,9 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
   - Stufe 3: `append`, `replace_section`, `supersede`, `replace_directory`;
   - Transport `ssh` (Entwurf geparkt in `k-playbook-local/inbox/chat/`, derselbe Anschluss
     wie `https` im `connector`); der Hub bleibt auf Loopback, nach außen spricht der Proxy;
-  - Lauschen auf der Docker-Bridge für Devcontainer — die globale Installation erreichen bis
-    dahin nur User auf dem Rechner selbst (Task 011);
+  - Lauschen auf der Docker-Bridge für Devcontainer unter Docker Engine (Linux ohne Docker
+    Desktop, mit `--add-host=host.docker.internal:host-gateway`) — unter Docker Desktop nicht
+    nötig (siehe „Devcontainer an den Node des Hosts“ oben);
   - PostgreSQL-Umsetzung des Hub-Stores (DDL, `BIGINT`);
   - Migrationsrahmen, sobald Daten bleiben müssen;
   - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;

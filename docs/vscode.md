@@ -202,8 +202,10 @@ VS Code teilt Erweiterungen in zwei Arten:
 
 Nur dort erreicht sie den Node auf `127.0.0.1` der WSL und das Binary unter
 `~/.local/bin/`. Als `ui` liefe sie unter Windows und sähe weder das eine noch das andere.
-Dasselbe gilt für SSH-Remotes und Devcontainer: Die Erweiterung läuft neben dem Node.
-Folge: Sie muss auch **dort** installiert sein, nicht nur im Windows-VS-Code (siehe
+Dasselbe gilt für SSH-Remotes: Die Erweiterung läuft neben dem Node. Im Devcontainer läuft
+sie im Container, der Node aber auf dem Host; sie erreicht ihn über `host.docker.internal` und
+nimmt den Host dafür aus `KEPHALAION_NODE_HOST` — noch nicht gebaut
+([`konzept.md`](konzept.md), „Devcontainer“). Folge: Sie muss auch **dort** installiert sein, nicht nur im Windows-VS-Code (siehe
 Installation).
 
 ## Installation — ohne Marketplace

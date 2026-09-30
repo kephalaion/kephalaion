@@ -85,7 +85,8 @@ systemd startet ein eigener Supervisor `kephalaion serve`.
 `kephalaion service unit --system` — von Hand oder per Ansible nach
 [`docs/installation.md`](docs/installation.md), „Global“. Die User sind Clients über Loopback;
 verwaltet wird als Systembenutzer (`sudo -u kephalaion kephalaion …`). Devcontainer erreichen
-den globalen Node noch nicht.
+den Node noch nicht, weder global noch pro User; geplant ist der Weg über
+`host.docker.internal` ([`docs/konzept.md`](docs/konzept.md), „Devcontainer“).
 
 Die config wird ohne Angabe gefunden: `--config`, `KEPHALAION_CONFIG`, die des Users, wenn es
 sie gibt, sonst `/etc/kephalaion/config.yaml`, wenn es sie gibt. `kephalaion status` nennt,
@@ -604,7 +605,7 @@ kephalaion node dir pull privat:team-x vendor/k-playbook /tmp/vorlagen --delete
 ```
 
 `push` ersetzt den Inhalt des Verzeichnisses — was dort fehlt, wird gelöscht — und schreibt
-vorerst nur unter `vendor/<name>/` (ein Schutz vor Versehen, keine Grenze am Hub). Vorab liest
+nur unter `vendor/<name>/` (ein Schutz vor Versehen, keine Grenze am Hub). Vorab liest
 es den ganzen Ordner ein: Jede Datei muss UTF-8 ohne NUL und höchstens 1 MiB sein und einen
 gültigen Namen haben, sonst bricht `push` mit allen Treffern ab, ohne zu schreiben — mit
 `--exclude glob` (wiederholbar, auf Namen jeder Ebene) ausnehmen. Symlinks werden übergangen
@@ -643,8 +644,10 @@ make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie 
 ```
 
 Danach „Developer: Reload Window“. Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce`
-kommt per `npx`). Auf einem SSH-Remote oder in einem Devcontainer gehört sie ebenso dorthin,
-wo der Node läuft: dort aus einem Terminal von VS Code installieren.
+kommt per `npx`). Auf einem SSH-Remote gehört sie ebenso dorthin, wo der Node läuft: dort aus
+einem Terminal von VS Code installieren. In einem Devcontainer läuft sie im Container, der Node
+aber auf dem Host; sie erreicht ihn dann über `host.docker.internal` — noch nicht gebaut
+([`docs/konzept.md`](docs/konzept.md), „Devcontainer“).
 
 - **Einrichtung braucht sie keine.** Die Adresse des Nodes liest sie aus `listen` im
   Abschnitt `node:` der config (Einstellung `kephalaion.nodeUrl` zum Überschreiben), Account

@@ -137,6 +137,18 @@ Ausführlich: [`konzept.md`](konzept.md).
   `text/plain`. Nur am Hub-Listener; der Node-Listener (`/mcp`) hat keine.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
+- **devcontainer** — ein Container für die Entwicklung (VS Code Dev Containers). Hat keinen
+  eigenen Node: Er nutzt den des Hosts über `host.docker.internal`, das Binary liegt darin nur
+  als Kommandozeile für `node dir`, config und `tokens/` des Hosts sind nur lesbar
+  eingebunden. *Der Zugang ist noch nicht gebaut* (`konzept.md`, „Devcontainer“).
+- **KEPHALAION_NODE_HOST** — *vorgemerkt.* Umgebungsvariable im Devcontainer, Wert
+  `host.docker.internal`: Wer die Adresse des Nodes aus `listen` der config bildet (`node dir`,
+  die Erweiterung für VS Code, `node mcp-config`), nimmt den Host von hier und den Port aus der
+  config.
+- **mcp-config** — *vorgemerkt.* `kephalaion node mcp-config`: gibt den Eintrag des Nodes für
+  die MCP-Konfiguration eines Clients aus — Adresse aus der config (mit
+  `KEPHALAION_NODE_HOST`), die Header-Paare der Accounts aus `tokens/`, das Token nie im
+  Klartext. k-playbook trägt ihn damit in die Clients ein, auf dem Host wie im Devcontainer.
 
 ## Daten
 
@@ -169,7 +181,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   einen lokalen Ordner mit einem Verzeichnis einer Collection ab, als Client des Nodes über
   MCP, mit Account und Token des Aufrufers. Vergleich über den Inhalt, Einzelvorgänge,
   abbrechbar und wiederholbar; `push` ersetzt den Inhalt des Ziels (löscht, was lokal fehlt),
-  vorerst nur unter `vendor/`; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
+  nur unter `vendor/`; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
   `--last` (`push`), `--dry-run`, `--timeout`; Exit 3 heißt unvollständig — erneut ausführen.
   Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016).
 - **personal** (persönliches Verzeichnis) — *vorgemerkt.* Eigenschaft eines Verzeichnisses:
@@ -455,8 +467,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   `/etc/kephalaion/config.yaml` (Verzeichnis gehört `kephalaion`, `0755`; config `0644`),
   `/var/lib/kephalaion/` (`0700`), System-Unit aus `service unit --system`; eingerichtet per
   Ansible oder von Hand nach [`installation.md`](installation.md). Die User sind nur Clients.
-  Gebaut für User auf dem Rechner selbst, über Loopback; für Devcontainer fehlt das Lauschen
-  auf der Docker-Bridge. Je Rechner gibt es genau eine der beiden Arten (`konzept.md`,
+  Gebaut für User auf dem Rechner selbst, über Loopback; für Devcontainer muss der Node noch
+  `host.docker.internal` als `Host` annehmen. Je Rechner gibt es genau eine der beiden Arten (`konzept.md`,
   „Installation und Betrieb“).
 - **service** (Dienst) — `kephalaion service install|uninstall|status`: richtet den Dienst pro
   User ein, der `serve` startet, entfernt und zeigt ihn — unter Linux die Benutzer-Unit
