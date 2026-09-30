@@ -25,7 +25,8 @@ Task 015 liefern `list` und `read` mit `frontmatter` das Frontmatter der `.md`-D
 JSON-Objekt, Verzeichnisse und Collections das ihrer `README.md`. Task 016 brachte den Scope
 `vendor/<name>` — unter `vendor/<name>/` zählt allein er — und `kephalaion node dir push|pull`,
 den Abgleich eines lokalen Ordners mit einem Verzeichnis einer Collection als Client des
-Nodes über MCP (`push` nur unter `vendor/`). Seit
+Nodes über MCP (`push` nur unter `vendor/`); Task 021 den Verzeichnis-Scope (`hub account grant
+… --dir <pfad>`), der `push` einzelne Verzeichnisse außerhalb von `vendor/` freigibt. Seit
 Task 011 gibt es beide Arten der Installation ([`installation.md`](installation.md)): pro User mit
 Dienst (`kephalaion service install`, systemd `--user` bzw. LaunchAgent) und global für alle
 User eines Linux-Rechners (System-Unit aus `service unit --system`, von Hand oder per
@@ -349,7 +350,9 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
 - **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020).** Wer im Browser
   `https://<name>/kephalaion/` öffnet, sieht nach Eingabe von Account und Account-Token,
   worauf der Account am Hub Zugriff hat: User, Beschreibung und alle Collections mit read,
-  write, supersede und den Scopes `vendor/<name>`, in Worten erklärt. Verwalten kann die Seite
+  write, supersede, den Scopes `vendor/<name>` und den Verzeichnis-Scopes (`dir <pfad>/`, seit
+  Task 021; in der Antwort von `POST gui/api/whoami` je Collection `rights` mit `write`,
+  `supersede`, `vendor` und `dirs`, beide Listen immer da), in Worten erklärt. Verwalten kann die Seite
   nichts; das bleibt vorerst in der Kommandozeile.
   - **Wo.** Die Seite liegt an der Wurzel des Hub-Listeners (`GET /` mit `text/html` in
     `Accept`), ihre Teile unter `/gui/`: `gui/app.js`, `gui/style.css`, `gui/icon.svg` und der
@@ -446,13 +449,16 @@ Automatisierung, hat sechs Accounts und einen User.
 | `write` | Neues anlegen; **Eigenes** ändern und löschen (`created_by` ist der eigene User — auch was ein anderer Account desselben Users angelegt hat). Einen gelöschten Namen neu anlegen darf jeder mit `write`. |
 | `supersede` | **Fremdes** ändern, ablösen und löschen. |
 | `vendor/<name>` | Unter `vendor/<name>/` schreiben — allein dieser Scope zählt dort, ohne `write` und unabhängig vom Urheber; siehe „vendor/“ unten (entschieden am 2026-09-27/28, gebaut in Task 016). |
+| `dir <pfad>/` | **Verzeichnis-Scope:** unter `<pfad>/` schreiben — anlegen, ändern, umbenennen, löschen —, ohne `write` und unabhängig vom Urheber; **additiv**, `write` und `supersede` gelten dort weiter wie sonst. Ziel für `node dir push` außerhalb von `vendor/`; siehe „Verzeichnis-Scope“ unten (entschieden am 2026-09-30, gebaut in Task 021). |
 | `replicate` | Kein Recht eines Accounts, sondern eines Nodes: Inhalt und Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections` (siehe „Datenmodell“). |
 
 Später, falls gebraucht: `write` als Liste von Namenspräfixen statt `true` (etwa `["eins/",
 "zwei/"]`) — Präfixe, keine Regex; bei Rechten ist „passt versehentlich mehr“ die gefährliche
 Richtung. Faustregel: Unterscheidet sich, wer *lesen* darf, gehört es in eine eigene
 Collection; unterscheidet sich nur, wer *schreiben* darf, genügt ein Präfix. Schnipsel bekommen,
-wenn sie gebaut werden, ein eigenes Recht (`submit`).
+wenn sie gebaut werden, ein eigenes Recht (`submit`). Der Verzeichnis-Scope (Task 021) ist
+kein solcher Präfix für `write`: Er gibt unter seinem Verzeichnis das Schreiben unabhängig vom
+Urheber und kommt zu `write`/`supersede` hinzu, statt sie einzuschränken.
 
 **Lesen ist grob, Schreiben feiner.** Ein Store, der beim Lesen filtert, zwingt jede Suche zu
 einer Rechteprüfung je Treffer und macht den Abgleich je Account verschieden. Wer eine
@@ -515,6 +521,41 @@ verschwände eine Änderung beim nächsten Update still, ohne dass es jemand mer
 - **Faustregel erfüllt:** Wer lesen darf, ist derselbe; nur wer schreiben darf, unterscheidet
   sich — deshalb ein Präfix, keine eigene Collection (siehe „Rechte“ oben).
 
+### Verzeichnis-Scope — Ziele für push (entschieden am 2026-09-30, gebaut in Task 021)
+
+**Der Fall:** Ein Skill oder Werkzeug legt ein Verzeichnis einer Collection als Ganzes an und
+pflegt es mit `kephalaion node dir push`; daneben arbeiten andere in der Collection wie
+gewohnt. `push` ersetzt den ganzen Inhalt seines Ziels und schreibt deshalb nur dorthin, wo ein
+Admin es ausdrücklich erlaubt hat — unter `vendor/<name>/` und in einzeln freigegebene
+Verzeichnisse.
+
+- **Je Account und Collection eine Liste von Verzeichnissen**, vergeben am Hub mit `hub account
+  grant <account> <collection> … --dir <pfad>` (wiederholbar; `grant` setzt die Rechte der
+  Collection vollständig, ohne `--dir` ist jeder Verzeichnis-Scope entzogen). In der
+  Account-Zeile `rights.dirs`, sortiert, ohne Doppel, fehlend leer — ohne neue Fassung des
+  Vertrags ([`vertrag.md`](vertrag.md), „Account-Zeilen“). Sichtbar in `hub account show` und
+  `list` (`dir <pfad>/`), in `whoami` am Node (Text und die Liste `dirs` je Collection) und in
+  der Weboberfläche; Exportformat 8 trägt ihn, ein gesperrter Account merkt ihn.
+- **Die Regel** steht mit den anderen in `contract.Rights.MayWrite`, je Dokument (bei `rename`
+  mit altem und neuem Namen, bei einem Verzeichnis für jedes Dokument darunter): genau `vendor`
+  und direkt in `vendor/` niemand; unter `vendor/<name>/` allein dieser Scope; **unter
+  `<pfad>/` eines Verzeichnis-Scopes erlaubt**, ohne `write` und unabhängig vom Urheber; sonst
+  `write` für Neues und Eigenes, `supersede` für Fremdes. Die Grenze ist ein ganzes Segment:
+  `docs` deckt `docs/x.md` und `docs/a/b.md`, nicht `docs2/x.md` und nicht ein Dokument, das
+  genau `docs` heißt. Nicht die Wurzel, nicht `vendor` und nichts darunter (dort gilt
+  `vendor/<name>`); geschachtelte Einträge sind erlaubt.
+- **Additiv, nicht exklusiv wie `vendor/`** (entschieden vom Nutzer am 2026-09-30): Der Scope
+  nimmt niemandem ein Recht. Wer `write` hat, legt im freigegebenen Verzeichnis weiter an und
+  ändert Eigenes, wer `supersede` hat, auch Fremdes. Bewusst in Kauf genommen: Was dort von Hand
+  angelegt oder geändert wird, verliert der nächste `push` ohne Warnung. `vendor/` pflegt einer,
+  selten, als mitgelieferte Vorlagen — dort schützt die Exklusivität; ein freigegebenes
+  Verzeichnis gehört dagegen zum Alltag der Collection.
+- **Am Node** folgt `writable` derselben Regel (`Writable`, `WritableUnder`). Ein Node vor Task
+  021 kennt `dirs` nicht; seine Anzeige von `writable` ist dort ungenau, der Hub prüft trotzdem.
+  Ein Hub vor Task 021 kennt den Scope nicht — deshalb zuerst den Hub aktualisieren.
+- **Nicht gebaut:** exklusive Verzeichnisse (nur Scope-Inhaber schreiben, für alle anderen
+  schreibgeschützt wie `vendor/`) und `write` als Liste von Präfixen.
+
 ### Einen Ordner abgleichen: push und pull (entschieden am 2026-09-28)
 
 Gebaut in Task 016 (2026-09-28) als neutrales Paket `internal/dirsync` gegen eine kleine
@@ -551,12 +592,21 @@ Inhalt durch den eines lokalen Ordners ersetzt wird — und ebenso zurückgelese
   meldet die CLI, wie weit sie kam. `stale_revision` und ein unklarer Ausgang werden gemeldet,
   nicht wiederholt; der nächste Lauf gleicht an.
 - **`--dry-run`** zeigt, was angelegt, geändert und gelöscht würde.
-- **Nur unter `vendor/`:** `push` lehnt andere Ziele ab. Das ist ein Schutz vor Versehen in der
-  CLI, keine Grenze am Hub — der kann nicht erkennen, dass Einzelvorgänge zu einem Abgleich
-  gehören; ein Account könnte dasselbe von Hand. Die Sperre bleibt (entschieden am 2026-09-30):
-  `push` ersetzt den ganzen Inhalt, und niemand soll aus Versehen eine Collection oder ein
-  gemeinsames Verzeichnis überschreiben. Weitere Ziele für `push` kommen nur als einzeln
-  freigegebene Verzeichnisse (Task 021).
+- **Nur unter `vendor/<name>/` und in freigegebenen Verzeichnissen:** `push` lehnt andere Ziele
+  ab — die Wurzel einer Collection immer. Das ist ein Schutz vor Versehen in der CLI, keine
+  Grenze am Hub — der kann nicht erkennen, dass Einzelvorgänge zu einem Abgleich gehören; ein
+  Account könnte dasselbe von Hand. Die Sperre bleibt (entschieden am 2026-09-30): `push`
+  ersetzt den ganzen Inhalt, und niemand soll aus Versehen eine Collection oder ein gemeinsames
+  Verzeichnis überschreiben. Weitere Ziele kommen nur als einzeln freigegebene Verzeichnisse:
+  Ein Ziel außerhalb von `vendor/` muss gleich einem Verzeichnis-Scope des Accounts in der
+  Collection sein oder darunter liegen (gebaut in Task 021). Die Scopes fragt die CLI nach dem
+  Verbinden über `whoami` beim Node ab — strukturiert (`dirs`), nicht aus dem Text —, vor dem
+  ersten Vorgang, auch bei `--dry-run`; sonst Abbruch ohne zu schreiben, Exit 2, mit den
+  freigegebenen Verzeichnissen, `hub account grant … --dir <pfad>` und `kephalaion node sync
+  <hub>`. **Stand des letzten Abgleichs:** `whoami` liest die Replica; `grant` und Entzug am
+  Hub wirken für diese Prüfung erst nach dem nächsten Abgleich (`node sync` oder im Hintergrund
+  von `serve`). Zwischen Entzug und Abgleich lässt die CLI `push` noch zu; dann lehnt der Hub
+  selbst ab (`forbidden`), denn er prüft jeden Vorgang.
 - **`pull`** gleicht in der anderen Richtung ab: Store → lokaler Ordner, ebenso über den
   Inhalt. Lokal gelöscht wird nur mit `--delete`. Ändert sich während des Lesens etwas (Revision
   bei `read` anders als bei `list`), liest `pull` neu, damit es keinen halb alten Stand holt.
@@ -935,8 +985,9 @@ liegen in der Datenbank des Hubs, die Konfigurationsdatei enthält nur, was der 
 Starten braucht. Ein Account — ein Zugang auf einem Rechner — bekommt Name, User,
 Kurzbeschreibung (`kephalaion hub account add <name> [--user …] [--description …]`) und seine
 Rechte je Collection, gesetzt mit `kephalaion hub account grant <name> <collection> [--write]
-[--supersede] [--vendor <name>]…` — `grant` setzt die Rechte der Collection vollständig, ohne
-`--write` wird `write` entzogen, ohne `--vendor` jeder Scope (Task 016); `revoke` nimmt die Collection (umgesetzt in Task 005 statt `account add
+[--supersede] [--vendor <name>]… [--dir <pfad>]…` — `grant` setzt die Rechte der Collection
+vollständig, ohne `--write` wird `write` entzogen, ohne `--vendor` jeder Scope `vendor/<name>`
+(Task 016), ohne `--dir` jeder Verzeichnis-Scope (Task 021); `revoke` nimmt die Collection (umgesetzt in Task 005 statt `account add
 --scope`). Der User (`--user`, ohne Angabe der Name des Accounts; ändern mit `hub account set
 --user`) ist mit Task 006 gebaut. Ein Node bekommt einen Eintrag mit Name und
 Kurzbeschreibung (`kephalaion hub node add <name>`)
@@ -1679,7 +1730,7 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
     `{"hash": "…", "user": "kleist", "rights": {"write": true, "supersede": false}}`; `read`
     ergibt sich aus der Zeile selbst (Form in [`vertrag.md`](vertrag.md), „Account-Zeilen“;
     gebaut mit Task 006; die Scopes `vendor/<name>` als Liste `vendor` in `rights`, nur wenn es
-    welche gibt, Task 016). `accounts` führt den User maßgeblich in der Spalte `"user"` —
+    welche gibt, Task 016; die Verzeichnis-Scopes ebenso als Liste `dirs`, Task 021). `accounts` führt den User maßgeblich in der Spalte `"user"` —
     in Anführungszeichen, weil `user` in PostgreSQL reserviert ist — mit Index `accounts_user`.
   - Der User steht in jeder Zeile des Accounts; ändert der Admin ihn, ändern sich alle Zeilen
     in einer Transaktion, wie bei `rotate`. Vorhandene Dokumente behalten ihren User. Alle
@@ -1817,7 +1868,8 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
 - **`read`:** Der Inhalt ist der Text des Ergebnisses, die Angaben die Struktur daneben; mit
   `content: false` steht die Struktur auch im Text. Größe in Bytes. `writable` folgt je Name
   der Regel des Hubs (`contract.Rights.Writable`, Task 016): `write` auf der Collection, unter
-  `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie; bei Verzeichnissen und
+  `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie, unter einem
+  Verzeichnis-Scope immer (Task 021); bei Verzeichnissen und
   der Wurzel, ob darunter etwas angelegt werden dürfte. Per `id` sind eine Löschmarke, eine
   unbekannte `id` und ein Dokument einer nicht lesbaren Collection gleichermaßen `none`.
 - **Zeiten** in RFC 3339, UTC, auf Millisekunden (`2026-09-26T10:00:00.000Z`), so genau, wie
@@ -1883,7 +1935,7 @@ Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:
 | `node` | Name dieses Nodes am Hub | ja |
 | `sync` | letzter erfolgreicher Abgleich (Zeit), Revision der Replica, letzter Fehler mit Zeit — leer, wenn der letzte Versuch gelang | ja |
 | `account`, `user` | Account und User | nein |
-| `collections` | Collection, Adresse (`<hub>:<collection>`), Rechte | nein |
+| `collections` | Collection, Adresse (`<hub>:<collection>`), Rechte (`rights`, je Recht ein Text wie in der Kommandozeile: `read`, `write`, `supersede`, `vendor/<name>`, `dir <pfad>/`) und die Verzeichnis-Scopes als Liste `dirs` (immer da, auch leer; Task 021) — nach ihr prüft `node dir push` sein Ziel | nein |
 | `unknown_hubs` | Aliase aus Headern, zu denen der Node keinen Hub-Eintrag hat — nur der Alias | ja |
 
 Gebaut in Task 008. `sync` trägt `last_success`, `revision`, `last_error` und
@@ -1968,7 +2020,8 @@ Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und
   Schreiben sofort.
 - **Rechte am Hub:** `write` für `create` und für Eigenes (`created_by` ist der User des
   Accounts), `supersede` für Fremdes, `write` ist dafür nicht nötig; unter `vendor/<name>/`
-  allein der Scope `vendor/<name>`, direkt in `vendor/` niemand (Task 016) — bei Verzeichnissen
+  allein der Scope `vendor/<name>`, direkt in `vendor/` niemand (Task 016); unter einem
+  Verzeichnis-Scope ohne `write` und unabhängig vom Urheber (Task 021) — bei Verzeichnissen
   für jedes Dokument darunter, bei `rename` mit altem und neuem Namen; ein einziges verbotenes lässt den ganzen Vorgang scheitern.
   Collection unbekannt, nicht für den Node erlaubt oder nicht für den Account: eine Antwort.
   `created_by`/`updated_by` ist der User; `actions` nennt Account und Node.
@@ -2108,8 +2161,8 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   (Kandidaten unter „Werkzeuge“)? Welche braucht k-playbook, die eine KI-Sitzung nicht sehen
   soll, und hängt das am Token? Das Ersetzen eines ganzen Verzeichnisses (heute `publish`)
   und das Update von `vendor/` laufen über den Abgleich in der CLI (`node dir push`,
-  entschieden am 2026-09-28, „Einen Ordner abgleichen“), nicht über einen eigenen Vorgang im
-  Vertrag. Die Projektablage und das Briefing regelt k-playbook; das Überlagern von
+  entschieden am 2026-09-28, „Einen Ordner abgleichen“; Ziele außerhalb von `vendor/` über
+  Verzeichnis-Scopes, Task 021), nicht über einen eigenen Vorgang im Vertrag. Die Projektablage und das Briefing regelt k-playbook; das Überlagern von
   mitgelieferten und eigenen Regeln auch (entschieden am 2026-09-27, „vendor/“).
 - **Token-Rotation (später):** Accounts von Menschen und KIs rotieren am Hub mit einer Frist,
   in der altes und neues Token gelten; der neue Hash gleicht sich zu den Nodes ab. Ein Node

@@ -1,7 +1,7 @@
 # Fortschritt
 
-Stand: 2026-09-30 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020
-Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
+Stand: 2026-09-30 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -254,6 +254,22 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
     `TestCheckAccount`, `TestServeHubListener` (Seite nach `Accept`, `/gui/…`, Eingang über
     `serve`), `TestGUIBehindPrefix` (Präfix `/kephalaion`, Anmeldung vor dem Rest).
     Abnahme auf der VM: siehe „Zu testen“.
+- **Task 021 — Verzeichnisse für push freigeben** (2026-09-30, Etappen 1–4):
+  - Verzeichnis-Scope `rights.dirs` je Account und Collection (Liste, ohne neue Fassung des
+    Vertrags): unter `<pfad>/` schreiben ohne `write` und unabhängig vom Urheber, Grenze ein
+    ganzes Segment, **additiv** (nimmt niemandem ein Recht), nicht die Wurzel, nicht `vendor`;
+    Regel in `contract.Rights.MayWrite`, geprüft von `CheckDirScope`; `hub account grant …
+    --dir <pfad>` (wiederholbar), `show` und `list` als `dir <pfad>/`, gesperrt gemerkt;
+    Exportformat 8 mit `dirs`, Format 7 und älter lesen ohne (`vertrag.md`, „Account-Zeilen“;
+    `konzept.md`, „Verzeichnis-Scope“);
+  - Node: `writable` folgt der Regel, `whoami` nennt die Scopes im Text und als Liste `dirs` je
+    Collection; Weboberfläche: `dirs` in `POST /gui/api/whoami`, Anzeige und Regel in Worten;
+  - `node dir push` schreibt außer unter `vendor/<name>/` in Verzeichnisse mit
+    Verzeichnis-Scope (gleich oder darunter): die Scopes über `whoami` beim Node, vor dem
+    ersten Vorgang und bei `--dry-run`; sonst Exit 2 mit den freigegebenen Verzeichnissen,
+    `grant … --dir` und `node sync`; Stand des letzten Abgleichs, der Hub prüft trotzdem;
+  - Durchlauf im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`);
+    Abnahme auf der VM: siehe „Zu testen“.
 
 ## In Arbeit
 
@@ -263,15 +279,20 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
 - **Task 020 — Abnahme der Weboberfläche auf der VM:** Nacharbeit des Nutzers (Deployment mit
   `deploy-vm.sh` nur durch ihn), Schritte unter „Zu testen“ und in
   `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
+- **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
+  unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
 
 ## Zu tun
 
-- **Nach Task 016:** Die Sperre von `push` auf `vendor/` bleibt (entschieden am 2026-09-30);
-  weitere Ziele nur als einzeln freigegebene Verzeichnisse, Task 021 (`konzept.md`, „Einen
-  Ordner abgleichen“). Das Update von `vendor/k-playbook/` und das Überlagern macht k-playbook. Die Erweiterung für VS Code merkt sich `writable` je
-  Collection aus dem letzten `read` (`extension.js`, `this.writable`) — unter `vendor/` kann
-  die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen Dokuments abhängen; `stat`
-  je Dokument ist richtig (Befund `vendor-scope-und-dir-push-pull.md`).
+- **Nach Task 016 und 021:** Die Sperre von `push` bleibt (entschieden am 2026-09-30); weitere
+  Ziele nur als einzeln freigegebene Verzeichnisse — gebaut in Task 021 (`konzept.md`,
+  „Verzeichnis-Scope“, „Einen Ordner abgleichen“). Nicht gebaut: exklusive Verzeichnisse und
+  `write` als Liste von Präfixen. Das Update von `vendor/k-playbook/` und das Überlagern macht
+  k-playbook. Die Erweiterung für VS Code merkt sich `writable` je Collection aus dem letzten
+  `read` (`extension.js`, `this.writable`) — unter `vendor/` und in einem Verzeichnis mit
+  Verzeichnis-Scope kann die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen
+  Dokuments abhängen; `stat` je Dokument ist richtig (Befund
+  `vendor-scope-und-dir-push-pull.md`).
 
 - **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
   - **Task 022 — Kephalaion bei den Assistenten anmelden, lokal:** `kephalaion node mcp
@@ -381,6 +402,12 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM** (Nacharbeit des Nutzers; die KI
+  tauscht Binary, Dienst und `node.db` der VM nicht). Keine neue Schemafassung; zuerst der Hub
+  (VM), dann die WSL (`make dev-install`). Schritte in `~/dev/vm/kephalaion/README.md`,
+  „Abnahme von Task 021“: `grant kamran-wsl test --write --vendor test-docs --dir test-docs`,
+  `node sync vm`, `node dir push vm:test test-docs ./docs`, `push` an die Wurzel abgelehnt.
+  Lokal belegt im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`).
 - **Task 020 — Abnahme der Weboberfläche auf der VM** (Nacharbeit des Nutzers; die KI führt
   `deploy-vm.sh` nicht aus). fail2ban zählt dort jede 401 auf 80/443 (10 in 10 min sperren die
   Adresse), deshalb die Schritte 4 und 5 je genau einmal:

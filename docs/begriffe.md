@@ -129,7 +129,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`,
   `gui/icon.svg`, der Eingang `gui/api/whoami`). Sie fragt Account und **account token** ab,
   prüft beides am Hub und zeigt, worauf der Account Zugriff hat: User, Beschreibung,
-  Collections, Rechte und Scopes `vendor/<name>`. Kein Teil des Vertrags, keine Verwaltung
+  Collections, Rechte, Scopes `vendor/<name>` und Verzeichnis-Scopes (`dir <pfad>/`). Kein Teil
+  des Vertrags, keine Verwaltung
   (die bleibt in der CLI).
   Nur relative Pfade, nie eine Umleitung: Hinter einem Proxy liegt sie unter dessen Präfix
   (`https://<name>/kephalaion/`) und hinter dessen Anmeldung — die ist nicht das Token, nach
@@ -181,9 +182,13 @@ Ausführlich: [`konzept.md`](konzept.md).
   einen lokalen Ordner mit einem Verzeichnis einer Collection ab, als Client des Nodes über
   MCP, mit Account und Token des Aufrufers. Vergleich über den Inhalt, Einzelvorgänge,
   abbrechbar und wiederholbar; `push` ersetzt den Inhalt des Ziels (löscht, was lokal fehlt),
-  nur unter `vendor/`; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
+  nur unter `vendor/<name>/` und in Verzeichnisse, für die der Account einen
+  **Verzeichnis-Scope** hat (gleich oder darunter, nie die Wurzel) — die Scopes fragt es vorab
+  beim Node ab (`whoami`, Stand des letzten Abgleichs: nach `grant` erst `node sync`), ein
+  anderes Ziel ist Exit 2; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
   `--last` (`push`), `--dry-run`, `--timeout`; Exit 3 heißt unvollständig — erneut ausführen.
-  Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016).
+  Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016, Ziele außerhalb von
+  `vendor/` Task 021).
 - **personal** (persönliches Verzeichnis) — *vorgemerkt.* Eigenschaft eines Verzeichnisses:
   Auflisten, Lesen und Schreiben zeigen nur Dokumente des eigenen Users, der Schalter `all`
   alles; die Suche bleibt unberührt. Eine Ansicht, kein Recht — anders als eine private
@@ -211,9 +216,12 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **read** — Werkzeug des Nodes: ein Dokument aus der Replica, per Name oder `id`; Art
   `document`, `directory` oder `none` (kein Fehler). Mit `content: false` nur die Angaben —
   so beantwortet die Erweiterung für VS Code `stat`. Löschmarken sind `none`.
-- **writable** (schreibbar) — Angabe von `read`: Der Account hat `write` in der Collection. Ob
-  er ein fremdes Dokument ändern darf (`supersede`), sagt sie nicht; das entscheidet der Hub
-  beim Schreiben.
+- **writable** (schreibbar) — Angabe von `read`: Der Account dürfte das Dokument anlegen oder
+  als Eigenes ändern, nach der Regel des Hubs (`contract.Rights.Writable`): `write` in der
+  Collection, unter `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie, unter
+  einem Verzeichnis-Scope immer; bei einem Verzeichnis, ob darunter etwas angelegt werden
+  dürfte. Ob er ein fremdes Dokument ändern darf (`supersede`), sagt sie nicht; das entscheidet
+  der Hub beim Schreiben.
 - **changes** — Werkzeug des Nodes: je Dokument, das sich seit dem `cursor` (oder seit einem
   Zeitpunkt, `since`) geändert hat, einmal der aktuelle Stand, Löschmarken eingeschlossen, ohne
   alten Namen. Ohne beides nur der `cursor` für „ab jetzt“. Dazu **reset** — Hubs, deren
@@ -233,7 +241,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Revision, alles oder nichts; die Werkzeuge antworten dann mit Art `directory` und der Zahl
   der Dokumente (**count**). Der Node prüft Anmeldung und Lesbarkeit gegen seine Replica und
   reicht an den Hub; der Hub prüft das Recht — `write` für Neues und Eigenes, `supersede` für
-  Fremdes, `write` ist dafür nicht nötig — und die Vorbedingung. Die Zeilen der Antwort
+  Fremdes, `write` ist dafür nicht nötig; unter `vendor/<name>/` allein dieser Scope, unter
+  einem Verzeichnis-Scope keines von beiden — und die Vorbedingung. Die Zeilen der Antwort
   schreibt der Node in die Replica, bevor er antwortet, und stößt den Abgleich an. Nie
   wiederholt. `hub doc put|rm` und `hub import` sind Vorgänge des Admins am Hub, keine davon.
 - **base_revision** — Die Revision, auf der ein `write`, `delete` oder `rename` beruht,
@@ -426,12 +435,14 @@ Ausführlich: [`konzept.md`](konzept.md).
   erlaubten Collections und prüft wahlweise einen Account (`valid`). Am Node auch ein
   MCP-Werkzeug für Clients: Version, `update` (neueste Version und Weg, aus der Antwort, die
   `serve` höchstens einmal am Tag bei GitHub holt), je Hub-Eintrag `login` (`ok`, `invalid`, `missing`),
-  Node-Name und Stand des Abgleichs (`sync`), bei `ok` Account, User und Collections; dazu
+  Node-Name und Stand des Abgleichs (`sync`), bei `ok` Account, User und Collections mit
+  Rechten (`rights`, als Text je Recht) und Verzeichnis-Scopes (`dirs`, immer eine Liste); dazu
   `unknown_hubs`, die Aliase aus Headern ohne Eintrag. Nie Token, Hash, Adresse, Transport
   oder `hub_id`. Dazu der Eingang der **gui** am Hub-Listener, `POST /gui/api/whoami` — kein
   Vorgang des Vertrags, keine Fassung, ohne Node: Er prüft Account und **account token**
   (`{"account", "token"}` als JSON) und nennt User, Beschreibung und alle Collections des
-  Accounts mit ihren Rechten (`write`, `supersede`, `vendor`), nicht nur die eines Nodes.
+  Accounts mit ihren Rechten (`write`, `supersede`, `vendor`, `dirs`; beide Listen immer da),
+  nicht nur die eines Nodes.
   Unbekannter Account, falsches Token und gesperrt sind dieselbe 401; hinter einem Proxy liegt
   er hinter dessen Anmeldung.
 - **node whoami** — `kephalaion node whoami [<account>] [--hub <alias>] [--json]`: ohne

@@ -69,7 +69,7 @@ Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS 
 
 | `FileSystemProvider` | Kephalaion (MCP-Werkzeug des Nodes) |
 |---|---|
-| `stat(uri)` | `read` mit `content: false`: Dokument, Verzeichnis oder nichts; `updated` als `mtime`, Größe als `size`; ohne `writable` (`write` der Collection; unter `vendor/<name>/` der Scope `vendor/<name>`, seit Task 016 je Name) `FilePermission.Readonly` |
+| `stat(uri)` | `read` mit `content: false`: Dokument, Verzeichnis oder nichts; `updated` als `mtime`, Größe als `size`; ohne `writable` (`write` der Collection; unter `vendor/<name>/` der Scope `vendor/<name>`, seit Task 016 je Name; unter einem Verzeichnis-Scope immer, seit Task 021) `FilePermission.Readonly` |
 | `readDirectory(uri)` | `list` mit `path`, ohne Unterverzeichnisse, Verzeichnisse als eigene Einträge, mit Cursor bis zum Ende |
 | `readFile(uri)` | `read` — aus der Replica, lokal und schnell, auch offline |
 | `writeFile(uri, …)` | gibt es das Dokument noch nicht (`read` mit `content: false`), `create` (ohne `options.create`: `FileNotFound`); sonst `write` mit der Revision aus diesem `read` (ohne `options.overwrite`: `FileExists`); ein Verzeichnis ist `FileIsADirectory`. Was die Replica schon kennt, fängt VS Code über `mtime` selbst ab („Datei ist neuer“); was noch nicht abgeglichen ist, lehnt der Hub an der Revision ab |

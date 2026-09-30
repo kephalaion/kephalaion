@@ -220,9 +220,10 @@ Namen. Die Hilfe zeigt alle Kommandos: `kephalaion hub node --help`,
 
 `config export` sichert auch die Collections, Nodes und Accounts (nur mit Hash, Accounts samt
 User und Rechten je Collection) und die Hubs des Nodes samt ihrem Token im Klartext — die Datei
-entsteht deshalb mit `0600`. Das Exportformat ist 7 (`format: 7`; seit 7 je Hub-Eintrag die
-CA als `ca`, seit 6 je Recht die Scopes `vendor`, ältere Fassungen lesen sich ohne beides und
-dürfen sie nicht tragen), `user` je Account ist dort Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
+entsteht deshalb mit `0600`. Das Exportformat ist 8 (`format: 8`; seit 8 je Recht die
+Verzeichnis-Scopes `dirs`, seit 7 je Hub-Eintrag die CA als `ca`, seit 6 je Recht die Scopes
+`vendor`; ältere Fassungen lesen sich ohne und dürfen sie nicht tragen), `user` je Account ist
+dort Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
 Format 4 setzt den User jedes Accounts auf dessen Namen, einer vor Format 4 lässt die Accounts
 unberührt, einer im Format 1 ersetzt nur die `settings`, einer im Format 2 geht nur, wenn er am
 Node keine Hub-Einträge enthält — ihnen fehlt `node_name`. Dokumente und Replicas gehören nicht zum
@@ -236,7 +237,13 @@ immer, dazu wahlweise `write` (Eigenes anlegen, ändern, löschen) und `supersed
 ändern, ablösen, löschen). Dazu Scopes `vendor/<name>`: Unter `vendor/<name>/` — mitgelieferte
 Vorlagen, etwa von k-playbook — zählt allein der Scope, ohne `write` und unabhängig vom
 Urheber; direkt in `vendor/` schreibt über einen Node niemand. Ein Account nur mit dem Scope
-pflegt seine Vorlagen und kann sonst nichts schreiben.
+pflegt seine Vorlagen und kann sonst nichts schreiben. Und **Verzeichnis-Scopes** (`--dir
+<pfad>`, angezeigt als `dir <pfad>/`): Unter `<pfad>/` darf der Account anlegen, ändern,
+löschen und umbenennen, ohne `write` und unabhängig vom Urheber — die Grenze ist ein ganzes
+Segment (`docs` deckt `docs/…`, nicht `docs2/…`), nicht die Wurzel, nicht `vendor`. Anders als
+`vendor/<name>` nimmt er niemandem etwas: Wer `write` oder `supersede` hat, schreibt dort weiter
+wie sonst. Er gibt `node dir push` ein Ziel außerhalb von `vendor/` (siehe „Einen Ordner
+abgleichen“).
 
 Jeder Account gehört einem **User** — ein Merkmal, kein Zugang: kein Token, keine Rechte. Wer
 auf zwei Rechnern je eine KI-Sitzung hat, hat zwei Accounts und einen User. Ohne `--user` ist
@@ -252,7 +259,8 @@ kephalaion hub account grant alice team-x                  # read
 kephalaion hub account grant alice team-x --write          # setzt vollständig: read, write
 kephalaion hub account grant alice team-x                  # und wieder nur read
 kephalaion hub account grant k-playbook team-x --vendor k-playbook   # nur der Scope: schreibt unter vendor/k-playbook/
-kephalaion hub account show alice
+kephalaion hub account grant alice team-x --write --dir test-docs    # dazu der Verzeichnis-Scope test-docs/
+kephalaion hub account show alice      # Rechte je Collection: team-x: read, write, dir test-docs/
 kephalaion hub account lock alice      # Zeilen werden Löschmarken, die Rechte bleiben gemerkt
 kephalaion hub account unlock alice
 kephalaion hub account token alice     # neues Einrichtungstoken, das alte gilt nicht mehr
@@ -358,8 +366,10 @@ die Account-Zeilen seiner Replica, ohne Cache; `initialize` geht ohne Anmeldung.
 `whoami` zeigt die Version des Nodes und je Hub-Eintrag — alle, nicht nur die mit Header-Paar —
 `login` (`ok`, `invalid` oder `missing`), den Namen des Nodes am Hub und den Stand des
 Abgleichs (letzter Erfolg, Revision, letzter Fehler); bei `ok` Account, User, Collections und
-Rechte. Header zu Aliasen, die der Node nicht kennt, stehen in `unknown_hubs`. Nie ein Token,
-ein Hash, die Adresse, der Transport oder die `hub_id`. Hat der Node einen Hub noch nie
+Rechte (`rights` als Liste wie in der Kommandozeile, etwa `read`, `write`, `vendor/k-playbook`,
+`dir docs/`; die Verzeichnis-Scopes dazu als Liste `dirs`, immer da, auch leer). Header zu
+Aliasen, die der Node nicht kennt, stehen in `unknown_hubs`. Nie ein Token, ein Hash, die
+Adresse, der Transport oder die `hub_id`. Hat der Node einen Hub noch nie
 abgeglichen, ist `login` dort `invalid`, und `sync` sagt `never_synced`. Ein gesperrter
 Account gilt am Node nach dem nächsten Abgleich nicht mehr.
 
@@ -458,7 +468,7 @@ Der Hub-Listener zeigt einem Browser an seiner Wurzel eine Seite — lokal
 `https://<name>/kephalaion/`. Sie fragt nach dem **Kephalaion-Account** und seinem
 **Account-Token** und zeigt dann, worauf der Account am Hub Zugriff hat: User, Beschreibung
 und je Collection lesen, schreiben (`write`: Neues und Eigenes), Fremdes ändern (`supersede`)
-und die Scopes `vendor/<name>`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie
+und die Scopes `vendor/<name>` und `dir <pfad>/`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie
 nichts; Accounts, Rechte und Nodes bleiben in der Kommandozeile (`hub account …`).
 
 - **Welches Token:** das des Accounts — das, was ein Client als `X-Keph-Token-<hub>` schickt,
@@ -605,14 +615,31 @@ kephalaion node dir pull privat:team-x vendor/k-playbook /tmp/vorlagen --delete
 ```
 
 `push` ersetzt den Inhalt des Verzeichnisses — was dort fehlt, wird gelöscht — und schreibt
-nur unter `vendor/<name>/` (ein Schutz vor Versehen, keine Grenze am Hub). Vorab liest
-es den ganzen Ordner ein: Jede Datei muss UTF-8 ohne NUL und höchstens 1 MiB sein und einen
-gültigen Namen haben, sonst bricht `push` mit allen Treffern ab, ohne zu schreiben — mit
-`--exclude glob` (wiederholbar, auf Namen jeder Ebene) ausnehmen. Symlinks werden übergangen
-und gemeldet, leere Ordner entstehen im Store nicht, `.git` bleibt in Quelle und Ziel
-unberührt, ebenso jeder Treffer von `--exclude`. `pull` schreibt lokal nur, was abweicht oder
-fehlt (neu `0644`, Ordner `0755`), löscht nur mit `--delete`, nie außerhalb des Ordners und
-folgt keinem Symlink darin. `--dry-run` zeigt, was geschähe.
+deshalb nur dorthin, wo ein Admin es ausdrücklich erlaubt hat: unter `vendor/<name>/` und in
+ein Verzeichnis, für das der Account in der Collection einen **Verzeichnis-Scope** hat, gleich
+dem Scope oder darunter; nie an die Wurzel einer Collection. Die Scopes fragt `push` vor dem
+ersten Vorgang beim Node ab (`whoami`, auch mit `--dry-run`); jedes andere Ziel ist ein falscher
+Aufruf (Exit 2, nichts geschrieben), die Meldung nennt die freigegebenen Verzeichnisse und
+`hub account grant … --dir <pfad>`. Der Node kennt die Rechte im Stand des letzten Abgleichs:
+Nach einer neuen Freigabe oder einem Entzug erst `kephalaion node sync <hub>` (oder den Abgleich
+im Hintergrund von `serve` abwarten). Der Hub prüft jeden Vorgang trotzdem selbst — die Sperre
+in der Kommandozeile ist ein Schutz vor Versehen, keine Grenze am Hub. Weil der Scope additiv
+ist, können andere mit `write` im freigegebenen Verzeichnis anlegen und ändern; das verliert
+der nächste `push` ohne Warnung.
+
+```sh
+kephalaion hub account grant alice team-x --write --dir test-docs   # am Hub; grant setzt vollständig
+kephalaion node sync privat                                          # am Node: Rechte in die Replica
+kephalaion node dir push privat:team-x test-docs ./docs
+```
+
+Vorab liest `push` den ganzen Ordner ein: Jede Datei muss UTF-8 ohne NUL und höchstens 1 MiB
+sein und einen gültigen Namen haben, sonst bricht `push` mit allen Treffern ab, ohne zu
+schreiben — mit `--exclude glob` (wiederholbar, auf Namen jeder Ebene) ausnehmen. Symlinks
+werden übergangen und gemeldet, leere Ordner entstehen im Store nicht, `.git` bleibt in Quelle
+und Ziel unberührt, ebenso jeder Treffer von `--exclude`. `pull` schreibt lokal nur, was
+abweicht oder fehlt (neu `0644`, Ordner `0755`), löscht nur mit `--delete`, nie außerhalb des
+Ordners und folgt keinem Symlink darin. `--dry-run` zeigt, was geschähe.
 
 Abbrechen (SIGINT/SIGTERM) und `--timeout` wirken zwischen zwei Vorgängen: Der laufende geht
 zu Ende, dann meldet die Kommandozeile, wie weit sie kam — erneut ausführen setzt fort.
