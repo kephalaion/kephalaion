@@ -85,8 +85,8 @@ systemd startet ein eigener Supervisor `kephalaion serve`.
 `kephalaion service unit --system` — von Hand oder per Ansible nach
 [`docs/installation.md`](docs/installation.md), „Global“. Die User sind Clients über Loopback;
 verwaltet wird als Systembenutzer (`sudo -u kephalaion kephalaion …`). Devcontainer erreichen
-den Node noch nicht, weder global noch pro User; geplant ist der Weg über
-`host.docker.internal` ([`docs/konzept.md`](docs/konzept.md), „Devcontainer“).
+den Node noch nicht, weder global noch pro User; die vorgesehenen Wege stehen in
+[`docs/konzept.md`](docs/konzept.md), „Devcontainer“.
 
 Die config wird ohne Angabe gefunden: `--config`, `KEPHALAION_CONFIG`, die des Users, wenn es
 sie gibt, sonst `/etc/kephalaion/config.yaml`, wenn es sie gibt. `kephalaion status` nennt,
@@ -645,9 +645,9 @@ make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie 
 
 Danach „Developer: Reload Window“. Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce`
 kommt per `npx`). Auf einem SSH-Remote gehört sie ebenso dorthin, wo der Node läuft: dort aus
-einem Terminal von VS Code installieren. In einem Devcontainer läuft sie im Container, der Node
-aber auf dem Host; sie erreicht ihn dann über `host.docker.internal` — noch nicht gebaut
-([`docs/konzept.md`](docs/konzept.md), „Devcontainer“).
+einem Terminal von VS Code installieren. In einem Devcontainer läuft sie im Container; wie sie
+dort einen Node erreicht, ist noch nicht gebaut ([`docs/konzept.md`](docs/konzept.md),
+„Devcontainer“).
 
 - **Einrichtung braucht sie keine.** Die Adresse des Nodes liest sie aus `listen` im
   Abschnitt `node:` der config (Einstellung `kephalaion.nodeUrl` zum Überschreiben), Account

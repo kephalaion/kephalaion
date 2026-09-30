@@ -137,18 +137,18 @@ Ausführlich: [`konzept.md`](konzept.md).
   `text/plain`. Nur am Hub-Listener; der Node-Listener (`/mcp`) hat keine.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
-- **devcontainer** — ein Container für die Entwicklung (VS Code Dev Containers). Hat keinen
-  eigenen Node: Er nutzt den des Hosts über `host.docker.internal`, das Binary liegt darin nur
-  als Kommandozeile für `node dir`, config und `tokens/` des Hosts sind nur lesbar
-  eingebunden. *Der Zugang ist noch nicht gebaut* (`konzept.md`, „Devcontainer“).
-- **KEPHALAION_NODE_HOST** — *vorgemerkt.* Umgebungsvariable im Devcontainer, Wert
-  `host.docker.internal`: Wer die Adresse des Nodes aus `listen` der config bildet (`node dir`,
-  die Erweiterung für VS Code, `node mcp-config`), nimmt den Host von hier und den Port aus der
-  config.
-- **mcp-config** — *vorgemerkt.* `kephalaion node mcp-config`: gibt den Eintrag des Nodes für
-  die MCP-Konfiguration eines Clients aus — Adresse aus der config (mit
-  `KEPHALAION_NODE_HOST`), die Header-Paare der Accounts aus `tokens/`, das Token nie im
-  Klartext. k-playbook trägt ihn damit in die Clients ein, auf dem Host wie im Devcontainer.
+- **devcontainer** — ein Container für die Entwicklung (VS Code Dev Containers). Zwei Wege:
+  am Node außerhalb des Containers (dem des Hosts; im Container nur das Binary als
+  Kommandozeile für `node dir`, config und `tokens/` des Hosts nur lesbar eingebunden) oder mit
+  eigenem Node, der über `ssh` mit dem Hub abgleicht. *Noch nicht gebaut*; die Einzelheiten
+  entstehen im Projekt mit dem Devcontainer (`konzept.md`, „Devcontainer“).
+- **node mcp** — *vorgemerkt (Task 022).* `kephalaion node mcp add|remove|status`: trägt den
+  Node bei den KI-Assistenten des Users als MCP-Server ein (Claude Code, OpenCode, Codex,
+  VS Code), entfernt ihn und zeigt den Stand je Assistent — auf User-Ebene, ein Eintrag
+  `kephalaion` für alle Hubs, möglichst über das eigene Kommando des Assistenten, das Token nie
+  im Klartext. `kephalaion node mcp headers` gibt die Header-Paare aus den Token-Dateien als
+  JSON aus; Assistenten, die ein Kommando für Header kennen, rufen es bei jeder Verbindung auf
+  (`konzept.md`, „Installation und Betrieb“).
 
 ## Daten
 
@@ -467,8 +467,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   `/etc/kephalaion/config.yaml` (Verzeichnis gehört `kephalaion`, `0755`; config `0644`),
   `/var/lib/kephalaion/` (`0700`), System-Unit aus `service unit --system`; eingerichtet per
   Ansible oder von Hand nach [`installation.md`](installation.md). Die User sind nur Clients.
-  Gebaut für User auf dem Rechner selbst, über Loopback; für Devcontainer muss der Node noch
-  `host.docker.internal` als `Host` annehmen. Je Rechner gibt es genau eine der beiden Arten (`konzept.md`,
+  Gebaut für User auf dem Rechner selbst, über Loopback; Devcontainer noch nicht (siehe
+  **devcontainer**). Je Rechner gibt es genau eine der beiden Arten (`konzept.md`,
   „Installation und Betrieb“).
 - **service** (Dienst) — `kephalaion service install|uninstall|status`: richtet den Dienst pro
   User ein, der `serve` startet, entfernt und zeigt ihn — unter Linux die Benutzer-Unit

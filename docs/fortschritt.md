@@ -273,20 +273,21 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
   die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen Dokuments abhängen; `stat`
   je Dokument ist richtig (Befund `vendor-scope-und-dir-push-pull.md`).
 
-- **Devcontainer an den Node des Hosts** (entschieden am 2026-09-30, `konzept.md`,
-  „Devcontainer“): (1) der Node nimmt `host.docker.internal` mit seinem Port als `Host` an,
-  `Origin` bleibt geprüft — heute 403, sonst geht alles schon (unter WSL mit Docker Desktop
-  probiert: MCP und `node dir pull` aus einem Container); (2) `KEPHALAION_NODE_HOST`: `node
-  dir` und die Erweiterung für VS Code nehmen den Port aus `listen` der eingebundenen config
-  und den Host aus der Variable (heute nimmt die Erweiterung `listen` unverändert,
-  `extension.js`, `nodeUrl`); Hilfe und Meldung von `--node` nennen noch „nur dieser Rechner“
-  (`dircmd.go`, `endpoint`); (3) `kephalaion node mcp-config`: gibt den Eintrag für die
-  MCP-Clients aus — Form je Client und der Weg des Tokens ohne Klartext in einer Datei sind
-  noch zu klären; (4) Kephalaion damit in den MCP-Clients eintragen, auf dem Host und im
-  Container (Sache von k-playbook) — auf der WSL trägt ihn bisher kein KI-Client ein; (5) Doku
-  für den Container nach der Skizze in `konzept.md` (Binary per `install.sh`, config und
-  `tokens/` des Hosts nur lesbar eingebunden); (6) auf dem Mac probieren. Befund
-  `material/befunde/mcp-von-aussen.md`.
+- **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
+  - **Task 022 — Kephalaion bei den Assistenten anmelden, lokal:** `kephalaion node mcp
+    add|remove|status|headers` für Claude Code, OpenCode, Codex und VS Code, auf User-Ebene,
+    das Token nie im Klartext; bei der Installation, wenn ein Account dazukommt, und von Hand.
+    Ziel: MCP und Kommandozeile gehen auf dem Rechner selbst sauber — auf der WSL trägt
+    Kephalaion bisher kein KI-Client ein (`konzept.md`, „Installation und Betrieb“, „Bei den
+    Assistenten angemeldet“; Befund `material/befunde/mcp-client-registrierung.md`).
+  - **Danach, eigene Task:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
+    (`konzept.md`, „Kommunikation“, „Entfernt: MCP über HTTPS“). Dabei: `--node` von `node dir`
+    kennt nur `http://`; fail2ban greift nicht, weil der Node bei falscher Anmeldung nie 401
+    antwortet (Befund `material/befunde/mcp-von-aussen.md`).
+  - **Devcontainer:** nur dokumentiert, zwei Wege (`konzept.md`, „Devcontainer“); die
+    Einzelheiten entstehen im Projekt mit dem Devcontainer. Unter WSL probiert: Ein Container
+    erreicht den Node des Hosts über `host.docker.internal`; mit einem Weiterleiter im
+    Container gehen MCP und `node dir` ohne Änderung am Binary. Auf dem Mac nicht probiert.
 
 - **macOS-Job in CI wieder einschalten:** seit 2026-09-26 auf Wunsch des Nutzers abgeschaltet
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
@@ -344,7 +345,7 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
     wie `https` im `connector`); der Hub bleibt auf Loopback, nach außen spricht der Proxy;
   - Lauschen auf der Docker-Bridge für Devcontainer unter Docker Engine (Linux ohne Docker
     Desktop, mit `--add-host=host.docker.internal:host-gateway`) — unter Docker Desktop nicht
-    nötig (siehe „Devcontainer an den Node des Hosts“ oben);
+    nötig (`konzept.md`, „Devcontainer“);
   - PostgreSQL-Umsetzung des Hub-Stores (DDL, `BIGINT`);
   - Migrationsrahmen, sobald Daten bleiben müssen;
   - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;

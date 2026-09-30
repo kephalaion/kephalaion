@@ -47,8 +47,8 @@ Installation pro User zu entfernen (unten).
 
 **Global ist bisher nur für User auf dem Rechner selbst gebaut:** Der Node lauscht auf
 Loopback (`127.0.0.1:7433`), das teilen alle User eines Rechners. Devcontainer erreichen ihn
-noch nicht, weder global noch pro User; dafür muss der Node `host.docker.internal` als `Host`
-annehmen (`konzept.md`, „Devcontainer“).
+noch nicht, weder global noch pro User; die beiden vorgesehenen Wege stehen in `konzept.md`,
+„Devcontainer“.
 Der Hub dagegen ist von anderen Rechnern erreichbar — über einen Reverse-Proxy auf seinem
 Rechner, siehe „Hub für Nodes anderer Rechner“.
 
