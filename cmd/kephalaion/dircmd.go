@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/dirsync"
@@ -307,20 +307,7 @@ func (d *dirCommand) endpoint() (string, error) {
 	if listen == "" {
 		return "", fmt.Errorf("kein Node in der config %s; Adresse mit --node <url> angeben", loc.Path)
 	}
-	if strings.HasPrefix(listen, ":") {
-		listen = "127.0.0.1" + listen
-	}
-	return "http://" + listen + mcpnode.Path, nil
-}
-
-// tokensDir ist das Verzeichnis der Token-Dateien: tokens/ neben der config
-// des Users, wie die Erweiterung für VS Code es liest.
-func tokensDir() (string, error) {
-	p, err := config.UserPath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(p), "tokens"), nil
+	return assistant.NodeURL(listen, mcpnode.Path), nil
 }
 
 // credentials liefert Account und Token: --token-file oder --token-stdin
@@ -335,14 +322,15 @@ func (d *dirCommand) credentials(hub string) (account, token string, err error) 
 		token, err = readToken(d.stdin)
 		return *d.account, token, err
 	}
-	base, err := tokensDir()
+	// Dieselben Token-Dateien wie node mcp (internal/assistant).
+	base, err := assistant.TokensDir()
 	if err != nil {
 		return "", "", err
 	}
 	dir := filepath.Join(base, hub)
 	account = *d.account
 	if account == "" {
-		names, err := tokenAccounts(dir)
+		names, err := assistant.Accounts(dir)
 		if err != nil {
 			return "", "", err
 		}
@@ -355,26 +343,6 @@ func (d *dirCommand) credentials(hub string) (account, token string, err error) 
 			return "", "", fmt.Errorf("mehrere Token-Dateien unter %s: %s; --account wählt", dir, strings.Join(names, ", "))
 		}
 	}
-	token, err = readTokenFile(filepath.Join(dir, account+".token"))
+	token, err = readTokenFile(assistant.TokenFile(base, hub, account))
 	return account, token, err
-}
-
-// tokenAccounts nennt die Accounts mit Token-Datei in dir (<account>.token,
-// .pending übergangen), nach Name; ein fehlendes dir ist leer.
-func tokenAccounts(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if name, ok := strings.CutSuffix(e.Name(), ".token"); ok && !e.IsDir() {
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
 }

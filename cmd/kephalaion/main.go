@@ -29,8 +29,9 @@ Kommandos:
               account, doc, import)
   node        richtet den Node ein, pflegt seine Hubs und gewünschten
               Collections, tauscht Tokens von Accounts, gleicht ab, zeigt
-              Dokumente der Replica, gleicht Ordner ab und zeigt, wer wer
-              ist (init, hub, collection, account, sync, doc, dir, whoami)
+              Dokumente der Replica, gleicht Ordner ab, meldet sich bei den
+              KI-Assistenten an und zeigt, wer wer ist (init, hub,
+              collection, account, sync, doc, dir, mcp, whoami)
   serve       der Dienst: lauscht je eingerichteter Rolle auf ihrem listen
               (Hub: Vertrag für Nodes, Node: MCP für Clients) und gleicht
               als Node im Hintergrund ab

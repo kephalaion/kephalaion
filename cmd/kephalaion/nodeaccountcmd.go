@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/ident"
@@ -96,20 +96,7 @@ func (t tokenSource) pending() string { return t.file + ".pending" }
 
 // readTokenFile liest ein Token aus der ersten Zeile einer Datei.
 func readTokenFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("Token-Datei: %w", err)
-	}
-	defer f.Close()
-	line, err := bufio.NewReader(f).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("Token-Datei %s: %w", path, err)
-	}
-	token := strings.TrimSpace(line)
-	if err := ident.CheckToken(token); err != nil {
-		return "", fmt.Errorf("Token-Datei %s: %w", path, err)
-	}
-	return token, nil
+	return assistant.ReadTokenFile(path)
 }
 
 // writePending legt pfad.pending mit 0600 an; gibt es sie schon, scheitert es.

@@ -143,13 +143,48 @@ Ausführlich: [`konzept.md`](konzept.md).
   Kommandozeile für `node dir`, config und `tokens/` des Hosts nur lesbar eingebunden) oder mit
   eigenem Node, der über `ssh` mit dem Hub abgleicht. *Noch nicht gebaut*; die Einzelheiten
   entstehen im Projekt mit dem Devcontainer (`konzept.md`, „Devcontainer“).
-- **node mcp** — *vorgemerkt (Task 022).* `kephalaion node mcp add|remove|status`: trägt den
-  Node bei den KI-Assistenten des Users als MCP-Server ein (Claude Code, OpenCode, Codex,
-  VS Code), entfernt ihn und zeigt den Stand je Assistent — auf User-Ebene, ein Eintrag
+- **node mcp** — *im Bau (Task 022); gebaut ist `headers`.* `kephalaion node mcp
+  add|remove|status|headers`: trägt den Node bei den KI-Assistenten des Users als MCP-Server
+  ein, entfernt ihn und zeigt den Stand je Assistent — auf User-Ebene, ein **entry**
   `kephalaion` für alle Hubs, möglichst über das eigene Kommando des Assistenten, das Token nie
-  im Klartext. `kephalaion node mcp headers` gibt die Header-Paare aus den Token-Dateien als
-  JSON aus; Assistenten, die ein Kommando für Header kennen, rufen es bei jeder Verbindung auf
-  (`konzept.md`, „Installation und Betrieb“).
+  im Klartext (`konzept.md`, „Installation und Betrieb“). Optionen von `add`, `remove` und
+  `status`: **--assistant**; von `add` dazu **--account**, `--dry-run` (nur melden, was
+  geschähe) und **--auto**. Exit 0 fertig, 1 Fehler bei einem Assistenten oder ein übergangener
+  Hub, 2 falscher Aufruf.
+- **assistant** (Assistent) — ein KI-Assistent des Users, bei dem `node mcp` den Node einträgt.
+  Die Werte von **--assistant**: `claude` (Claude Code), `opencode` (OpenCode), `codex` (Codex
+  CLI), `vscode` (VS Code mit Copilot — dort trägt `node mcp` nichts ein, das macht die
+  Erweiterung für VS Code). Gefunden über `PATH`; ein nicht gefundener wird übergangen und
+  genannt.
+- **--assistant** — `--assistant <name>`, wiederholbar: beschränkt `node mcp add|remove|status`
+  auf die genannten Assistenten; ohne Angabe alle gefundenen.
+- **entry** (Eintrag) — der Eintrag `kephalaion` in der Konfiguration eines Assistenten auf
+  User-Ebene: die Adresse des Nodes (`http://<listen>/mcp`) und, wie die Header-Paare entstehen
+  — bei Claude Code und Codex über den **headers helper**, bei OpenCode als Verweis auf die
+  Token-Dateien (`{file:…}`). `status` nennt je Assistent einen Zustand: **eingetragen**,
+  **fehlt** oder **weicht ab** (ein Eintrag, den `add` ändern würde: andere Adresse, anderer
+  Helfer, fremder Inhalt); bei `vscode` „über die Erweiterung“.
+- **headers helper** (Helfer) — die Kommandozeile, die ein Assistent bei jeder Verbindung
+  aufruft, um die Header-Paare zu bekommen: `<absoluter Pfad>/kephalaion node mcp headers
+  --tokens-dir <pfad> [--account <hub>=<account>]…`. `node mcp headers` gibt die Header-Paare
+  aller Hubs mit Token-Datei als ein JSON-Objekt aus (`{"X-Keph-Account-<alias>":"…",
+  "X-Keph-Token-<alias>":"…"}`), ohne Token-Datei `{}`. Es ist die einzige Ausgabe mit Token:
+  nur, wenn die Standardausgabe kein Terminal ist. Außer im Terminal und bei falschem Aufruf
+  endet es mit Exit 0 und gültigem JSON; ein Hub ohne eindeutiges, lesbares Token fehlt im
+  Objekt, mit einer Meldung ohne Token auf stderr.
+- **--tokens-dir** — `node mcp headers --tokens-dir <pfad>`: das Verzeichnis der Token-Dateien
+  (`<pfad>/<hub>/<account>.token`); ohne Angabe `tokens/` neben der config des Users. Der
+  **headers helper** nennt es ausdrücklich, weil ein Assistent ihn mit anderer Umgebung
+  aufruft (Codex ohne `XDG_CONFIG_HOME`).
+- **--account** (bei `node mcp`) — `--account <hub>=<account>`, wiederholbar: wählt je Hub den
+  Account, wenn unter `tokens/<hub>/` mehrere Token-Dateien liegen. `add` schreibt die Wahl für
+  jeden Hub ausdrücklich in den Eintrag; ohne Angabe bleibt die Wahl aus dem Eintrag. Ein Hub
+  mit mehreren Accounts ohne Wahl wird übergangen und genannt. (Bei `node dir` und `node whoami`
+  nennt `--account <name>` nur den Account.)
+- **--auto** (automatischer Anstoß) — `node mcp add --auto`: der Aufruf aus `install.sh`;
+  dieselbe Regel gilt nach `node account rotate` und `check`. Er ändert nur Assistenten, die
+  schon einen Eintrag `kephalaion` haben; hat noch keiner der gefundenen einen, trägt er wie
+  `add` bei allen gefundenen ein. Ohne Node in der config endet er ohne Meldung mit Exit 0.
 
 ## Daten
 

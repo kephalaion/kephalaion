@@ -168,6 +168,7 @@ const nodeUsage = `Aufruf:
   kephalaion node sync [<alias>]
   kephalaion node doc list|get …
   kephalaion node dir push|pull …
+  kephalaion node mcp headers …
   kephalaion node whoami [<account>] [--hub <alias>] [--json]
 
 Kommandos:
@@ -184,13 +185,16 @@ Kommandos:
                Collection ab, als Client des Nodes über MCP: push ersetzt den
                Inhalt des Verzeichnisses (nur unter vendor/<name>/ und in
                Verzeichnissen mit Verzeichnis-Scope), pull holt ihn
+  mcp          meldet den Node bei den KI-Assistenten des Users als
+               MCP-Server an; headers gibt ihnen die Header-Paare aus den
+               Token-Dateien
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
 
 Hilfe: kephalaion node hub --help, kephalaion node collection --help,
 kephalaion node account --help, kephalaion node sync --help,
 kephalaion node doc --help, kephalaion node dir --help,
-kephalaion node whoami --help
+kephalaion node mcp --help, kephalaion node whoami --help
 `
 
 // runRole verteilt die Kommandos unter hub bzw. node.
@@ -231,6 +235,8 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runNodeDoc(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "dir":
 		return runNodeDir(args[1:], stdin, stdout, stderr)
+	case r == config.Node && args[0] == "mcp":
+		return runNodeMCP(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "whoami":
 		return runNodeWhoami(args[1:], stdout, stderr)
 	default:
