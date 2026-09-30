@@ -685,21 +685,45 @@ func TestPushExclude(t *testing.T) {
 	}
 }
 
-// push nimmt vorerst nur vendor/<name> oder darunter; ein ungültiges
-// Verzeichnis lehnt es ab.
+// push nimmt ohne Verbindung vendor/<name> oder darunter; die Wurzel, vendor
+// selbst und ein ungültiges Verzeichnis lehnt es ab. Jedes andere Ziel
+// braucht einen Verzeichnis-Scope: gleich oder darunter, Grenze ein ganzes
+// Segment.
 func TestCheckPushDir(t *testing.T) {
 	for _, ok := range []string{"vendor/k-playbook", "vendor/k-playbook/", "vendor/k-playbook/rules", "vendor/x/a/b/"} {
-		if err := CheckPushDir(ok); err != nil {
-			t.Errorf("%q: %v", ok, err)
+		if vendor, err := CheckPushDir(ok); err != nil || !vendor {
+			t.Errorf("%q: %v, %v", ok, vendor, err)
 		}
 	}
-	for _, bad := range []string{"", "/", "vendor", "vendor/", "docs", "Vendor/x", "vendors/x", "vendor//x", "/vendor/x"} {
-		if err := CheckPushDir(bad); err == nil {
+	for _, scope := range []string{"docs", "docs/", "docs/sub", "Vendor/x", "vendors/x"} {
+		if vendor, err := CheckPushDir(scope); err != nil || vendor {
+			t.Errorf("%q: %v, %v; erwartet ohne vendor/, ohne Fehler", scope, vendor, err)
+		}
+	}
+	for _, bad := range []string{"", "/", "vendor", "vendor/", "vendor//x", "/vendor/x", "..", "a//b"} {
+		if _, err := CheckPushDir(bad); err == nil {
 			t.Errorf("%q angenommen", bad)
 		}
 	}
-	if err := CheckPushDir("docs"); !strings.Contains(err.Error(), "nur unter vendor/<name>/, nicht nach docs/") {
+	if _, err := CheckPushDir(""); err == nil || !strings.Contains(err.Error(), "push schreibt nie an die Wurzel einer Collection") {
 		t.Errorf("Meldung: %v", err)
+	}
+	if _, err := CheckPushDir("vendor"); err == nil || !strings.Contains(err.Error(), "push schreibt nicht nach vendor/ selbst") {
+		t.Errorf("Meldung: %v", err)
+	}
+	for _, c := range []struct {
+		dir  string
+		dirs []string
+		want bool
+	}{
+		{"docs", []string{"docs"}, true}, {"docs/", []string{"docs"}, true}, {"docs/sub", []string{"docs"}, true},
+		{"docs2", []string{"docs"}, false}, {"do", []string{"docs"}, false}, {"a", []string{"a/b"}, false},
+		{"a/b", []string{"a/b"}, true}, {"notes", []string{"docs", "notes"}, true}, {"", []string{"docs"}, false},
+		{"docs", nil, false}, {"..", []string{".."}, false},
+	} {
+		if got := CoveredByDirScope(c.dir, c.dirs); got != c.want {
+			t.Errorf("CoveredByDirScope(%q, %v) = %v", c.dir, c.dirs, got)
+		}
 	}
 	f, local := pushEnv(t)
 	if _, err := Push(context.Background(), f, "..", local, Options{}); err == nil {

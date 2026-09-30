@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/dirsync"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
@@ -35,7 +36,14 @@ Ein zweiter Lauf ändert nur, was noch abweicht.
 
 Kommandos:
   push   ersetzt den Inhalt von <verzeichnis> durch den des Ordners: was dort
-         fehlt, wird gelöscht. Vorerst nur unter vendor/<name>/. Vorab liest
+         fehlt, wird gelöscht. Nur unter vendor/<name>/ und in Verzeichnissen,
+         für die der Account einen Verzeichnis-Scope hat (am Hub: kephalaion
+         hub account grant … --dir <pfad>) — gleich dem Scope oder darunter,
+         nie an die Wurzel. Die Scopes fragt push vor dem ersten Vorgang beim
+         Node ab (whoami, auch mit --dry-run); der Node kennt den Stand des
+         letzten Abgleichs — nach einer neuen Freigabe oder einem Entzug erst
+         kephalaion node sync <hub>. Der Hub prüft jeden Vorgang trotzdem
+         selbst. Ein anderes Ziel ist ein falscher Aufruf. Vorab liest
          push den ganzen Ordner ein: Jede Datei muss UTF-8 ohne NUL und
          höchstens 1 MiB sein und einen gültigen Namen haben — sonst bricht
          push mit allen Treffern ab, ohne zu schreiben (--exclude). Symlinks
@@ -73,7 +81,8 @@ gelöscht, unverändert, übergangen, gemeldet, Dauer.
 Exit-Codes:
   0   fertig, vollständig
   1   Fehler (Vorabprüfung, Node nicht erreichbar, verboten, nicht lesbar)
-  2   falscher Aufruf
+  2   falscher Aufruf, auch ein Ziel von push ohne Freigabe (nichts
+      geschrieben)
   3   unvollständig: abgebrochen, Höchstzeit oder gemeldete Konflikte —
       erneut ausführen
 
@@ -166,8 +175,11 @@ func (d *dirCommand) run(pos []string) int {
 	if _, err := ident.DocDirPrefix(dir); err != nil {
 		return d.usageError("%v", err)
 	}
+	// push: vendor/<name> ohne Verbindung; jedes andere Ziel prüft
+	// checkDirScope nach dem Verbinden.
+	var vendor bool
 	if !d.pull {
-		if err := dirsync.CheckPushDir(dir); err != nil {
+		if vendor, err = dirsync.CheckPushDir(dir); err != nil {
 			return d.usageError("%v", err)
 		}
 	}
@@ -215,6 +227,11 @@ func (d *dirCommand) run(pos []string) int {
 		return d.c.fail(err)
 	}
 	defer closeNode()
+	if !d.pull && !vendor {
+		if code, ok := d.checkDirScope(context.WithoutCancel(ctx), tgt, dir); !ok {
+			return code
+		}
+	}
 	what := fmt.Sprintf("%s %s:%s %s", d.c.name[len("node dir "):], hub, collection, dirsync.DirName(dir))
 	if opts.DryRun {
 		fmt.Fprintf(d.c.stdout, "%s (dry-run, nichts wird geschrieben):\n", what)
@@ -237,6 +254,35 @@ func (d *dirCommand) run(pos []string) int {
 		return exitIncomplete
 	}
 	return 0
+}
+
+// checkDirScope prüft das Ziel von push außerhalb von vendor/ gegen die
+// Verzeichnis-Scopes des Accounts in der Collection, wie der Node sie kennt
+// (whoami, Stand des letzten Abgleichs): gleich einem oder darunter. Sonst
+// ein falscher Aufruf mit den freigegebenen Verzeichnissen und dem Weg zur
+// Freigabe — bevor irgendetwas geschrieben wird, auch bei --dry-run.
+func (d *dirCommand) checkDirScope(ctx context.Context, tgt *mcpTarget, dir string) (code int, ok bool) {
+	dirs, err := tgt.DirScopes(ctx)
+	if err != nil {
+		return d.c.fail(err), false
+	}
+	if dirsync.CoveredByDirScope(dir, dirs) {
+		return 0, true
+	}
+	granted := "keine"
+	if len(dirs) > 0 {
+		labels := make([]string, len(dirs))
+		for i, s := range dirs {
+			labels[i] = s + "/"
+		}
+		granted = strings.Join(labels, ", ")
+	}
+	return d.usageError("push schreibt nur unter %s/<name>/ und in Verzeichnisse mit Verzeichnis-Scope; %s hat in %s "+
+		"keinen für %s (freigegeben: %s).\n"+
+		"Freigeben am Hub: kephalaion hub account grant %s %s --dir <pfad> (grant setzt die Rechte vollständig — "+
+		"die übrigen wiederholen).\n"+
+		"Eine eben erteilte Freigabe kennt der Node erst nach dem Abgleich: kephalaion node sync %s",
+		contract.VendorDir, tgt.account, tgt.addr, dirsync.DirName(dir), granted, tgt.account, tgt.collection, tgt.hub), false
 }
 
 // endpoint ist die Adresse des MCP-Eingangs: --node, sonst listen im

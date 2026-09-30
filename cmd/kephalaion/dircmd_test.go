@@ -147,9 +147,11 @@ func TestNodeDirPushPull(t *testing.T) {
 	e.cmd(t, "push", "vendor/x", src).want(t, 0, "1 angelegt")
 	want["vendor/x/e.md"] = "e"
 
-	// Außerhalb von vendor/ lehnt push ab (falscher Aufruf); der Hub bleibt.
-	e.cmd(t, "push", "docs", src).want(t, 2, "push schreibt vorerst nur unter vendor/<name>/, nicht nach docs/")
-	e.cmd(t, "push", "vendor", src).want(t, 2, "nur unter vendor/<name>/")
+	// Außerhalb von vendor/ ohne Verzeichnis-Scope lehnt push ab (falscher
+	// Aufruf); der Hub bleibt.
+	e.cmd(t, "push", "docs", src).want(t, 2, "kp hat in eigen:team-x keinen für docs/ (freigegeben: keine)")
+	e.cmd(t, "push", "vendor", src).want(t, 2, "push schreibt nicht nach vendor/ selbst, nur nach vendor/<name>/")
+	e.cmd(t, "push", "", src).want(t, 2, "push schreibt nie an die Wurzel einer Collection")
 	e.cmd(t, "push", "vendor/x", src, "--exclude", "[").want(t, 1, "kein gültiger Glob")
 	// Ein Account nur mit write kann unter vendor/ nichts ändern: forbidden
 	// bricht ab, mit Bericht bis dahin.
@@ -353,4 +355,112 @@ func TestNodeDirCredentials(t *testing.T) {
 	// --token-stdin.
 	runIn(t, e.tokenKP+"\n", "node", "dir", "push", "eigen:team-x", "vendor/x", src, "--dry-run", "--account", "kp",
 		"--token-stdin", "--config", cfgPath).want(t, 0, "+ vendor/x/a.md")
+}
+
+// push in freigegebene Verzeichnisse (Task 021): Ein Account nur mit den
+// Verzeichnis-Scopes docs und a/b pusht nach docs/ und docs/sub, auch über
+// Dokumente eines anderen Users. Die Wurzel, docs2, das Elternverzeichnis a
+// und ein anderes Verzeichnis lehnt push ab — Exit 2, nichts geschrieben, auch
+// mit --dry-run —, ebenso einen Account nur mit write. Die Prüfung liest die
+// Replica des Nodes: grant und Entzug wirken erst nach node sync.
+func TestNodeDirPushDirScope(t *testing.T) {
+	slow(t, "serve mit Hub und Node, viele Aufrufe über MCP")
+	e := newDirEnv(t)
+	r := e.run(t, "hub", "account", "add", "pusher")
+	r.want(t, 0)
+	file := e.tokenFile(t, "pusher", tokenFrom(t, r.out))
+	e.run(t, "hub", "account", "grant", "pusher", "team-x", "--dir", "docs", "--dir", "a/b").want(t, 0,
+		"team-x erlaubt (read, dir a/b/, dir docs/)")
+	for name, content := range map[string]string{"docs/fremd.md": "vom Admin", "docs/sub/alt.md": "alt", "docs2/x.md": "x",
+		"a/x.md": "x", "notes/x.md": "x", "wurzel.md": "w"} {
+		e.runIn(t, content, "hub", "doc", "put", "team-x", name).want(t, 0)
+	}
+	e.run(t, "node", "sync").want(t, 0)
+	push := func(dir, src string, args ...string) result {
+		t.Helper()
+		all := append([]string{"node", "dir", "push", "eigen:team-x", dir, src, "--node", e.nodeURL, "--account", "pusher",
+			"--token-file", file}, args...)
+		r := e.run(t, all...)
+		e.outputs = append(e.outputs, r.out, r.errOut)
+		return r
+	}
+	src := filepath.Join(e.dir, "src")
+	writeLocal(t, src, map[string]string{"a.md": "a", "sub/b.md": "b"})
+
+	// Abgelehnt, bevor etwas geschrieben wird — mit und ohne --dry-run.
+	before := e.hubDocs(t, "")
+	for _, c := range []struct{ dir, want string }{
+		{"", "push schreibt nie an die Wurzel einer Collection"},
+		{"docs2", "pusher hat in eigen:team-x keinen für docs2/ (freigegeben: a/b/, docs/)"},
+		{"a", "keinen für a/ (freigegeben: a/b/, docs/)"},
+		{"notes", "keinen für notes/"},
+		{"do", "keinen für do/"},
+	} {
+		for _, extra := range [][]string{nil, {"--dry-run"}} {
+			r := push(c.dir, src, extra...)
+			r.want(t, 2, c.want)
+			if c.dir != "" {
+				r.want(t, 2, "kephalaion hub account grant pusher team-x --dir <pfad>", "kephalaion node sync eigen")
+			}
+			if strings.Contains(r.out, "+ ") || strings.Contains(r.out, "dry-run") {
+				t.Errorf("push %q %v meldet Vorgänge:\n%s", c.dir, extra, r.out)
+			}
+		}
+	}
+	if got := e.hubDocs(t, ""); !reflect.DeepEqual(got, before) {
+		t.Errorf("abgelehnt, aber geschrieben: %v", got)
+	}
+
+	// docs/: ersetzt den Inhalt, auch die Dokumente des Admins; --dry-run
+	// zuerst schreibt nichts.
+	push("docs", src, "--dry-run").want(t, 0, "dry-run", "- docs/fremd.md", "+ docs/a.md")
+	if got := e.hubDocs(t, ""); !reflect.DeepEqual(got, before) {
+		t.Errorf("dry-run schreibt: %v", got)
+	}
+	push("docs", src).want(t, 0, "- docs/fremd.md", "- docs/sub/alt.md", "+ docs/a.md", "+ docs/sub/b.md",
+		"push eigen:team-x docs/: 2 angelegt, 0 geändert, 2 gelöscht")
+	if got := e.hubDocs(t, "docs"); !reflect.DeepEqual(got, map[string]string{"docs/a.md": "a", "docs/sub/b.md": "b"}) {
+		t.Errorf("docs/ am Hub: %v", got)
+	}
+	// Darunter und im geschachtelten Scope ebenso.
+	srcSub := filepath.Join(e.dir, "src-sub")
+	writeLocal(t, srcSub, map[string]string{"c.md": "c"})
+	push("docs/sub/", srcSub).want(t, 0, "- docs/sub/b.md", "+ docs/sub/c.md")
+	push("a/b", srcSub).want(t, 0, "+ a/b/c.md")
+	if got := e.hubDocs(t, "a"); !reflect.DeepEqual(got, map[string]string{"a/x.md": "x", "a/b/c.md": "c"}) {
+		t.Errorf("a/ am Hub: %v", got)
+	}
+
+	// Nur write (bob): nach docs/ abgelehnt, nichts geschrieben.
+	bob := e.tokenFile(t, "bob", e.tokens["bob"])
+	r = e.run(t, "node", "dir", "push", "eigen:team-x", "docs", src, "--node", e.nodeURL, "--account", "bob", "--token-file", bob)
+	e.outputs = append(e.outputs, r.out, r.errOut)
+	r.want(t, 2, "bob hat in eigen:team-x keinen für docs/ (freigegeben: keine)")
+
+	// Entzug: bis zum Abgleich kennt der Node noch den alten Stand — der Hub
+	// lehnt dann selbst ab —, danach lehnt schon die Kommandozeile ab.
+	e.run(t, "hub", "account", "grant", "pusher", "team-x").want(t, 0, "team-x erlaubt (read)")
+	writeLocal(t, src, map[string]string{"neu.md": "n"})
+	push("docs", src).want(t, 1, "forbidden", "write fehlt")
+	e.run(t, "node", "sync").want(t, 0)
+	push("docs", src).want(t, 2, "keinen für docs/ (freigegeben: keine)")
+	push("docs", src, "--dry-run").want(t, 2, "keinen für docs/")
+	// Wieder erteilt: erst nach dem Abgleich.
+	e.run(t, "hub", "account", "grant", "pusher", "team-x", "--dir", "docs").want(t, 0)
+	push("docs", src).want(t, 2, "Eine eben erteilte Freigabe kennt der Node erst nach dem Abgleich")
+	e.run(t, "node", "sync").want(t, 0)
+	push("docs", src).want(t, 0, "+ docs/neu.md")
+	if got := e.hubDocs(t, "docs"); !reflect.DeepEqual(got, map[string]string{"docs/a.md": "a", "docs/neu.md": "n",
+		"docs/sub/b.md": "b"}) {
+		t.Errorf("docs/ am Hub: %v", got)
+	}
+	// vendor/<name> wie bisher: ohne den Scope vendor/x verboten am Hub.
+	push("vendor/x", src).want(t, 1, "Scope vendor/x fehlt")
+
+	e.srv.stop(t)
+	for _, out := range append(e.outputs, e.srv.log.String()) {
+		if strings.Contains(out, "keph_") {
+			t.Errorf("Token in Ausgabe oder Log:\n%s", out)
+		}
+	}
 }

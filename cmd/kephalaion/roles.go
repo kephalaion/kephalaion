@@ -182,8 +182,8 @@ Kommandos:
   doc          listet und liest Dokumente aus der Replica
   dir          gleicht einen lokalen Ordner mit einem Verzeichnis einer
                Collection ab, als Client des Nodes über MCP: push ersetzt den
-               Inhalt des Verzeichnisses (vorerst nur unter vendor/), pull
-               holt ihn
+               Inhalt des Verzeichnisses (nur unter vendor/<name>/ und in
+               Verzeichnissen mit Verzeichnis-Scope), pull holt ihn
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
 

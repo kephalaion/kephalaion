@@ -226,18 +226,38 @@ func (r *run) deleteDir(dir string) error {
 	return err
 }
 
-// CheckPushDir prüft das Ziel von push: vorerst nur vendor/<name> oder
-// darunter — ein Schutz vor Versehen in der Kommandozeile, keine Grenze am
-// Hub.
-func CheckPushDir(dir string) error {
+// CheckPushDir prüft das Ziel von push, soweit es ohne Verbindung geht — ein
+// Schutz vor Versehen in der Kommandozeile, keine Grenze am Hub: vendor/<name>
+// und darunter ist erlaubt (vendor wahr), die Wurzel einer Collection und
+// vendor selbst nie. Jedes andere Ziel braucht einen Verzeichnis-Scope des
+// Accounts in der Collection (vendor falsch, kein Fehler); ob er ihn hat,
+// zeigen erst seine Rechte am Node (CoveredByDirScope).
+func CheckPushDir(dir string) (vendor bool, err error) {
 	prefix, err := ident.DocDirPrefix(dir)
 	if err != nil {
-		return err
+		return false, err
 	}
-	name := prefix[:max(len(prefix)-1, 0)]
 	// Bewertet an einem Namen darunter: vendor/<name> selbst ist erlaubt.
-	if vendor, _ := contract.VendorOf(prefix + "x"); vendor == "" {
-		return fmt.Errorf("push schreibt vorerst nur unter %s/<name>/, nicht nach %s", contract.VendorDir, dirName(name))
+	name, reserved := contract.VendorOf(prefix + "x")
+	switch {
+	case prefix == "":
+		return false, fmt.Errorf("push schreibt nie an die Wurzel einer Collection; Ziel ist %s/<name>/ oder ein Verzeichnis, "+
+			"für das der Account einen Verzeichnis-Scope hat", contract.VendorDir)
+	case reserved:
+		return false, fmt.Errorf("push schreibt nicht nach %s/ selbst, nur nach %s/<name>/", contract.VendorDir, contract.VendorDir)
 	}
-	return nil
+	return name != "", nil
+}
+
+// CoveredByDirScope sagt, ob push nach dir schreiben darf, weil dir gleich
+// einem der Verzeichnis-Scopes dirs ist oder darunter liegt — bewertet nach
+// der Regel des Hubs (contract.Rights.DirScopeOf) an einem Namen unter dir.
+// Die Wurzel deckt nie ein Scope.
+func CoveredByDirScope(dir string, dirs []string) bool {
+	prefix, err := ident.DocDirPrefix(dir)
+	if err != nil || prefix == "" {
+		return false
+	}
+	_, ok := contract.Rights{Dirs: dirs}.DirScopeOf(prefix + "x")
+	return ok
 }

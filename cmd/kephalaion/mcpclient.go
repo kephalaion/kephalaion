@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,8 +17,9 @@ import (
 
 // Die Kommandozeile als Client des Nodes über MCP (node dir push|pull): der
 // Client des go-sdk gegen /mcp, mit dem Header-Paar eines Hubs, und darüber
-// dirsync.Target aus den Werkzeugen list, read, create, write und delete.
-// Das Token steht nur im Header; keine Meldung nennt es.
+// dirsync.Target aus den Werkzeugen list, read, create, write und delete;
+// dazu whoami für die Verzeichnis-Scopes, die push außerhalb von vendor/
+// braucht. Das Token steht nur im Header; keine Meldung nennt es.
 
 // headerTransport setzt die Header eines Clients an jede Anfrage.
 type headerTransport struct {
@@ -37,7 +39,8 @@ func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 type mcpTarget struct {
 	session *mcp.ClientSession
 	// addr ist die Collection als <hub>:<collection>.
-	addr string
+	addr                     string
+	hub, collection, account string
 }
 
 // connectNode verbindet sich mit dem MCP-Eingang unter endpoint, angemeldet
@@ -54,7 +57,43 @@ func connectNode(ctx context.Context, endpoint, hub, collection, account, token 
 	if err != nil {
 		return nil, nil, fmt.Errorf("Node unter %s nicht erreichbar: %w", endpoint, err)
 	}
-	return &mcpTarget{session: session, addr: hub + ":" + collection}, func() { _ = session.Close() }, nil
+	return &mcpTarget{session: session, addr: hub + ":" + collection, hub: hub, collection: collection, account: account},
+		func() { _ = session.Close() }, nil
+}
+
+// DirScopes fragt den Node über whoami nach den Verzeichnis-Scopes des
+// Accounts in der Collection — aus der strukturierten Antwort (dirs), nicht
+// aus dem Text. Der Node liest seine Replica: Es gilt der Stand des letzten
+// Abgleichs. Ist der Account dort nicht angemeldet oder die Collection für ihn
+// nicht lesbar, ist das ein Fehler; ebenso ein Node, der dirs nicht kennt
+// (älter als Task 021).
+func (t *mcpTarget) DirScopes(ctx context.Context) ([]string, error) {
+	var out mcpnode.WhoamiOutput
+	if _, err := t.call(ctx, "whoami", struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(out.Hubs, func(h mcpnode.HubInfo) bool { return h.Hub == t.hub })
+	if i < 0 {
+		return nil, fmt.Errorf("der Node kennt keinen Hub %s", t.hub)
+	}
+	h := out.Hubs[i]
+	if h.Login != mcpnode.LoginOK {
+		msg := fmt.Sprintf("Account %s ist am Node für den Hub %s nicht angemeldet (login %s)", t.account, t.hub, h.Login)
+		if h.Sync.NeverSynced {
+			msg += "; noch nie abgeglichen: kephalaion node sync " + t.hub
+		}
+		return nil, errors.New(msg)
+	}
+	j := slices.IndexFunc(h.Collections, func(c mcpnode.CollectionRights) bool { return c.Collection == t.collection })
+	if j < 0 {
+		return nil, fmt.Errorf("%s: nicht lesbar für den Account %s", t.addr, t.account)
+	}
+	dirs := h.Collections[j].Dirs
+	if dirs == nil {
+		return nil, fmt.Errorf("der Node nennt keine Verzeichnis-Scopes (dirs fehlt in whoami) — er ist älter als diese " +
+			"Kommandozeile; den Node aktualisieren und serve neu starten")
+	}
+	return dirs, nil
 }
 
 // call ruft ein Werkzeug und liest die strukturierte Antwort nach out. Ein
