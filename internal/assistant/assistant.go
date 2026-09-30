@@ -28,7 +28,7 @@ const (
 )
 
 // Names sind alle Werte von --assistant in fester Reihenfolge.
-var Names = []string{Claude, Codex, VSCode}
+var Names = []string{Claude, OpenCode, Codex, VSCode}
 
 // CheckName prüft einen Wert von --assistant.
 func CheckName(name string) error {
@@ -179,6 +179,8 @@ func (m *Manager) client(name string) (client, bool) {
 	switch name {
 	case Claude:
 		return &claudeClient{m: m, bin: path}, true
+	case OpenCode:
+		return &opencodeClient{m: m, bin: path}, true
 	case Codex:
 		return &codexClient{m: m, bin: path}, true
 	}
@@ -187,7 +189,7 @@ func (m *Manager) client(name string) (client, bool) {
 
 // clientNames sind die Assistenten mit eigenem Eintrag, in fester
 // Reihenfolge.
-var clientNames = []string{Claude, Codex}
+var clientNames = []string{Claude, OpenCode, Codex}
 
 // Outcome ist, was bei einem Assistenten geschah.
 type Outcome string

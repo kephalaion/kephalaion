@@ -1,0 +1,36 @@
+// Meine OpenCode-config
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "litellm/x", // Modell
+  "provider": {
+    "litellm": {
+      "options": {
+        "baseURL": "{env:LITELLM_BASE_URL}",
+        "apiKey": "{file:~/.config/opencode/secrets/key}"
+      }
+    }
+  },
+
+  "mcp": {
+    "atlassian": {
+      "type": "remote",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2",
+      "enabled": true,
+    },
+    // Kephalaion: eingetragen von kephalaion node mcp add
+    "kephalaion": {
+      "type": "remote",
+      "url": "http://127.0.0.1:7433/mcp",
+      "headers": {
+        "X-Keph-Account-vm": "alice",
+        "X-Keph-Token-vm": "{file:~/.config/kephalaion/tokens/vm/alice.token}"
+      }
+    },
+
+    // Playwright: Browser-Automatisierung
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest"], // am Ende
+    },
+  },
+}

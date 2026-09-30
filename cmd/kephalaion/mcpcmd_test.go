@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tailscale/hujson"
+
 	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/assistant/assistanttest"
 	"github.com/kephalaion/kephalaion/internal/config"
@@ -276,7 +278,7 @@ func TestNodeMCPNotFoundAndErrors(t *testing.T) {
 	delete(e.fake.Fail, "claude mcp add-json")
 
 	// Falscher Aufruf.
-	e.mcp(t, "add", "--assistant", "cursor").want(t, 2, "--assistant \"cursor\"", "claude, codex, vscode")
+	e.mcp(t, "add", "--assistant", "cursor").want(t, 2, "--assistant \"cursor\"", "claude, opencode, codex, vscode")
 	e.mcp(t, "add", "--account", "vm").want(t, 2, "<hub>=<account>")
 	e.mcp(t, "add", "zuviel").want(t, 2, "Unerwartetes Argument")
 	e.mcp(t, "remove", "--assistant", "x").want(t, 2)
@@ -517,5 +519,192 @@ func TestNodeMCPClaudeConfigDir(t *testing.T) {
 	if got := e.fake.Calls; len(got) != 2 || got[0] != "claude mcp remove kephalaion --scope user" ||
 		!strings.HasPrefix(got[1], "claude mcp add-json kephalaion ") {
 		t.Errorf("Aufrufe: %v", got)
+	}
+}
+
+// opencodeEntry liest den Eintrag kephalaion aus der config von OpenCode.
+func (e *mcpEnv) opencodeEntry(t *testing.T) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(e.fake.OpenCodeConfig())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	std, err := hujson.Standardize(data)
+	if err != nil {
+		t.Fatalf("config von OpenCode ungültig: %v\n%s", err, data)
+	}
+	var file struct {
+		MCP map[string]map[string]any `json:"mcp"`
+	}
+	if err := json.Unmarshal(std, &file); err != nil {
+		t.Fatal(err)
+	}
+	return file.MCP[assistant.EntryName]
+}
+
+// ref ist der Verweis auf die Token-Datei eines Accounts, wie add ihn
+// schreibt: unter HOME als ~/….
+func (e *mcpEnv) ref(hub, account string) string {
+	rel, _ := filepath.Rel(e.home, filepath.Join(e.tokens, hub, account+".token"))
+	return "{file:~/" + filepath.ToSlash(rel) + "}"
+}
+
+const opencodeBefore = `// Meine config
+{
+  "model": "x", // Modell
+  "mcp": {
+    // fremd, mit Verweis
+    "fremd": {
+      "type": "remote",
+      "url": "http://example.invalid/mcp",
+      "headers": { "X-A": "{env:A}" },
+    },
+  },
+}
+`
+
+// OpenCode: add über opencode mcp add mit Verweisen auf die Token-Dateien,
+// remove nur des Schlüssels, status mit den drei Zuständen.
+func TestNodeMCPOpenCode(t *testing.T) {
+	e := newMCPEnv(t, assistant.OpenCode)
+	e.put(t, "vm", "alice.token", dummyTokenA+"\n")
+	cfg := filepath.Join(e.home, ".config", "opencode", "opencode.jsonc")
+	writeText(t, cfg, opencodeBefore)
+
+	e.mcp(t, "status").want(t, 0, "opencode: fehlt", "claude: nicht gefunden")
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen: "+mcpURL+", vm=alice")
+	entry := e.opencodeEntry(t)
+	headers, _ := entry["headers"].(map[string]any)
+	if entry["type"] != "remote" || entry["url"] != mcpURL || len(entry) != 3 || len(headers) != 2 ||
+		headers["X-Keph-Account-vm"] != "alice" || headers["X-Keph-Token-vm"] != e.ref("vm", "alice") {
+		t.Fatalf("Eintrag bei OpenCode: %v", entry)
+	}
+	text := readText(t, cfg)
+	if leaksToken(text) {
+		t.Fatal("Token in der config von OpenCode")
+	}
+	for _, keep := range []string{"// Meine config", `"model": "x", // Modell`, "// fremd, mit Verweis", `"{env:A}"`} {
+		if !strings.Contains(text, keep) {
+			t.Errorf("add verliert %q:\n%s", keep, text)
+		}
+	}
+	want := []string{"opencode --version", "opencode mcp add kephalaion --url " + mcpURL +
+		" --header X-Keph-Account-vm=alice --header X-Keph-Token-vm=" + e.ref("vm", "alice")}
+	if got := e.fake.Calls; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("Aufrufe:\n%s\nerwartet:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	e.mcp(t, "status").want(t, 0, "opencode: eingetragen (vm=alice)")
+	writes := len(e.fake.Writes())
+	e.mcp(t, "add").want(t, 0, "opencode: unverändert")
+	if len(e.fake.Writes()) != writes {
+		t.Errorf("ein zweites add schreibt: %v", e.fake.Writes()[writes:])
+	}
+
+	// Weicht ab: andere Adresse, weitere Schlüssel (oauth), fremder Typ.
+	e.listen(t, "127.0.0.1:7500")
+	e.mcp(t, "status").want(t, 0, "opencode: weicht ab — andere Adresse")
+	e.listen(t, "")
+	// Von Hand oauth: false dazu — die Form des Eintrags ist die von
+	// opencode mcp add, deshalb über den Wert der Adresse.
+	text = readText(t, cfg)
+	quotedURL := `"` + mcpURL + `"`
+	if strings.Count(text, quotedURL) != 1 {
+		t.Fatalf("Adresse nicht genau einmal:\n%s", text)
+	}
+	writeText(t, cfg, strings.Replace(text, quotedURL, quotedURL+`, "oauth": false`, 1))
+	e.mcp(t, "status").want(t, 0, "opencode: weicht ab — fremder Inhalt (oauth)")
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen, ersetzt den Eintrag (fremder Inhalt (oauth))")
+	if _, ok := e.opencodeEntry(t)["oauth"]; ok {
+		t.Error("oauth steht noch im Eintrag")
+	}
+
+	// remove: nur der Schlüssel, der Rest wie vorher.
+	e.mcp(t, "remove").want(t, 0, "opencode: entfernt")
+	if got := readText(t, cfg); got != opencodeBefore {
+		t.Errorf("config nach remove:\n%s\nerwartet:\n%s", got, opencodeBefore)
+	}
+	e.mcp(t, "remove").want(t, 0, "opencode: unverändert: kein Eintrag")
+	e.mcp(t, "status").want(t, 0, "opencode: fehlt")
+}
+
+// Die Falle: Ein Verweis auf eine fehlende Token-Datei macht die ganze config
+// von OpenCode ungültig. status warnt; add nimmt den Hub heraus (opencode mcp
+// add allein scheiterte daran) und entfernt den Eintrag, wenn keine
+// Token-Datei mehr da ist — auch als automatischer Anstoß.
+func TestNodeMCPOpenCodeMissingTokenFile(t *testing.T) {
+	e := newMCPEnv(t, assistant.Claude, assistant.OpenCode)
+	cfg := filepath.Join(e.home, ".config", "opencode", "opencode.jsonc")
+	writeText(t, cfg, opencodeBefore)
+	e.put(t, "vm", "alice.token", dummyTokenA+"\n")
+	eigen := e.put(t, "eigen", "kp.token", dummyTokenC+"\n")
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen: "+mcpURL+", eigen=kp, vm=alice")
+
+	if err := os.Remove(eigen); err != nil {
+		t.Fatal(err)
+	}
+	r := e.mcp(t, "status")
+	r.want(t, 0, "opencode: weicht ab — Verweis auf eine fehlende Token-Datei",
+		"Warnung: der Eintrag verweist auf eine fehlende Datei (~/", "OpenCode startet nicht", "kephalaion node mcp add bereinigt")
+	e.mcp(t, "add", "--auto").want(t, 0, "opencode: eingetragen, ersetzt den Eintrag (Verweis auf eine fehlende Token-Datei)")
+	headers, _ := e.opencodeEntry(t)["headers"].(map[string]any)
+	if len(headers) != 2 || headers["X-Keph-Token-vm"] != e.ref("vm", "alice") {
+		t.Fatalf("Header nach dem Bereinigen: %v", headers)
+	}
+	e.mcp(t, "status").want(t, 0, "opencode: eingetragen (vm=alice)")
+	if r := e.mcp(t, "status"); strings.Contains(r.out, "Warnung") {
+		t.Errorf("Warnung nach dem Bereinigen:\n%s", r.out)
+	}
+
+	// Keine Token-Datei mehr: Der Eintrag bei OpenCode fällt weg, Claude Code
+	// behält seinen (der Helfer ohne Wahl) — auch mit --auto.
+	if err := os.Remove(filepath.Join(e.tokens, "vm", "alice.token")); err != nil {
+		t.Fatal(err)
+	}
+	e.mcp(t, "add", "--auto").want(t, 0, "opencode: entfernt (keine Token-Datei mehr)", "claude: eingetragen, ersetzt den Eintrag")
+	if e.opencodeEntry(t) != nil {
+		t.Error("Eintrag bei OpenCode ohne Token-Datei")
+	}
+	if got := readText(t, cfg); got != opencodeBefore {
+		t.Errorf("config nach dem Entfernen:\n%s", got)
+	}
+	// Ohne Token-Datei kommt kein neuer Eintrag.
+	e.mcp(t, "add").want(t, 0, "opencode: übergangen: keine Token-Datei")
+	e.mcp(t, "status").want(t, 0, "opencode: fehlt", "claude: eingetragen (ohne Anmeldung)")
+}
+
+// OpenCode: Fassung vor 1.17.0 ist ein Fehler mit Hinweis; XDG_CONFIG_HOME
+// gilt; opencode.json vor opencode.jsonc, beide nebeneinander mit Warnung.
+func TestNodeMCPOpenCodeFiles(t *testing.T) {
+	e := newMCPEnv(t, assistant.OpenCode)
+	e.put(t, "vm", "alice.token", dummyTokenA+"\n")
+	e.fake.OpenCodeVersion = "opencode 1.16.2"
+	e.mcp(t, "add").want(t, 1, "opencode: Fehler: OpenCode 1.16.2 fragt bei mcp add nach; nötig ist 1.17.0", "opencode upgrade")
+	if w := e.fake.Writes(); len(w) != 0 {
+		t.Errorf("geschrieben trotz alter Fassung: %v", w)
+	}
+	e.fake.OpenCodeVersion = "1.17.0"
+
+	// Ohne config legt opencode mcp add opencode.json an, unter
+	// XDG_CONFIG_HOME.
+	xdg := filepath.Join(e.home, "xdg")
+	e.fake.Env["XDG_CONFIG_HOME"] = xdg
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen")
+	if !exists(filepath.Join(xdg, "opencode", "opencode.json")) {
+		t.Fatal("keine opencode.json unter XDG_CONFIG_HOME")
+	}
+	e.mcp(t, "status").want(t, 0, "opencode: eingetragen (vm=alice)")
+	writeText(t, filepath.Join(xdg, "opencode", "opencode.jsonc"), "{}\n")
+	e.mcp(t, "status").want(t, 0, "opencode: eingetragen", "Warnung: neben ", "opencode.json und opencode.jsonc")
+
+	// Eine config, die kein JSONC ist: status unbekannt, add fasst sie nicht an.
+	writeText(t, filepath.Join(xdg, "opencode", "opencode.json"), "{kaputt")
+	e.mcp(t, "status").want(t, 1, "opencode: unbekannt — ", "kein gültiges JSONC")
+	e.mcp(t, "add").want(t, 1, "opencode: Fehler:")
+	if got := readText(t, filepath.Join(xdg, "opencode", "opencode.json")); got != "{kaputt" {
+		t.Errorf("add hat die kaputte Datei geändert: %s", got)
 	}
 }

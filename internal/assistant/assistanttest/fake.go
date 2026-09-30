@@ -14,11 +14,15 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tailscale/hujson"
+
 	"github.com/kephalaion/kephalaion/internal/assistant"
 )
 
-// Fake spielt claude und codex nach.
+// Fake spielt claude, opencode und codex nach.
 type Fake struct {
+	// OpenCodeVersion ist, was opencode --version meldet.
+	OpenCodeVersion string
 	// Home ist das Heimatverzeichnis, in dem die Assistenten ihre Dateien
 	// halten.
 	Home string
@@ -35,7 +39,8 @@ type Fake struct {
 
 // New liefert einen Nachbau mit den genannten Assistenten im PATH.
 func New(home string, installed ...string) *Fake {
-	f := &Fake{Home: home, Env: map[string]string{}, Installed: map[string]bool{}, Fail: map[string]error{}}
+	f := &Fake{Home: home, Env: map[string]string{}, Installed: map[string]bool{}, Fail: map[string]error{},
+		OpenCodeVersion: "1.18.33"}
 	for _, name := range installed {
 		f.Installed[name] = true
 	}
@@ -63,11 +68,12 @@ func (f *Fake) LookPath(name string) (string, error) {
 	return "", fmt.Errorf("%s: nicht im PATH", name)
 }
 
-// Writes zählt die Aufrufe, die etwas ändern (alles außer codex mcp list).
+// Writes zählt die Aufrufe, die etwas ändern (alles außer codex mcp list und
+// opencode --version).
 func (f *Fake) Writes() []string {
 	var out []string
 	for _, c := range f.Calls {
-		if !strings.HasPrefix(c, "codex mcp list") {
+		if !strings.HasPrefix(c, "codex mcp list") && c != "opencode --version" {
 			out = append(out, c)
 		}
 	}
@@ -94,6 +100,10 @@ func (f *Fake) Run(_ context.Context, name string, args ...string) (string, erro
 	case prog == assistant.Claude && len(args) == 5 && args[0] == "mcp" && args[1] == "remove" &&
 		args[3] == "--scope" && args[4] == "user":
 		return f.claudeRemove(args[2])
+	case prog == assistant.OpenCode && call == "opencode --version":
+		return f.OpenCodeVersion + "\n", nil
+	case prog == assistant.OpenCode && len(args) >= 5 && args[0] == "mcp" && args[1] == "add" && args[3] == "--url":
+		return f.opencodeAdd(args[2], args[4], args[5:])
 	case prog == assistant.Codex && call == "codex mcp list --json":
 		return f.codexList()
 	case prog == assistant.Codex && len(args) == 3 && args[0] == "mcp" && args[1] == "remove":
@@ -283,4 +293,102 @@ func (f *Fake) codexRemove(name string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Removed global MCP server '%s'.\n", name), nil
+}
+
+// OpenCodeConfig ist die Datei, die opencode mcp add schreibt: opencode.json,
+// wenn es sie gibt, sonst opencode.jsonc, wenn es sie gibt, sonst
+// opencode.json.
+func (f *Fake) OpenCodeConfig() string {
+	dir := filepath.Join(f.Home, ".config", "opencode")
+	if x := f.Env["XDG_CONFIG_HOME"]; x != "" {
+		dir = filepath.Join(x, "opencode")
+	}
+	for _, name := range []string{"opencode.json", "opencode.jsonc"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return filepath.Join(dir, name)
+		}
+	}
+	return filepath.Join(dir, "opencode.json")
+}
+
+var opencodeFileRef = regexp.MustCompile(`\{file:([^}]+)\}`)
+
+// opencodeAdd spielt opencode mcp add <name> --url <url> --header K=V… nach:
+// Wie OpenCode scheitert es, wenn ein {file:…} der config auf eine fehlende
+// Datei verweist; sonst setzt es mcp.<name> und lässt den Rest der Datei, wie
+// er ist.
+func (f *Fake) opencodeAdd(name, url string, rest []string) (string, error) {
+	headers := map[string]string{}
+	for i := 0; i < len(rest); i += 2 {
+		if rest[i] != "--header" || i+1 >= len(rest) {
+			return "", fmt.Errorf("der Nachbau kennt die Option nicht: %s", rest[i])
+		}
+		k, v, ok := strings.Cut(rest[i+1], "=")
+		if !ok || k == "" {
+			return "", fmt.Errorf("Invalid HTTP header: %s. Expected KEY=VALUE", rest[i+1])
+		}
+		headers[k] = v
+	}
+	path := f.OpenCodeConfig()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		data = []byte("{}")
+	} else if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		for _, m := range opencodeFileRef.FindAllStringSubmatch(line, -1) {
+			ref := m[1]
+			if r, ok := strings.CutPrefix(ref, "~/"); ok {
+				ref = filepath.Join(f.Home, r)
+			} else if !filepath.IsAbs(ref) {
+				ref = filepath.Join(filepath.Dir(path), ref)
+			}
+			if _, err := os.Stat(ref); err != nil {
+				return "", fmt.Errorf("Configuration is invalid at %s: bad file reference: %q %s does not exist", path, m[0], ref)
+			}
+		}
+	}
+	entry := map[string]any{"type": "remote", "url": url}
+	if len(headers) > 0 {
+		entry["headers"] = headers
+	}
+	v, err := hujson.Parse(data)
+	if err != nil {
+		return "", err
+	}
+	op := map[string]any{"op": "add", "path": "/mcp/" + name, "value": entry}
+	if v.Find("/mcp") == nil {
+		op = map[string]any{"op": "add", "path": "/mcp", "value": map[string]any{name: entry}}
+	}
+	patch, err := json.Marshal([]any{op})
+	if err != nil {
+		return "", err
+	}
+	// Wie jsonc-parser: Ein neuer Eintrag kommt vor ein Komma am Ende, das
+	// Komma bleibt.
+	trailing := false
+	if mcp := v.Find("/mcp"); mcp != nil {
+		if obj, ok := mcp.Value.(*hujson.Object); ok && len(obj.Members) > 0 {
+			trailing = obj.Members[len(obj.Members)-1].Value.AfterExtra != nil
+		}
+	}
+	if err := v.Patch(patch); err != nil {
+		return "", err
+	}
+	if obj, ok := v.Find("/mcp").Value.(*hujson.Object); ok && trailing && len(obj.Members) > 0 {
+		if last := &obj.Members[len(obj.Members)-1].Value; last.AfterExtra == nil {
+			last.AfterExtra = hujson.Extra{}
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, v.Pack(), 0o600); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("MCP server %q added to %s\n", name, path), nil
 }

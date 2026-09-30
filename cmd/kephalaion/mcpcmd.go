@@ -29,6 +29,15 @@ Token-Dateien. Das Token steht in keiner Konfiguration eines Assistenten.
 Assistenten (--assistant, gefunden über PATH):
   claude    Claude Code: claude mcp add-json … --scope user; die Header holt
             Claude Code bei jeder Verbindung über den Helfer (headersHelper)
+  opencode  OpenCode: opencode mcp add … (ab 1.17.0) in der globalen config
+            (~/.config/opencode/opencode.json bzw. .jsonc). Dort steht nicht
+            das Token, sondern je Hub ein Verweis auf die Token-Datei
+            ({file:~/…}). remove entfernt nur den Schlüssel mcp.kephalaion,
+            Kommentare bleiben. Fehlt eine Datei, auf die ein Verweis zeigt,
+            ist die ganze config ungültig und OpenCode startet nicht: add
+            nimmt nur vorhandene Token-Dateien auf, bereinigt Verweise auf
+            fehlende und entfernt den Eintrag, wenn keine mehr da ist;
+            status warnt
   codex     Codex CLI: die Tabelle [mcp_servers.kephalaion] in
             $CODEX_HOME/config.toml (sonst ~/.codex/config.toml), nur sie; der
             Rest der Datei bleibt, auch Kommentare. Die Header holt Codex je
@@ -83,9 +92,9 @@ Hand ohne --assistant. Ohne Node in der config endet add --auto ohne Meldung
 mit Exit 0; es meldet nur, was es ändert.
 
 Optionen:
-  --assistant name           beschränkt auf diesen Assistenten (claude, codex,
-                             vscode); wiederholbar. Ohne Angabe alle
-                             gefundenen
+  --assistant name           beschränkt auf diesen Assistenten (claude,
+                             opencode, codex, vscode); wiederholbar. Ohne
+                             Angabe alle gefundenen
   --account <hub>=<account>  wählt den Account eines Hubs mit mehreren
                              Token-Dateien; wiederholbar
   --dry-run                  add: nur melden, was geschähe
