@@ -302,7 +302,7 @@ Client geht.
 
 **Entfernt: MCP über HTTPS** mit Token, später OAuth, für Clients ohne eigenen Node. Es ist
 derselbe Eingang. Vorgemerkt am 2026-09-30 als nächster Schritt nach der Anmeldung bei den
-Assistenten: MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy. Für
+Assistenten: MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy (Task 023). Für
 Devcontainer ist es nicht der Weg — dort soll die Antwort aus einer lokalen Replica kommen.
 
 **Node ↔ Hub: ein Protokoll, zwei Transportwege** — dazu der Funktionsaufruf im selben

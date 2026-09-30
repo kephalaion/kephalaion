@@ -301,7 +301,7 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nut
     Ziel: MCP und Kommandozeile gehen auf dem Rechner selbst sauber — auf der WSL trägt
     Kephalaion bisher kein KI-Client ein (`konzept.md`, „Installation und Betrieb“, „Bei den
     Assistenten angemeldet“; Befund `material/befunde/mcp-client-registrierung.md`).
-  - **Danach, eigene Task:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
+  - **Task 023 — danach:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
     (`konzept.md`, „Kommunikation“, „Entfernt: MCP über HTTPS“). Dabei: `--node` von `node dir`
     kennt nur `http://`; fail2ban greift nicht, weil der Node bei falscher Anmeldung nie 401
     antwortet (Befund `material/befunde/mcp-von-aussen.md`).
