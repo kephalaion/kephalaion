@@ -329,37 +329,24 @@ Nacharbeit des Nutzers)
 
 ## Zu testen
 
-- **Task 018, Etappe 4 — Abnahme des HTTPS-Wegs auf der VM** (Nacharbeit des Nutzers, nicht
-  Teil des Laufs; zusammen mit Task 019, nächster Eintrag): Binary mit Task 018 und 019 auf VM
-  und WSL, `node.db` beidseits neu anlegen (Schema 5), Blöcke `handle /kephalaion/hub/*`
-  (ohne `forward_auth`, `uri strip_prefix /kephalaion`, `header_up Host
-  {upstream_hostport}`) und `handle /kephalaion/*` (mit `forward_auth`) im Caddyfile der VM,
-  `hub node add wsl-kleist`; in der WSL `node hub add vm … --transport https --address
-  https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephalaion/hub` (Weg 1,
-  ohne CA), `node hub check vm`, `node collection add vm:test`, `node sync vm`, `create` über
-  MCP; `journalctl -u kephalaion` mit `via` und ohne Token, Caddy-Log 200 auf
-  `/kephalaion/hub/v1/…`. Schritte mit Ansible-Spalte: `~/dev/vm/kephalaion/README.md`,
-  „Abnahme des HTTPS-Wegs“. Danach den Befund „Proxy setzt Host, Hub unverändert“ bestätigen
-  oder widerlegen (`material/befunde/transport-entfernt.md`; `Host` am 2026-09-29 von der WSL
-  aus schon bestätigt) und diesen Eintrag abhaken; die Annahme zu LB/NAT vor `9.141.8.157`
-  ebenso.
-- **Task 019, Etappe 4 — Abnahme auf der VM: Wurzel, `/hub/`, alte Adresse** (Nacharbeit des
-  Nutzers, nicht Teil des Laufs; vorgeschrieben 2026-09-30 in `~/dev/vm/kephalaion/README.md`,
-  „Abnahme des HTTPS-Wegs“, W7 und „Vorab“): im Hub-Block des Caddyfile `uri strip_prefix
-  /kephalaion` statt `/kephalaion/hub` (`make caddy`), zusammen mit dem neuen Binary; die
-  Adresse `…/kephalaion/hub` bleibt. Proben getrennt nach Ort — von außen ohne Sitzung
-  `curl https://<name>/kephalaion/hub/` → 200 Hub-Text ohne Version, `POST
-  …/kephalaion/hub/v1/whoami` → 401 in Vertragsform (einmal), `…/kephalaion/hub/nix` → 404
-  `invalid`; `…/kephalaion/` → 302 und `POST …/kephalaion/v1/whoami` → 401 des Auth-Proxys
-  sind erwartet; auf der VM lokal `curl http://localhost:7434/` → Begrüßung mit Version, `POST
-  http://localhost:7434/v1/whoami` → 404 `text/plain` mit Hinweis; `node hub check` mit alter
-  Adresse `https://<name>/kephalaion` → 401 des Auth-Proxys mit dem `/hub`-Hinweis (einmal,
-  bei gestopptem `serve` der WSL). **fail2ban** zählt die 401 (10 in 10 min sperren 80/443):
-  401-Proben je genau einmal, kein Raten; ein `https`-Eintrag ohne `/hub` bei laufendem
-  `serve` holt je `sync_interval` ein 401 — Eintrag sofort zurücksetzen. `vmhttp` auf
-  `http://localhost:7434/hub` setzen oder entfernen. Danach Befund in
-  `material/befunde/transport-entfernt.md` (Wurzel, `/hub/`, Hinweis; bestaetigt oder
-  widerlegt) und diesen Eintrag abhaken.
+- **Task 018 und 019, Etappe 4 — Abnahme auf der VM: abgenommen 2026-09-30.** Binary dev
+  fa5d6a6 auf VM (global, `node.db` neu in Schema 5, Import) und WSL (pro User, frisch);
+  Caddyfile mit `handle /kephalaion/hub/*` (ohne `forward_auth`, `uri strip_prefix
+  /kephalaion`) und `handle /kephalaion/*` (mit); Node `wsl-kleist`, Account `kamran-wsl`;
+  aus der WSL `check`, `sync` (Revision 3 → 4 nach `rotate`), `create` über MCP
+  (`wsl-hallo.md`, Revision 6); Hub-Journal `POST /hub/v1/{whoami,sync,rotate,create} 200 …
+  via=<WSL-IP> node=wsl-kleist [account=kamran-wsl]`, Caddy-Log 200 auf `/kephalaion/hub/v1/…`;
+  von außen `…/kephalaion/hub/` → 200 Hub-Text, `…/hub/nix` → 404 `invalid`, `GET
+  …/hub/v1/whoami` → 405 `invalid`; auf der VM `/` → Begrüßung mit Version, `POST /v1/whoami` →
+  Hinweis auf `/hub`, `vmhttp` mit `/hub` erreichbar. Befunde bestätigt: „Proxy setzt Host, Hub
+  unverändert“, „`strip_prefix /kephalaion` reicht `/hub/v1/…` durch“, `via` trägt die WSL-IP
+  (kein LB/NAT vor `9.141.8.157`) — `material/befunde/transport-entfernt--2026-09-29.md`.
+  **Bewusst nicht geprobt** (fail2ban, 10× 401 in 10 min): das 401 in Vertragsform von außen und
+  `node hub check` mit alter Adresse `…/kephalaion` — beides ist im Repo getestet
+  (`TestNodeHubCheckHTTPS`, `TestAccountRotateOldAddress`). Ablauf als Skripte:
+  `~/dev/vm/kephalaion/deploy-vm.sh`, `bind-wsl.sh`; Hinweis des Nutzers: für eine Installation
+  ohne entfernte Hubs reicht beim Schemawechsel `node init` + `node hub add … --create` statt
+  Export/Import.
 - **Task 008:** Abgleich im Hintergrund mit einem echten Client über längere Zeit; der
   Race-Detector lief über `cmd/kephalaion` und `internal/node/...` sauber. (Der Weg, `node.db`
   nach einem Sprung der Schemafassung neu anzulegen — Review-Punkt 9, `init` bricht bei
