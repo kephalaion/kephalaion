@@ -44,7 +44,9 @@ Kommandos:
   check   fragt den Hub, wer dieser Node für ihn ist (whoami): erreichbar,
           Node-Name, erlaubte Collections; merkt beim ersten Kontakt die
           hub_id — nennt der Hub eine andere als die Replica, wird sie geleert.
-          Bei https nennt es Zertifikatsfehler, eine Antwort des Proxys ohne
+          Eine Adresse ohne /hub am Ende erkennt es (404 ohne Vertragsform
+          von der Wurzel des Binarys, hinter einem Proxy mit Anmeldung 401);
+          bei https nennt es Zertifikatsfehler, eine Antwort des Proxys ohne
           Hub (502, 503) und die Host-Prüfung des Hubs (403) im Klartext
   list    zeigt alle Hubs
   show    zeigt einen Hub samt gewünschten Collections; bei https die CA
@@ -58,13 +60,16 @@ Kommandos:
 Transporte:
   local   Hub im selben Prozess; verlangt einen Hub in derselben config, keine
           Adresse; höchstens ein Eintrag je Node
-  http    nur auf diesem Rechner: http://localhost:<port> (auch 127.0.0.1,
-          [::1]), ein Hub, der mit kephalaion serve lauscht — Klartext, deshalb
-          nur Loopback
-  https   https://<host>[:<port>][/<pfad>], ein Hub auf einem anderen Rechner
-          hinter einem Reverse-Proxy, der TLS beendet (docs/installation.md).
-          Ein Pfad ist der Präfix, unter dem der Proxy den Hub anbietet (etwa
-          /kephhub); die Vorgänge liegen dann unter <adresse>/v1/…. Das
+  http    nur auf diesem Rechner: http://localhost:<port>/hub (auch
+          127.0.0.1, [::1]), ein Hub, der mit kephalaion serve lauscht —
+          Klartext, deshalb nur Loopback. Der Vertrag liegt unter /hub, die
+          Adresse endet darauf (Standard http://localhost:7434/hub)
+  https   https://<host>[:<port>]/<präfix>/hub, ein Hub auf einem anderen
+          Rechner hinter einem Reverse-Proxy, der TLS beendet
+          (docs/installation.md). Der Pfad der Adresse ist ein Präfix, die
+          Vorgänge liegen unter <adresse>/v1/…: Der Proxy nimmt seinen Anteil
+          (etwa /kephalaion) weg, der Hub bedient /hub/v1/… — die Adresse
+          endet auch hier auf /hub (etwa https://<host>/kephalaion/hub). Das
           Zertifikat prüft der Node gegen die System-Roots oder, mit
           --ca-file, gegen die dort genannte CA; scheitert die Prüfung, geht
           kein Token hinaus. Kein Client-Zertifikat
@@ -413,17 +418,31 @@ func explainHubError(h nodestore.Hub, err error) error {
 			}
 			return fmt.Errorf("Host-Prüfung des Hubs schlägt fehl (%v): ein Tunnel geht nur mit gleichem Port", status)
 		case http.StatusNotFound:
-			// Der Hub antwortet auf einen falschen Pfad mit invalid (das ist
-			// contract.ErrUnknownOperation, kein StatusError); ein 404 ohne
-			// Vertragsform kommt vom Proxy.
-			return fmt.Errorf("der Proxy kennt den Pfad nicht (%v): stimmt der Präfix in der Adresse "+
-				"(etwa https://host/kephhub), und steht die Route zum Hub im Proxy?", status)
+			// Der Hub antwortet unter /hub auf einen falschen Pfad mit invalid
+			// (das ist contract.ErrUnknownOperation, kein StatusError); ein
+			// 404 ohne Vertragsform kommt von davor — von der Wurzel des
+			// Binarys (die Adresse ohne /hub, ihr Text nennt es) oder von
+			// einem Proxy ohne Route. Am Text wird nicht unterschieden.
+			return fmt.Errorf("der Pfad ist nicht der Hub (%v): fehlt /hub am Ende der Adresse (etwa %s, hinter einem "+
+				"Proxy https://host/kephalaion/hub), oder kennt der Proxy die Route nicht?", status, exampleHubAddress(h))
 		case http.StatusUnauthorized:
 			return fmt.Errorf("eine Anmeldung des Proxys, nicht der Hub (%v): die Route zum Hub muss ohne "+
-				"forward_auth stehen — Nodes weisen sich mit dem Token beim Hub aus", status)
+				"forward_auth stehen — Nodes weisen sich mit dem Token beim Hub aus; oder fehlt /hub am Ende der "+
+				"Adresse (dann landet die Anfrage in der Anmeldung vor dem Rest)?", status)
 		}
 	}
 	return err
+}
+
+// exampleHubAddress ist die Adresse des Eintrags mit /hub am Ende, als
+// Beispiel in einer Meldung — endet sie schon darauf, der Standard eines
+// serve auf diesem Rechner.
+func exampleHubAddress(h nodestore.Hub) string {
+	addr := strings.TrimRight(h.Address, "/")
+	if addr == "" || strings.HasSuffix(addr, hubPath) {
+		return "http://localhost:7434" + hubPath
+	}
+	return addr + hubPath
 }
 
 // certNames sind die Namen und Adressen, für die ein Zertifikat gilt.

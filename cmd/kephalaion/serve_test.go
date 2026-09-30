@@ -316,6 +316,19 @@ func TestServeHubListener(t *testing.T) {
 	if resp.StatusCode != 403 {
 		t.Errorf("Begrüßung mit fremdem Host: HTTP %d, erwartet 403", resp.StatusCode)
 	}
+	// Ein Eintrag mit alter Adresse (ohne /hub): check nennt den Hinweis des
+	// Hubs und sagt, was fehlt; mit /hub ist der Hub erreichbar.
+	c := "--config=" + cfgPath
+	r := runT(t, "hub", "node", "add", "laptop", c)
+	r.want(t, 0)
+	runIn(t, tokenFrom(t, r.out), "node", "hub", "add", "alt", "--node", "laptop", "--transport", "http",
+		"--address", base, "--token-stdin", c).want(t, 0)
+	runT(t, "node", "hub", "check", "alt", c).want(t, 1, "Hub alt (http "+base+"): der Pfad ist nicht der Hub "+
+		"(HTTP 404: unbekannter Pfad /v1/whoami: der Vertrag liegt unter /hub/v1/… — fehlt /hub am Ende der Adresse "+
+		"des Hub-Eintrags?): fehlt /hub am Ende der Adresse (etwa "+base+"/hub, hinter einem Proxy "+
+		"https://host/kephalaion/hub), oder kennt der Proxy die Route nicht?")
+	runT(t, "node", "hub", "set", "alt", "--address", base+"/hub", c).want(t, 0)
+	runT(t, "node", "hub", "check", "alt", c).want(t, 0, "Hub alt: erreichbar (http "+base+"/hub)", "Node-Name:    laptop")
 	srv.stop(t)
 	if log := srv.log.String(); !strings.Contains(log, "hub GET / 200") || !strings.Contains(log, "hub POST /v1/whoami 404") ||
 		!strings.Contains(log, "hub GET /hub//v1/whoami 404") {

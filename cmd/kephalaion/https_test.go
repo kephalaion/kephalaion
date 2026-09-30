@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/config"
-	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
-	"github.com/kephalaion/kephalaion/internal/hub/replication"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/loopback"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
@@ -171,27 +169,40 @@ func TestExportImportCA(t *testing.T) {
 }
 
 // proxyHub ist „Proxy plus Hub“ für die Tests: ein Server — mit TLS, wenn
-// cert gesetzt ist — vor dem Hub-Handler hinter loopback.Guard. Ohne host
+// cert gesetzt ist — vor dem Hub-Listener von serve (newHubHandler hinter
+// loopback.Guard), der den Vertrag unter /hub bedient; die Adresse eines
+// Eintrags ist also <URL>/hub. Ohne host
 // setzt er Host wie Caddy mit header_up Host {upstream_hostport} auf die
 // Loopback-Adresse mit dem eigenen Port; mit host reicht er diesen Host
 // durch, wie ein Proxy ohne die Zeile den Host des Aufrufers (die äußere
 // Adresse), und der Hub antwortet 403.
 func proxyHub(t *testing.T, e *commEnv, cert *tls.Certificate, host string) *httptest.Server {
 	t.Helper()
-	return proxyHubAt(t, e, cert, host, "")
+	return proxyHubAt(t, e, cert, host, "", 0)
 }
 
-// proxyHubAt ist proxyHub mit einem Präfix, unter dem der Proxy den Hub
-// anbietet (wie Caddys handle_path /kephhub/*): Er nimmt ihn weg, der Hub
-// sieht /v1/…; ohne den Präfix in der Anfrage antwortet der Proxy 404.
-func proxyHubAt(t *testing.T, e *commEnv, cert *tls.Certificate, host, prefix string) *httptest.Server {
+// proxyHubAt ist proxyHub mit einem Präfix, unter dem der Proxy das Binary
+// anbietet (wie Caddys handle /kephalaion/hub/* mit uri strip_prefix
+// /kephalaion): Er nimmt den Präfix weg, der Hub-Listener sieht /hub/v1/…;
+// ohne den Präfix in der Anfrage antwortet der Proxy 404 ohne Vertragsform.
+// rest sagt, was der Proxy mit dem Rest unter dem Präfix außerhalb von /hub
+// tut: 0 reicht ihn an das Binary durch (Begrüßung an der Wurzel, /v1/… mit
+// dem Hinweis des Hubs), 401 ist eine Anmeldung vor dem Rest (forward_auth,
+// wie auf der VM), 404 die allgemeine Form, in der nur der Hub nach außen
+// geht.
+func proxyHubAt(t *testing.T, e *commEnv, cert *tls.Certificate, host, prefix string, rest int) *httptest.Server {
 	t.Helper()
-	var hub http.Handler = loopback.Guard(httpapi.NewHandler(replication.New(hubStore(t, e.cfg))))
+	var hub http.Handler = loopback.Guard(newHubHandler(hubStore(t, e.cfg)))
 	if prefix != "" {
 		inner := hub
 		hub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !strings.HasPrefix(r.URL.Path, prefix+"/") {
+			p := r.URL.Path
+			if p != prefix && !strings.HasPrefix(p, prefix+"/") {
 				http.NotFound(w, r)
+				return
+			}
+			if rest != 0 && p != prefix+hubPath && !strings.HasPrefix(p, prefix+hubPath+"/") {
+				http.Error(w, http.StatusText(rest), rest)
 				return
 			}
 			http.StripPrefix(prefix, inner).ServeHTTP(w, r)
@@ -241,7 +252,9 @@ func (e *commEnv) addTLSHub(t *testing.T, alias, address, caPEM string) {
 
 // node hub check über https: mit der richtigen CA erreichbar; sonst nennt es
 // den Grund im Klartext — CA nicht vertraut, falscher Name, abgelaufen, der
-// Proxy ohne Hub dahinter (502), die Host-Prüfung des Hubs (403). Am Hub
+// Proxy ohne Hub dahinter (502), die Host-Prüfung des Hubs (403), eine
+// Adresse ohne /hub (404 ohne Vertragsform vom Hub oder vom Proxy, hinter
+// einer Anmeldung 401). Am Hub
 // kommt bei einem Zertifikatsfehler nichts an. Ohne Wiederholung: Der
 // 502-Fall kostete sonst 3,5 s Backoff, an der Meldung ändert das nichts.
 func TestNodeHubCheckHTTPS(t *testing.T) {
@@ -249,8 +262,8 @@ func TestNodeHubCheckHTTPS(t *testing.T) {
 	e := newCommEnv(t)
 	ca, other := testcert.NewCA(t, "Richtige CA"), testcert.NewCA(t, "Andere CA")
 	good := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "")
-	e.addTLSHub(t, "sicher", good.URL, ca.PEM)
-	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+good.URL+")",
+	e.addTLSHub(t, "sicher", good.URL+"/hub", ca.PEM)
+	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+good.URL+"/hub)",
 		"Node-Name:    laptop-tls", "erlaubt:      privat, team-x")
 	e.run(t, "node", "sync", "sicher").want(t, 0, "Hub sicher (hub_id", "team-x: abgeglichen")
 
@@ -268,17 +281,17 @@ func TestNodeHubCheckHTTPS(t *testing.T) {
 	}
 	// Falsche CA, und gar keine (System-Roots) gegen die Test-CA.
 	set("--ca-file", caFile(t, e.dir, "andere.pem", other.PEM))
-	check("Hub sicher (https " + good.URL + "): Zertifikat von 127.0.0.1 nicht vertraut (Aussteller CN=Richtige CA; " +
+	check("Hub sicher (https " + good.URL + "/hub): Zertifikat von 127.0.0.1 nicht vertraut (Aussteller CN=Richtige CA; " +
 		"passt die CA aus --ca-file?) — x509: certificate signed by unknown authority")
 	set("--ca-file", "")
 	check("Zertifikat von 127.0.0.1 nicht vertraut (Aussteller CN=Richtige CA; --ca-file?)")
 	// Zertifikat für einen anderen Namen.
 	wrongName := proxyHub(t, e, serverCert(ca.ServerNow(t, "hub.example.org")), "")
-	set("--address", wrongName.URL, "--ca-file", caFile(t, e.dir, "richtig.pem", ca.PEM))
+	set("--address", wrongName.URL+"/hub", "--ca-file", caFile(t, e.dir, "richtig.pem", ca.PEM))
 	check("Zertifikat gilt nicht für 127.0.0.1 (ausgestellt für hub.example.org)")
 	// Abgelaufen.
 	expired := proxyHub(t, e, serverCert(ca.ServerExpired(t, "127.0.0.1")), "")
-	set("--address", expired.URL)
+	set("--address", expired.URL+"/hub")
 	check("Zertifikat abgelaufen seit ")
 	// Proxy ohne Hub dahinter.
 	gateway := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -287,34 +300,60 @@ func TestNodeHubCheckHTTPS(t *testing.T) {
 	gateway.TLS = &tls.Config{Certificates: []tls.Certificate{ca.ServerNow(t, "127.0.0.1")}}
 	gateway.StartTLS()
 	t.Cleanup(gateway.Close)
-	set("--address", gateway.URL)
+	set("--address", gateway.URL+"/hub")
 	check("Proxy antwortet, aber der Hub dahinter nicht (HTTP 502: Bad Gateway): läuft kephalaion serve")
 	// Der Proxy setzt Host nicht, sondern reicht die äußere Adresse durch:
 	// die Host-Prüfung des Hubs.
 	noHost := proxyHub(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "9.141.8.157")
-	set("--address", noHost.URL)
+	set("--address", noHost.URL+"/hub")
 	check("Host-Prüfung des Hubs schlägt fehl (HTTP 403: Forbidden: Host \"9.141.8.157\" ist nicht dieser Rechner): " +
 		"setzt der Proxy Host auf die Loopback-Adresse des Hubs (header_up Host {upstream_hostport}, etwa localhost:7434)?")
-	// Ein Präfix in der Adresse (der Proxy bietet den Hub unter /kephhub an).
-	prefixed := proxyHubAt(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "", "/kephhub")
-	set("--address", prefixed.URL+"/kephhub/")
-	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+prefixed.URL+"/kephhub/)")
+	// Ein Präfix in der Adresse: Der Proxy bietet das Binary unter
+	// /kephalaion an und nimmt den Präfix weg, der Hub sieht /hub/v1/….
+	const hint = "der Vertrag liegt unter /hub/v1/… — fehlt /hub am Ende der Adresse des Hub-Eintrags?"
+	prefixed := proxyHubAt(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "", "/kephalaion", 0)
+	set("--address", prefixed.URL+"/kephalaion/hub/")
+	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+prefixed.URL+"/kephalaion/hub/)")
+	// Ohne den Präfix: 404 des Proxys; mit Präfix, aber ohne /hub: 404 der
+	// Wurzel des Binarys mit dem Hinweis — beides ohne Vertragsform, check
+	// sagt in beiden Fällen, was fehlt.
 	set("--address", prefixed.URL)
-	check("Hub sicher (https " + prefixed.URL + "): der Proxy kennt den Pfad nicht (HTTP 404: 404 page not found): " +
-		"stimmt der Präfix in der Adresse")
-	e.run(t, "node", "hub", "set", "sicher", "--address", prefixed.URL+"/kephhub?x=1").want(t, 1, "ohne Query")
-	// Eine Anmeldung des Proxys vor dem Hub: 401 ohne Vertragsform.
+	check("Hub sicher (https " + prefixed.URL + "): der Pfad ist nicht der Hub (HTTP 404: 404 page not found): " +
+		"fehlt /hub am Ende der Adresse (etwa " + prefixed.URL + "/hub, hinter einem Proxy https://host/kephalaion/hub), " +
+		"oder kennt der Proxy die Route nicht?")
+	set("--address", prefixed.URL+"/kephalaion")
+	check("Hub sicher (https " + prefixed.URL + "/kephalaion): der Pfad ist nicht der Hub (HTTP 404: unbekannter Pfad " +
+		"/v1/whoami: " + hint + "): fehlt /hub am Ende der Adresse (etwa " + prefixed.URL + "/kephalaion/hub, ")
+	e.run(t, "node", "hub", "set", "sicher", "--address", prefixed.URL+"/kephalaion/hub?x=1").want(t, 1, "ohne Query")
+	// Die VM: nur /kephalaion/hub/* ohne Anmeldung, der Rest hinter
+	// forward_auth — die alte Adresse ohne /hub bekommt 401 vom Proxy.
+	authed := proxyHubAt(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "", "/kephalaion", http.StatusUnauthorized)
+	set("--address", authed.URL+"/kephalaion")
+	check("Hub sicher (https " + authed.URL + "/kephalaion): eine Anmeldung des Proxys, nicht der Hub (HTTP 401: Unauthorized): " +
+		"die Route zum Hub muss ohne forward_auth stehen — Nodes weisen sich mit dem Token beim Hub aus; oder fehlt /hub " +
+		"am Ende der Adresse (dann landet die Anfrage in der Anmeldung vor dem Rest)?")
+	set("--address", authed.URL+"/kephalaion/hub")
+	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar (https "+authed.URL+"/kephalaion/hub)")
+	// Die allgemeine Form: nur der Hub geht nach außen, der Rest ist 404 des
+	// Proxys.
+	closed := proxyHubAt(t, e, serverCert(ca.ServerNow(t, "127.0.0.1")), "", "/kephalaion", http.StatusNotFound)
+	set("--address", closed.URL+"/kephalaion")
+	check("der Pfad ist nicht der Hub (HTTP 404: Not Found): fehlt /hub am Ende der Adresse (etwa " + closed.URL +
+		"/kephalaion/hub, hinter einem Proxy https://host/kephalaion/hub), oder kennt der Proxy die Route nicht?")
+	set("--address", closed.URL+"/kephalaion/hub")
+	e.run(t, "node", "hub", "check", "sicher").want(t, 0, "Hub sicher: erreichbar")
+	// Eine Anmeldung des Proxys vor allem: 401 ohne Vertragsform.
 	login := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login required", http.StatusUnauthorized)
 	}))
 	login.TLS = &tls.Config{Certificates: []tls.Certificate{ca.ServerNow(t, "127.0.0.1")}}
 	login.StartTLS()
 	t.Cleanup(login.Close)
-	set("--address", login.URL)
+	set("--address", login.URL+"/hub")
 	check("eine Anmeldung des Proxys, nicht der Hub (HTTP 401: login required): die Route zum Hub muss ohne forward_auth stehen")
 	// Über http (ein Tunnel mit anderem Port) bleibt die Meldung ohne Proxy.
 	plain := proxyHub(t, e, nil, "localhost:7434")
-	set("--transport", "http", "--address", plain.URL)
+	set("--transport", "http", "--address", plain.URL+"/hub")
 	check("Hub sicher (http http://", "Host-Prüfung des Hubs schlägt fehl (HTTP 403: Forbidden: Host \"localhost:7434\" "+
 		"nennt nicht den Port, auf dem die Anfrage ankam): ein Tunnel geht nur mit gleichem Port")
 }
@@ -336,7 +375,7 @@ func TestServeHTTPS(t *testing.T) {
 		calls.Add(1)
 		counted.ServeHTTP(w, r)
 	})
-	e.addTLSHub(t, "sicher", inner.URL, ca.PEM)
+	e.addTLSHub(t, "sicher", inner.URL+"/hub", ca.PEM)
 	e.runIn(t, "Inhalt", "hub", "doc", "put", "team-x", "a.md").want(t, 0)
 	e.run(t, "config", "set", "node", "sync_interval", "1s").want(t, 0)
 	// Nach sync_interval 0 sieht der Abgleich alle syncIdle nach, ob er

@@ -140,11 +140,13 @@ func TestInitListen(t *testing.T) {
 	// Fehlt listen in einer bestehenden config, gilt der Standard.
 	cfg3 := filepath.Join(dir, "k3.yaml")
 	db3 := filepath.Join(dir, "hub3.db")
-	runT(t, "hub", "init", "--config", cfg3, "--db", "sqlite://"+db3).want(t, 0, "listen:    127.0.0.1:7434")
+	runT(t, "hub", "init", "--config", cfg3, "--db", "sqlite://"+db3).want(t, 0, "listen:    127.0.0.1:7434",
+		"Adresse:   http://127.0.0.1:7434/hub (für Nodes dieses Rechners")
 	if err := os.WriteFile(cfg3, []byte("hub:\n  db: sqlite://"+db3+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runT(t, "status", "--config", cfg3).want(t, 0, "listen:        127.0.0.1:7434 (Standard, nicht in der config)")
+	runT(t, "status", "--config", cfg3).want(t, 0, "listen:        127.0.0.1:7434 (Standard, nicht in der config)",
+		"Adresse:       http://127.0.0.1:7434/hub (für Nodes dieses Rechners, Transport http)")
 }
 
 func TestInitTwiceFails(t *testing.T) {

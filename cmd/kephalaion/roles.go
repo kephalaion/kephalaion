@@ -18,6 +18,10 @@ import (
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
 
+// hubAddress ist die Adresse, unter der Nodes dieses Rechners den Hub eines
+// serve mit diesem listen erreichen: http, der Vertrag unter /hub.
+func hubAddress(listen string) string { return "http://" + listen + hubPath }
+
 // roleTitle ist der Name einer Rolle am Satzanfang.
 func roleTitle(r config.Role) string {
 	switch r {
@@ -348,6 +352,10 @@ func runInit(r config.Role, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "  Datenbank: %s (Schemafassung %d)\n", addr.Path, version)
 	fmt.Fprintf(stdout, "  config:    %s (Abschnitt %s:)\n", cfgPath, r)
 	fmt.Fprintf(stdout, "  listen:    %s (kephalaion serve lauscht dort)\n", *listenFlag)
+	if r == config.Hub {
+		fmt.Fprintf(stdout, "  Adresse:   %s (für Nodes dieses Rechners: node hub add --transport http)\n",
+			hubAddress(*listenFlag))
+	}
 	fmt.Fprintf(stdout, "Nächster Schritt: %s\n", nextStepAfterInit(loc))
 	return 0
 }
@@ -434,6 +442,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 			listen += " (Standard, nicht in der config)"
 		}
 		fmt.Fprintf(stdout, "  listen:        %s\n", listen)
+		if r == config.Hub {
+			fmt.Fprintf(stdout, "  Adresse:       %s (für Nodes dieses Rechners, Transport http)\n", hubAddress(cfg.Listen(r)))
+		}
 		if loc.System() && systemDBUnreadable(sec) {
 			// Ein anderer User als der Systembenutzer: kein Fehler der
 			// Installation, nur nicht von hier aus prüfbar.

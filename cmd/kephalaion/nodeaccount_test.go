@@ -367,6 +367,34 @@ func TestAccountRotateNoRetry(t *testing.T) {
 	}
 }
 
+// Ein Eintrag mit alter Adresse (ohne /hub) trifft die Wurzel des
+// Hub-Listeners: 404 ohne Vertragsform, der Hub hat nichts ausgeführt.
+// rotate scheitert eindeutig — das alte Token gilt weiter, kein „UNKLAR“ —,
+// mit dem Hinweis des Hubs im Text, genau ein Aufruf; mit /hub geht es dann
+// mit demselben Token.
+func TestAccountRotateOldAddress(t *testing.T) {
+	e := newCommEnv(t)
+	var calls atomic.Int32
+	hub := newHubHandler(hubStore(t, e.cfg))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		hub.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	e.run(t, "node", "hub", "set", "fern", "--address", srv.URL).want(t, 0)
+	r := e.runIn(t, e.tokens["bob"], "node", "account", "rotate", "fern", "bob", "--token-stdin")
+	r.want(t, 1, "rotate gescheitert, das alte Token gilt weiter: Hub "+srv.URL+" antwortet mit HTTP 404: "+
+		"unbekannter Pfad /v1/rotate: der Vertrag liegt unter /hub/v1/… — fehlt /hub am Ende der Adresse des Hub-Eintrags?")
+	if strings.Contains(r.out+r.errOut, "UNKLAR") || strings.Contains(r.out+r.errOut, "Ausgang unklar") {
+		t.Errorf("rotate meldet unklar:\n%s%s", r.out, r.errOut)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("%d Aufrufe, erwartet 1", n)
+	}
+	e.run(t, "node", "hub", "set", "fern", "--address", srv.URL+"/hub").want(t, 0)
+	e.runIn(t, e.tokens["bob"], "node", "account", "rotate", "fern", "bob", "--token-stdin").want(t, 0, "Neues Token")
+}
+
 // failAfterCommit führt rotate am echten Hub aus und meldet danach einen
 // gewöhnlichen Fehler — wie eine Datenbank, die nach dem Commit ausfällt.
 type failAfterCommit struct {
