@@ -344,6 +344,14 @@ Ausführlich: [`konzept.md`](konzept.md).
     `write` und unabhängig vom Urheber; anderswo gibt er nichts. Gesetzt mit `hub account
     grant --vendor <name>` (wiederholbar), in der Account-Zeile die Liste `rights.vendor`,
     im Export ab Format 6 (Task 016).
+  - **Verzeichnis-Scope** (`dir <pfad>/`) — Unter `<pfad>/` schreiben: anlegen, ändern,
+    umbenennen, löschen, ohne `write` und unabhängig vom Urheber; anderswo gibt er nichts.
+    Grenze ist ein ganzes Segment (`docs` deckt `docs/…`, nicht `docs2/…`). **Additiv**, anders
+    als `vendor/<name>`: Er nimmt niemandem ein Recht — wer `write` oder `supersede` hat,
+    schreibt dort weiter wie sonst. Nicht die Wurzel, nicht `vendor` und nichts darunter.
+    Gesetzt mit `hub account grant --dir <pfad>` (wiederholbar), in der Account-Zeile die
+    Liste `rights.dirs`, im Export ab Format 8. Das einzige Ziel von **dir push** außer
+    `vendor/<name>` (Task 021).
   - `replicate` — kein Scope eines Accounts, sondern das Recht eines Nodes: Inhalt und
     Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections`.
 - **node entry** (Node-Eintrag) — ein Node am Hub: Zeile in `nodes`, Name vom Admin, Token
@@ -368,10 +376,10 @@ Ausführlich: [`konzept.md`](konzept.md).
   von vorn ab.
 - **grant** / **revoke** — `kephalaion hub node grant <node> <collection>`: gibt einem Node
   `replicate` auf eine Collection; `revoke` nimmt es zurück. `kephalaion hub account grant
-  <name> <collection> [--write] [--supersede] [--vendor <name>]…` setzt die Rechte eines
-  Accounts in einer Collection vollständig (ohne `--write` wird `write` entzogen, ohne
-  `--vendor` jeder Scope); `revoke` macht seine Zeile
-  zur Löschmarke.
+  <name> <collection> [--write] [--supersede] [--vendor <name>]… [--dir <pfad>]…` setzt die
+  Rechte eines Accounts in einer Collection vollständig (ohne `--write` wird `write` entzogen,
+  ohne `--vendor` jeder Scope `vendor/<name>`, ohne `--dir` jeder **Verzeichnis-Scope**);
+  `revoke` macht seine Zeile zur Löschmarke.
 - **lock** / **unlock** — `kephalaion hub node lock <name>`: sperrt einen Node; `unlock` hebt
   die Sperre auf. `hub account lock` macht alle Zeilen eines Accounts zu Löschmarken und merkt
   seine Rechte; `unlock` legt sie wieder an.

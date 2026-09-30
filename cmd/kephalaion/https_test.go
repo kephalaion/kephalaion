@@ -103,7 +103,7 @@ func TestNodeHubCA(t *testing.T) {
 	runT(t, "node", "hub", "--help").want(t, 0, "--ca-file pfad", "System-Roots")
 }
 
-// Export im Format 7 trägt die CA je Hub-Eintrag als Block; der Import
+// Export ab Format 7 trägt die CA je Hub-Eintrag als Block; der Import
 // nimmt sie mit und prüft sie wie die CLI. Ein Export vor Format 7 darf
 // keine CA tragen und liest sich ohne.
 func TestExportImportCA(t *testing.T) {
@@ -119,7 +119,7 @@ func TestExportImportCA(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
-	for _, want := range []string{"format: 7", "        ca: \"\"\n", "        ca: |\n          -----BEGIN CERTIFICATE-----\n"} {
+	for _, want := range []string{"format: 8", "        ca: \"\"\n", "        ca: |\n          -----BEGIN CERTIFICATE-----\n"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}
@@ -144,7 +144,7 @@ func TestExportImportCA(t *testing.T) {
 		t.Fatalf("Export ohne %q:\n%s", vmAddr, data)
 	}
 	for _, c := range []struct{ name, content, want string }{
-		{"F6 mit CA", strings.Replace(data, "format: 7", "format: 6", 1), "Format 6 kennt keine CA (tables.node.hubs["},
+		{"F6 mit CA", strings.Replace(toFormat7(t, data), "format: 7", "format: 6", 1), "Format 6 kennt keine CA (tables.node.hubs["},
 		{"F6 mit CA leer", strings.Replace(toFormat6(t, data), "        hub_id: \"\"", "        ca: \"\"\n        hub_id: \"\"", 1),
 			"Format 6 kennt keine CA"},
 		{"F6 mit CA null", strings.Replace(toFormat6(t, data), "        hub_id: \"\"", "        ca:\n        hub_id: \"\"", 1),
@@ -167,7 +167,7 @@ func TestExportImportCA(t *testing.T) {
 	}
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "3 Hubs")
 	if h, _ := nodeStore(t, cfgB).Hub(context.Background(), "vm"); h.CA != ca.PEM {
-		t.Errorf("nach Format 7: CA %q", h.CA)
+		t.Errorf("nach Format 8: CA %q", h.CA)
 	}
 }
 

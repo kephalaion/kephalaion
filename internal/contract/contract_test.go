@@ -327,3 +327,139 @@ func TestCodes(t *testing.T) {
 		t.Errorf("errors.Is: %v", err)
 	}
 }
+
+// Der Verzeichnis-Scope (Task 021): unter <pfad>/ schreiben ohne write und
+// unabhängig vom Urheber, Grenze ein ganzes Segment, additiv zu write und
+// supersede; vendor/ bleibt, wie es ist. In der Zeile als dirs, sortiert und
+// ohne Doppel, nur wenn es welche gibt; in String als „dir <pfad>/“.
+func TestDirScope(t *testing.T) {
+	dirs := Rights{Dirs: []string{"docs"}}
+	nested := Rights{Dirs: []string{"a/b"}}
+	writer := Rights{Write: true, Dirs: []string{"docs"}}
+	for _, c := range []struct {
+		what string
+		r    Rights
+		name string
+		own  bool
+		want Denial
+	}{
+		{"Scope, darunter, fremd", dirs, "docs/x.md", false, 0},
+		{"Scope, darunter, eigen", dirs, "docs/x.md", true, 0},
+		{"Scope, tief darunter, fremd", dirs, "docs/a/b/c.md", false, 0},
+		{"Scope, das Verzeichnis selbst als Dokument", dirs, "docs", true, DenyWrite},
+		{"Scope, daneben (docs2)", dirs, "docs2/x.md", true, DenyWrite},
+		{"Scope, daneben fremd", dirs, "docs2/x.md", false, DenySupersede},
+		{"Scope, darüber (Wurzel)", dirs, "x.md", true, DenyWrite},
+		{"Scope, anderes Verzeichnis", dirs, "notes/x.md", false, DenySupersede},
+		{"Scope, gleicher Name tiefer", dirs, "a/docs/x.md", true, DenyWrite},
+		{"geschachtelt, darunter", nested, "a/b/x.md", false, 0},
+		{"geschachtelt, darüber", nested, "a/x.md", true, DenyWrite},
+		{"geschachtelt, daneben", nested, "a/bc/x.md", true, DenyWrite},
+		{"Scope, unter vendor/<name>/", dirs, "vendor/k/x.md", true, DenyVendor},
+		{"Scope, direkt in vendor/", dirs, "vendor/x.md", true, DenyReserved},
+		{"write und Scope, fremd darunter", writer, "docs/x.md", false, 0},
+		{"write und Scope, eigen daneben", writer, "notes/x.md", true, 0},
+		{"write und Scope, fremd daneben", writer, "notes/x.md", false, DenySupersede},
+	} {
+		d := c.r.MayWrite(c.name, c.own)
+		switch {
+		case c.want == 0 && d != nil:
+			t.Errorf("%s: %v, erwartet erlaubt", c.what, d)
+		case c.want != 0 && d == nil:
+			t.Errorf("%s: erlaubt, erwartet %d", c.what, c.want)
+		case c.want != 0 && d.Kind != c.want:
+			t.Errorf("%s: %v (%d), erwartet %d", c.what, d, d.Kind, c.want)
+		}
+	}
+	if d := dirs.MayWrite("docs2/x.md", false); d.Error() != "supersede fehlt" {
+		t.Errorf("Grund außerhalb des Scopes: %v", d)
+	}
+	for _, c := range []struct {
+		r    Rights
+		dir  string
+		want bool
+	}{
+		{dirs, "", false}, {dirs, "docs", true}, {dirs, "docs/", true}, {dirs, "docs/sub", true}, {dirs, "docs2", false},
+		{dirs, "notes", false}, {nested, "a", false}, {nested, "a/b", true}, {nested, "a/b/c", true},
+	} {
+		if got := c.r.WritableUnder(c.dir); got != c.want {
+			t.Errorf("%+v WritableUnder(%q) = %v", c.r, c.dir, got)
+		}
+	}
+	if !dirs.Writable("docs/x.md") || dirs.Writable("docs2/x.md") || dirs.Writable("docs") {
+		t.Error("Writable mit Verzeichnis-Scope")
+	}
+	if d, ok := (Rights{Dirs: []string{"a", "a/b"}}).DirScopeOf("a/b/c.md"); !ok || d != "a" {
+		t.Errorf("DirScopeOf: %q, %v", d, ok)
+	}
+
+	// Form: geprüft, sortiert, ohne Doppel; leer wird nil.
+	n, err := NormalizeRights(Rights{Write: true, Dirs: []string{"z", "docs/sub", "docs", "z"}})
+	if err != nil || !reflect.DeepEqual(n, Rights{Write: true, Dirs: []string{"docs", "docs/sub", "z"}}) {
+		t.Errorf("NormalizeRights = %+v, %v", n, err)
+	}
+	if n, err := NormalizeRights(Rights{Dirs: []string{}}); err != nil || n.Dirs != nil {
+		t.Errorf("leer normalisiert = %+v, %v", n, err)
+	}
+	for _, c := range []struct{ dir, want string }{
+		{"", "Verzeichnis-Scope: Verzeichnis fehlt"},
+		{"vendor", "unter vendor/ gilt allein der Scope vendor/<name>"},
+		{"vendor/x", "unter vendor/ gilt allein"},
+		{"vendor/x/y", "unter vendor/ gilt allein"},
+		{"..", "'.' und '..'"},
+		{"a/../b", "'.' und '..'"},
+		{"docs/", "endet mit '/'"},
+		{"/docs", "beginnt oder endet mit '/'"},
+		{"a//b", "leeres Segment"},
+		{"SYSTEM:x", "dem Hub vorbehalten"},
+	} {
+		if _, err := NormalizeRights(Rights{Dirs: []string{"ok", c.dir}}); err == nil || !strings.Contains(err.Error(), c.want) ||
+			!strings.Contains(err.Error(), "Verzeichnis-Scope") {
+			t.Errorf("Verzeichnis-Scope %q: %v, erwartet %q", c.dir, err, c.want)
+		}
+	}
+	// Nur die Kleinschreibung vendor ist besonders.
+	if _, err := NormalizeRights(Rights{Dirs: []string{"Vendor", "vendors/x", "docs/vendor"}}); err != nil {
+		t.Errorf("Vendor, vendors/x, docs/vendor abgelehnt: %v", err)
+	}
+
+	// Anzeige und Vergleich.
+	for _, c := range []struct {
+		r    Rights
+		want string
+	}{
+		{Rights{Dirs: []string{"test-docs"}}, "read, dir test-docs/"},
+		{Rights{Write: true, Vendor: []string{"k"}, Dirs: []string{"a", "b/c"}}, "read, write, vendor/k, dir a/, dir b/c/"},
+	} {
+		if got := c.r.String(); got != c.want {
+			t.Errorf("%+v: %q, erwartet %q", c.r, got, c.want)
+		}
+	}
+	if !(Rights{Dirs: []string{"b", "a"}}).Equal(Rights{Dirs: []string{"a", "b", "a"}}) || !(Rights{}).Equal(Rights{Dirs: []string{}}) {
+		t.Error("gleiche Verzeichnis-Scopes gelten als verschieden")
+	}
+	if (Rights{Dirs: []string{"a"}}).Equal(Rights{}) || (Rights{Dirs: []string{"a"}}).Equal(Rights{Vendor: []string{"a"}}) {
+		t.Error("verschiedene Verzeichnis-Scopes gelten als gleich")
+	}
+
+	// In der Zeile: dirs nur, wenn es welche gibt, sortiert und ohne Doppel;
+	// eine Zeile ohne dirs (Hub vor Task 021) liest sich als leere Liste.
+	hash := strings.Repeat("b", 64)
+	s, err := EncodeAccountContent(AccountContent{Hash: hash, User: "kleist",
+		Rights: Rights{Vendor: []string{"k"}, Dirs: []string{"z", "a", "z"}}})
+	if err != nil || s != `{"hash":"`+hash+`","user":"kleist","rights":{"write":false,"supersede":false,"vendor":["k"],"dirs":["a","z"]}}` {
+		t.Errorf("Inhalt mit Verzeichnis-Scopes = %s, %v", s, err)
+	}
+	c, err := DecodeAccountContent(s)
+	if err != nil || !reflect.DeepEqual(c.Rights.Dirs, []string{"a", "z"}) {
+		t.Errorf("Verzeichnis-Scopes gelesen = %+v, %v", c, err)
+	}
+	c, err = DecodeAccountContent(`{"hash":"` + hash + `","user":"kleist","rights":{"write":true,"supersede":false,"dirs":[]}}`)
+	if err != nil || c.Rights.Dirs != nil {
+		t.Errorf("leere Verzeichnis-Scopes gelesen = %+v, %v", c, err)
+	}
+	c, err = DecodeAccountContent(`{"hash":"` + hash + `","user":"kleist","rights":{"write":true,"supersede":false}}`)
+	if err != nil || c.Rights.Dirs != nil || !c.Rights.Write {
+		t.Errorf("Zeile ohne dirs gelesen = %+v, %v", c, err)
+	}
+}

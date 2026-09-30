@@ -191,7 +191,7 @@ Je Account und Collection steht in `documents` eine Zeile mit dem Namen `SYSTEM:
 Clients gegen sie. `content` ist JSON in genau dieser Form:
 
 ```json
-{"hash":"<sha256 des Tokens, 64 Zeichen hex>","user":"<user>","rights":{"write":false,"supersede":false,"vendor":["k-playbook"]}}
+{"hash":"<sha256 des Tokens, 64 Zeichen hex>","user":"<user>","rights":{"write":false,"supersede":false,"vendor":["k-playbook"],"dirs":["test-docs"]}}
 ```
 
 - `hash` ist eine Kopie; maßgeblich führt der Hub den Hash in seiner Tabelle `accounts`.
@@ -213,6 +213,17 @@ Clients gegen sie. `content` ist JSON in genau dieser Form:
   `writable` am Node). Ein Node, der `vendor` nicht kennt, übergeht das Feld; seine Anzeige
   von `writable` ist dort ungenau, der Hub prüft trotzdem. Kam mit Task 016 ohne neue
   Fassung hinzu.
+- `dirs` sind die **Verzeichnis-Scopes** als Liste der Verzeichnisnamen, ohne `/` am Ende
+  (`docs`, `a/b`): jeder ein gültiger Name nach den Pfadregeln, nicht leer (die Wurzel ist kein
+  Scope), nicht `vendor` und nichts darunter; geschachtelte Einträge sind erlaubt. Sortiert
+  und ohne Doppel; das Feld steht nur, wenn es welche gibt — fehlend heißt keine (Zeilen eines
+  Hubs vor Task 021). Unter `<pfad>/` darf der Account schreiben, ohne `write` und unabhängig
+  vom Urheber; die Grenze ist ein ganzes Segment (`docs` deckt `docs/x.md`, nicht
+  `docs2/x.md` und nicht ein Dokument `docs`). Anders als `vendor` ist der Scope **additiv**:
+  Er erlaubt zusätzlich und nimmt niemandem etwas — `write` und `supersede` gelten dort wie
+  sonst. Ein Node, der `dirs` nicht kennt, übergeht das Feld; seine Anzeige von `writable` ist
+  dort ungenau, der Hub prüft trotzdem. Ein Hub, der `dirs` nicht kennt, kennt den Scope
+  nicht — deshalb zuerst den Hub aktualisieren. Kam mit Task 021 ohne neue Fassung hinzu.
 - Sperren, Entziehen und Entfernen machen die Zeile zur Löschmarke (`content` NULL). Bekommt
   der Account die Collection wieder, wird die Löschmarke mit neuer Revision wiederbelebt; ihre
   `id` bleibt.
@@ -263,7 +274,9 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
      `write` für `create` und für Eigenes — `created_by` ist der User des Accounts, gleich
      über welchen seiner Accounts es angelegt wurde —, `supersede` für Fremdes; `write` ist
      dafür nicht nötig. Unter `vendor/<name>/` zählt allein der Scope `vendor/<name>` (siehe
-     „Account-Zeilen“), genau `vendor` und direkt in `vendor/` schreibt niemand. Bei einem
+     „Account-Zeilen“), genau `vendor` und direkt in `vendor/` schreibt niemand. Unter dem
+     Verzeichnis eines Verzeichnis-Scopes (`dirs`) ist das Schreiben erlaubt, ohne `write` und
+     unabhängig vom Urheber; sonst gilt dort dasselbe wie überall. Bei einem
      Verzeichnis gilt das je Dokument darunter, bei `rename` mit altem **und** neuem Namen; ein
      einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`, die Meldung
      nennt den Grund („gehört admin, supersede fehlt“, „Scope vendor/k-playbook fehlt“).
@@ -388,7 +401,7 @@ nichts geändert.
 | `account_unauthenticated` | 403 | der Node ist angemeldet, der Account nicht: unbekannt, Token falsch oder gesperrt (`rotate`, Schreibvorgänge) |
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
 | `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr — dieselbe Meldung für alle drei (Schreibvorgänge) |
-| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes, unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand. Die Meldung nennt den Grund |
+| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand. Die Meldung nennt den Grund |
 | `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |

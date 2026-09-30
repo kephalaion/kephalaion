@@ -20,7 +20,7 @@ const hubAccountUsage = `Aufruf:
   kephalaion hub account lock   <name>
   kephalaion hub account unlock <name>
   kephalaion hub account grant  <name> <collection> [--write] [--supersede]
-                                [--vendor <name>]…
+                                [--vendor <name>]… [--dir <pfad>]…
   kephalaion hub account revoke <name> <collection>
   kephalaion hub account token  <name>
 
@@ -41,9 +41,13 @@ Kommandos:
            (Fremdes ändern, ablösen, löschen) und je --vendor <name> der Scope
            vendor/<name> (unter vendor/<name>/ schreiben — dort zählt allein
            er, ohne write und unabhängig vom Urheber; direkt in vendor/
-           schreibt über einen Node niemand); ohne --write wird write
-           entzogen, ohne --supersede ebenso supersede, ohne --vendor jeder
-           Scope
+           schreibt über einen Node niemand) und je --dir <pfad> ein
+           Verzeichnis-Scope (unter <pfad>/ schreiben, auch ohne write und
+           unabhängig vom Urheber; zusätzlich zu write und supersede, nimmt
+           niemandem etwas; Ziel für kephalaion node dir push); ohne --write
+           wird write entzogen, ohne --supersede ebenso supersede, ohne
+           --vendor jeder Scope vendor/<name>, ohne --dir jeder
+           Verzeichnis-Scope
   revoke   nimmt dem Account die Collection
   token    erzeugt ein neues Einrichtungstoken und zeigt es einmal; das alte
            gilt nicht mehr
@@ -71,6 +75,10 @@ Optionen:
   --supersede          Recht supersede (bei grant)
   --vendor name        Scope vendor/<name> (bei grant, wiederholbar); <name>
                        folgt der Namensregel für Collections
+  --dir pfad           Verzeichnis-Scope <pfad> (bei grant, wiederholbar): ein
+                       Verzeichnis der Collection, ein '/' am Ende ist
+                       erlaubt; nicht die Wurzel, nicht vendor und nichts
+                       darunter
   --config pfad        Ort der config (siehe kephalaion hub init --help)
 `
 
@@ -202,10 +210,17 @@ func runHubAccount(args []string, stdout, stderr io.Writer) int {
 			c := newCommand("hub account grant", u, stdout, stderr, "<name>", "<collection>")
 			write := c.fs.Bool("write", false, "")
 			supersede := c.fs.Bool("supersede", false, "")
-			var vendor stringList
+			var vendor, dirs stringList
 			c.fs.Var(&vendor, "vendor", "")
+			c.fs.Var(&dirs, "dir", "")
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
-				rights, err := contract.NormalizeRights(contract.Rights{Write: *write, Supersede: *supersede, Vendor: vendor})
+				// Ein '/' am Ende ist erlaubt, wie bei einem Verzeichnis sonst;
+				// gespeichert wird der Name ohne. "/" ist die Wurzel — leer,
+				// kein Scope.
+				for i, d := range dirs {
+					dirs[i] = strings.TrimSuffix(d, "/")
+				}
+				rights, err := contract.NormalizeRights(contract.Rights{Write: *write, Supersede: *supersede, Vendor: vendor, Dirs: dirs})
 				if err != nil {
 					return err
 				}

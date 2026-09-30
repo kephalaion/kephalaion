@@ -24,9 +24,11 @@ import (
 // je Recht die Scopes vendor/<name> (vendor, eine Liste); ein Export davor
 // darf sie nicht tragen und liest sich ohne Scopes. Format 7 bringt je
 // Hub-Eintrag des Nodes die CA (ca, PEM-Text, bei https); ein Export davor
-// darf sie nicht tragen und liest sich ohne CA.
+// darf sie nicht tragen und liest sich ohne CA. Format 8 bringt je Recht die
+// Verzeichnis-Scopes (dirs, eine Liste); ein Export davor darf sie nicht
+// tragen und liest sich ohne.
 const (
-	exportFormat    = 7
+	exportFormat    = 8
 	minExportFormat = 1
 	// accountsFormat ist die erste Fassung mit Accounts.
 	accountsFormat = 4
@@ -36,6 +38,8 @@ const (
 	vendorFormat = 6
 	// caFormat ist die erste Fassung mit der CA je Hub-Eintrag.
 	caFormat = 7
+	// dirsFormat ist die erste Fassung mit den Verzeichnis-Scopes.
+	dirsFormat = 8
 )
 
 // exportFile ist der Inhalt einer Exportdatei: die config, die settings je
@@ -79,13 +83,15 @@ type accountYAML struct {
 }
 
 // rightYAML sind die Rechte eines Accounts in einer Collection. Vendor sind
-// die Scopes vendor/<name>, ab Format 6, immer als Liste (auch leer); davor
-// darf das Feld nicht dastehen — das prüft parseExport am YAML-Knoten.
+// die Scopes vendor/<name>, ab Format 6, Dirs die Verzeichnis-Scopes, ab
+// Format 8, beide immer als Liste (auch leer); davor darf das Feld nicht
+// dastehen — das prüft parseExport am YAML-Knoten.
 type rightYAML struct {
 	Collection string   `yaml:"collection"`
 	Write      bool     `yaml:"write"`
 	Supersede  bool     `yaml:"supersede"`
 	Vendor     []string `yaml:"vendor"`
+	Dirs       []string `yaml:"dirs"`
 }
 
 type collectionYAML struct {
@@ -155,7 +161,7 @@ func hubTablesToYAML(t hubstore.Tables) *hubTablesYAML {
 			CreatedAt: a.CreatedAt, CreatedBy: a.CreatedBy, Rights: []rightYAML{}}
 		for _, r := range a.Rights {
 			y.Rights = append(y.Rights, rightYAML{Collection: r.Collection, Write: r.Write, Supersede: r.Supersede,
-				Vendor: append([]string{}, r.Vendor...)})
+				Vendor: append([]string{}, r.Vendor...), Dirs: append([]string{}, r.Dirs...)})
 		}
 		out.Accounts = append(out.Accounts, y)
 	}
@@ -166,8 +172,9 @@ func hubTablesToYAML(t hubstore.Tables) *hubTablesYAML {
 // Accounts im Export; der Import lässt sie dann, wie sie sind. Vor Format 5
 // ist der User der Name des Accounts; ab Format 5 hat parseExport geprüft,
 // dass er dasteht (leer oder ungültig prüft hubstore.CheckTables). Vor
-// Format 6 gibt es keine Scopes; ab Format 6 sind sie eine Liste, fehlend
-// leer (ihre Namen prüft hubstore.CheckTables).
+// Format 6 gibt es keine Scopes vendor/<name>, vor Format 8 keine
+// Verzeichnis-Scopes; ab dort sind sie eine Liste, fehlend leer (ihre Namen
+// prüft hubstore.CheckTables).
 func (y *hubTablesYAML) toStore(format int) hubstore.Tables {
 	t := hubstore.Tables{Collections: []hubstore.Collection{}, Nodes: []hubstore.Node{}, Grants: []hubstore.Grant{},
 		Accounts: []hubstore.Account{}, KeepAccounts: format < accountsFormat}
@@ -180,7 +187,7 @@ func (y *hubTablesYAML) toStore(format int) hubstore.Tables {
 			CreatedAt: a.CreatedAt, CreatedBy: a.CreatedBy, Rights: []hubstore.AccountRight{}}
 		for _, r := range a.Rights {
 			acc.Rights = append(acc.Rights, hubstore.AccountRight{Collection: r.Collection,
-				Rights: contract.Rights{Write: r.Write, Supersede: r.Supersede, Vendor: r.Vendor}})
+				Rights: contract.Rights{Write: r.Write, Supersede: r.Supersede, Vendor: r.Vendor, Dirs: r.Dirs}})
 		}
 		t.Accounts = append(t.Accounts, acc)
 	}
@@ -319,7 +326,10 @@ func parseExport(data []byte) (exportFile, error) {
 	if err := checkAccountUsers(&root, exp.Format); err != nil {
 		return exportFile{}, err
 	}
-	if err := checkAccountVendor(&root, exp.Format); err != nil {
+	if err := checkAccountRightsField(&root, exp.Format, "vendor", "keinen Scope vendor", vendorFormat); err != nil {
+		return exportFile{}, err
+	}
+	if err := checkAccountRightsField(&root, exp.Format, "dirs", "keine Verzeichnis-Scopes", dirsFormat); err != nil {
 		return exportFile{}, err
 	}
 	if err := checkHubCA(&root, exp.Format); err != nil {
@@ -348,12 +358,14 @@ func checkHubCA(root *yaml.Node, format int) error {
 	return nil
 }
 
-// checkAccountVendor prüft die Scopes je Recht gegen die Fassung, am
-// YAML-Knoten: Vor Format 6 darf vendor nicht dastehen, in keiner Form (auch
-// nicht null oder leer). Ab Format 6 ist es eine Liste, fehlend oder null
-// leer; die Namen prüft hubstore.CheckTables.
-func checkAccountVendor(root *yaml.Node, format int) error {
-	if format >= vendorFormat {
+// checkAccountRightsField prüft ein Feld je Recht gegen die Fassung, am
+// YAML-Knoten: Vor Format since darf es nicht dastehen, in keiner Form (auch
+// nicht null oder leer). Ab since ist es eine Liste, fehlend oder null leer;
+// die Namen prüft hubstore.CheckTables. So für vendor (ab Format 6) und dirs
+// (ab Format 8); what nennt es in der Meldung („Format 5 kennt keinen Scope
+// vendor“).
+func checkAccountRightsField(root *yaml.Node, format int, field, what string, since int) error {
+	if format >= since {
 		return nil
 	}
 	accounts := partNode(root, "tables", "hub", "accounts")
@@ -366,9 +378,9 @@ func checkAccountVendor(root *yaml.Node, format int) error {
 			continue
 		}
 		for j, r := range rights.Content {
-			if mappingValue(r, "vendor") != nil {
-				return fmt.Errorf("Format %d kennt keinen Scope vendor (tables.hub.accounts[%d].rights[%d].vendor); ab Format %d",
-					format, i, j, vendorFormat)
+			if mappingValue(r, field) != nil {
+				return fmt.Errorf("Format %d kennt %s (tables.hub.accounts[%d].rights[%d].%s); ab Format %d",
+					format, what, i, j, field, since)
 			}
 		}
 	}

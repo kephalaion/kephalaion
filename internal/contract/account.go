@@ -31,16 +31,21 @@ func AccountOfRow(name string) (account string, ok bool) {
 // write betrifft Eigenes, supersede Fremdes. Vendor sind die Scopes
 // vendor/<name>: Unter vendor/<name>/ zählt allein der Scope — write ist dort
 // weder nötig noch genügt es, und der Urheber spielt keine Rolle (siehe
-// MayWrite). Die Liste ist sortiert und ohne Doppel; leer und fehlend sind
-// dasselbe (NormalizeRights).
+// MayWrite). Dirs sind die Verzeichnis-Scopes, je ein Verzeichnisname ohne
+// '/' am Ende: Unter <pfad>/ schreibt der Account auch ohne write und
+// unabhängig vom Urheber; anders als vendor/<name> nimmt er niemandem etwas
+// (additiv). Beide Listen sind sortiert und ohne Doppel; leer und fehlend
+// sind dasselbe (NormalizeRights).
 type Rights struct {
 	Write     bool     `json:"write"`
 	Supersede bool     `json:"supersede"`
 	Vendor    []string `json:"vendor,omitempty"`
+	Dirs      []string `json:"dirs,omitempty"`
 }
 
-// String nennt die Rechte, read immer zuerst, die Scopes zuletzt: „read,
-// write, vendor/k-playbook“.
+// String nennt die Rechte, read immer zuerst, die Scopes zuletzt — erst
+// vendor/<name>, dann die Verzeichnis-Scopes als „dir <pfad>/“: „read,
+// write, vendor/k-playbook, dir docs/“.
 func (r Rights) String() string {
 	out := []string{"read"}
 	if r.Write {
@@ -52,19 +57,41 @@ func (r Rights) String() string {
 	for _, v := range r.Vendor {
 		out = append(out, VendorDir+"/"+v)
 	}
+	for _, d := range r.Dirs {
+		out = append(out, DirScopeLabel(d))
+	}
 	return strings.Join(out, ", ")
 }
 
+// DirScopeLabel nennt einen Verzeichnis-Scope so, wie String ihn zeigt: „dir
+// docs/“ — unterscheidbar von vendor/<name> und von einem Pfad.
+func DirScopeLabel(dir string) string { return "dir " + dir + "/" }
+
 // Equal sagt, ob zwei Rechte dieselben sind; die Scopes zählen als Menge.
 func (r Rights) Equal(o Rights) bool {
-	return r.Write == o.Write && r.Supersede == o.Supersede && slices.Equal(vendorSet(r.Vendor), vendorSet(o.Vendor))
+	return r.Write == o.Write && r.Supersede == o.Supersede &&
+		slices.Equal(nameSet(r.Vendor), nameSet(o.Vendor)) && slices.Equal(nameSet(r.Dirs), nameSet(o.Dirs))
 }
 
 // HasVendor sagt, ob die Rechte den Scope vendor/<name> tragen.
 func (r Rights) HasVendor(name string) bool { return slices.Contains(r.Vendor, name) }
 
-// vendorSet liefert die Scopes sortiert und ohne Doppel, nil wenn leer.
-func vendorSet(list []string) []string {
+// DirScopeOf liefert den Verzeichnis-Scope, unter dem name liegt — den
+// ersten passenden der Liste —, oder ok false. Die Grenze ist ein ganzes
+// Segment: Der Scope docs deckt docs/x.md und docs/a/b.md, nicht docs2/x.md
+// und nicht docs selbst.
+func (r Rights) DirScopeOf(name string) (dir string, ok bool) {
+	for _, d := range r.Dirs {
+		if d != "" && strings.HasPrefix(name, d+"/") {
+			return d, true
+		}
+	}
+	return "", false
+}
+
+// nameSet liefert eine Liste von Scopes sortiert und ohne Doppel, nil wenn
+// leer.
+func nameSet(list []string) []string {
 	if len(list) == 0 {
 		return nil
 	}
@@ -79,16 +106,42 @@ func CheckVendorName(name string) error {
 	return ident.CheckName("Scope "+VendorDir+"/<name>", name)
 }
 
+// CheckDirScope prüft einen Verzeichnis-Scope in der gespeicherten Form: ein
+// gültiger Verzeichnisname nach den Pfadregeln (ident.CheckDocName, also
+// ohne '/' am Ende), nicht leer — die Wurzel einer Collection gibt es nicht
+// als Scope —, nicht vendor und nicht darunter: dort gilt allein
+// vendor/<name>.
+func CheckDirScope(dir string) error {
+	const what = "Verzeichnis-Scope"
+	if dir == "" {
+		return fmt.Errorf("%s: Verzeichnis fehlt; die Wurzel einer Collection ist kein Scope", what)
+	}
+	if err := ident.CheckDocName(dir); err != nil {
+		return fmt.Errorf("%s %q: %w", what, dir, err)
+	}
+	if dir == VendorDir || strings.HasPrefix(dir, VendorDir+"/") {
+		return fmt.Errorf("%s %q: unter %s/ gilt allein der Scope %s/<name> (--vendor)", what, dir, VendorDir, VendorDir)
+	}
+	return nil
+}
+
 // NormalizeRights prüft die Rechte und bringt sie in die gespeicherte Form:
-// jeder Scope nach der Namensregel, die Liste sortiert und ohne Doppel, leer
-// wird nil. So sind gleiche Rechte auch als JSON gleich.
+// jeder Scope vendor/<name> nach der Namensregel, jeder Verzeichnis-Scope
+// nach CheckDirScope, beide Listen sortiert und ohne Doppel, leer wird nil.
+// So sind gleiche Rechte auch als JSON gleich.
 func NormalizeRights(r Rights) (Rights, error) {
 	for _, v := range r.Vendor {
 		if err := CheckVendorName(v); err != nil {
 			return Rights{}, err
 		}
 	}
-	r.Vendor = vendorSet(r.Vendor)
+	for _, d := range r.Dirs {
+		if err := CheckDirScope(d); err != nil {
+			return Rights{}, err
+		}
+	}
+	r.Vendor = nameSet(r.Vendor)
+	r.Dirs = nameSet(r.Dirs)
 	return r, nil
 }
 
@@ -164,15 +217,22 @@ func (d *WriteDenial) Error() string {
 // create, write, delete und rename über einen Node, je betroffenem Dokument
 // (bei rename mit altem und neuem Namen), und für writable am Node:
 //
+//   - genau vendor oder direkt in vendor/: niemand;
 //   - unter vendor/<name>/: allein der Scope vendor/<name>; write ist dort
 //     weder nötig noch genügt es, own spielt keine Rolle;
-//   - genau vendor oder direkt in vendor/: niemand;
+//   - unter <pfad>/ eines Verzeichnis-Scopes: erlaubt, ohne write und
+//     unabhängig vom Urheber (own spielt keine Rolle); die Grenze ist ein
+//     ganzes Segment (DirScopeOf);
 //   - sonst: write für Neues und Eigenes (own), supersede für Fremdes.
 //
-// SYSTEM:-Namen kommen hier nicht an; sie lehnt ident.CheckDocName ab. Der
-// Rückgabewert ist nil, wenn das Schreiben erlaubt ist, sonst der Grund.
+// Der Verzeichnis-Scope ist additiv: Er erlaubt zusätzlich und nimmt nichts —
+// wer write oder supersede hat, schreibt dort weiter nach der letzten Regel.
+// Wird dort doch abgelehnt (kein Scope), ist der Grund der aus der letzten
+// Regel. SYSTEM:-Namen kommen hier nicht an; sie lehnt ident.CheckDocName ab.
+// Der Rückgabewert ist nil, wenn das Schreiben erlaubt ist, sonst der Grund.
 func (r Rights) MayWrite(name string, own bool) *WriteDenial {
 	vendor, reserved := VendorOf(name)
+	_, inDir := r.DirScopeOf(name)
 	switch {
 	case reserved:
 		return &WriteDenial{Kind: DenyReserved}
@@ -181,6 +241,8 @@ func (r Rights) MayWrite(name string, own bool) *WriteDenial {
 			return nil
 		}
 		return &WriteDenial{Kind: DenyVendor, Vendor: vendor}
+	case inDir:
+		return nil
 	case own:
 		if r.Write {
 			return nil
@@ -195,13 +257,15 @@ func (r Rights) MayWrite(name string, own bool) *WriteDenial {
 
 // Writable sagt für ein Dokument, ob der Account es nach MayWrite anlegen
 // oder als Eigenes ändern dürfte — was read am Node als writable meldet:
-// unter vendor/<name>/ der Scope, direkt in vendor/ falsch, sonst write.
+// unter vendor/<name>/ der Scope, direkt in vendor/ falsch, unter einem
+// Verzeichnis-Scope wahr, sonst write.
 func (r Rights) Writable(name string) bool { return r.MayWrite(name, true) == nil }
 
 // WritableUnder sagt für ein Verzeichnis (leer: die Wurzel der Collection),
 // ob der Account darunter Dokumente anlegen dürfte — bewertet an einem
 // Namen darunter: vendor selbst ist falsch, vendor/<name> und alles darunter
-// hängt am Scope, sonst write.
+// hängt am Scope, ein Verzeichnis-Scope und alles darunter ist wahr, sonst
+// write.
 func (r Rights) WritableUnder(dir string) bool {
 	if dir != "" {
 		dir = strings.TrimSuffix(dir, "/") + "/"
@@ -226,8 +290,8 @@ var hashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func IsTokenHash(h string) bool { return hashPattern.MatchString(h) }
 
 // EncodeAccountContent liefert den Inhalt einer Account-Zeile als JSON-Text,
-// immer in derselben Form; die Scopes stehen nur, wenn es welche gibt, sortiert
-// und ohne Doppel.
+// immer in derselben Form; die Scopes (vendor, dirs) stehen nur, wenn es
+// welche gibt, sortiert und ohne Doppel.
 func EncodeAccountContent(c AccountContent) (string, error) {
 	if !IsTokenHash(c.Hash) {
 		return "", fmt.Errorf("Account-Zeile: Hash ist kein sha256 in Hex")
@@ -235,7 +299,8 @@ func EncodeAccountContent(c AccountContent) (string, error) {
 	if c.User == "" {
 		return "", fmt.Errorf("Account-Zeile: user fehlt")
 	}
-	c.Rights.Vendor = vendorSet(c.Rights.Vendor)
+	c.Rights.Vendor = nameSet(c.Rights.Vendor)
+	c.Rights.Dirs = nameSet(c.Rights.Dirs)
 	b, err := json.Marshal(c)
 	if err != nil {
 		return "", err
@@ -246,7 +311,8 @@ func EncodeAccountContent(c AccountContent) (string, error) {
 // DecodeAccountContent liest den Inhalt einer Account-Zeile und prüft den
 // Hash und dass ein User dasteht — eine Zeile ohne user (von einem Hub vor
 // Task 006) ist ein Fehler dieser Zeile. Der Fehler nennt den Inhalt nicht.
-// Ein fehlendes vendor ist eine leere Liste (ein Hub vor Task 016).
+// Ein fehlendes vendor ist eine leere Liste (ein Hub vor Task 016), ebenso
+// ein fehlendes dirs (ein Hub vor Task 021).
 func DecodeAccountContent(s string) (AccountContent, error) {
 	var c AccountContent
 	if err := json.Unmarshal([]byte(s), &c); err != nil {
@@ -258,6 +324,7 @@ func DecodeAccountContent(s string) (AccountContent, error) {
 	if c.User == "" {
 		return AccountContent{}, fmt.Errorf("Account-Zeile: user fehlt")
 	}
-	c.Rights.Vendor = vendorSet(c.Rights.Vendor)
+	c.Rights.Vendor = nameSet(c.Rights.Vendor)
+	c.Rights.Dirs = nameSet(c.Rights.Dirs)
 	return c, nil
 }

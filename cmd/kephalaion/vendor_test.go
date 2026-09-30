@@ -63,7 +63,7 @@ func TestExportImportVendor(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
-	for _, want := range []string{"format: 7", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
+	for _, want := range []string{"format: 8", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}
@@ -114,12 +114,12 @@ func TestExportImportVendor(t *testing.T) {
 			}
 		}
 	}
-	// Format 7: die Scopes kommen mit, in die Zeilen und die gemerkten
+	// Format 8: die Scopes kommen mit, in die Zeilen und die gemerkten
 	// Rechte; fehlt vendor, ist es leer.
 	runT(t, "config", "import", "--config", cfgB, exp).want(t, 0, "3 Accounts")
 	got, want := hubTables(t, cfgB).Accounts, hubTables(t, cfgA).Accounts
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Accounts nach Format 7:\n%+v\nerwartet\n%+v", got, want)
+		t.Errorf("Accounts nach Format 8:\n%+v\nerwartet\n%+v", got, want)
 	}
 	var content string
 	if err := rawHub(t, b).QueryRow(`SELECT content FROM documents WHERE name = 'SYSTEM:A:kp' AND deleted = 0`).Scan(&content); err != nil {

@@ -27,8 +27,9 @@ import (
 //     contract.Rights.MayWrite: write für Neues und Eigenes (created_by ist
 //     der User des Accounts, gleich über welchen seiner Accounts angelegt),
 //     supersede für Fremdes; unter vendor/<name>/ allein der Scope
-//     vendor/<name>, direkt in vendor/ niemand. Sonst ErrForbidden mit dem
-//     Grund.
+//     vendor/<name>, direkt in vendor/ niemand; unter einem Verzeichnis-Scope
+//     <pfad>/ auch ohne write und unabhängig vom Urheber. Sonst ErrForbidden
+//     mit dem Grund.
 //
 // delete und rename nehmen auch ein Verzeichnis — alle lebenden Dokumente
 // darunter, als Ganzes: eine Revision, das Recht je Dokument (bei rename mit
@@ -52,8 +53,9 @@ var (
 	// abgleichen, oder der Account hat keine lebende Zeile in ihr.
 	ErrNotReadable = errors.New("nicht lesbar")
 	// ErrForbidden: dem Account fehlt das Recht — write für Neues und
-	// Eigenes, supersede für Fremdes, unter vendor/<name>/ der Scope; direkt
-	// in vendor/ schreibt niemand.
+	// Eigenes, supersede für Fremdes (beides nicht nötig unter einem
+	// Verzeichnis-Scope), unter vendor/<name>/ der Scope; direkt in vendor/
+	// schreibt niemand.
 	ErrForbidden = errors.New("Recht fehlt")
 	// ErrNameTaken: ein lebendes Dokument trägt den Namen schon.
 	ErrNameTaken = errors.New("Name vergeben")
@@ -172,7 +174,7 @@ func readableRights(ctx context.Context, tx sqlitedb.Querier, auth WriteAuth, co
 // mayChange prüft das Recht, ein lebendes Dokument zu ändern, zu löschen
 // oder umzubenennen — nach contract.Rights.MayWrite, mit dem Namen des
 // Dokuments: Eigenes braucht write, Fremdes supersede, unter vendor/<name>/
-// nur der Scope.
+// nur der Scope, unter einem Verzeichnis-Scope keines von beiden.
 func (w *docTx) mayChange(cur Document, rights contract.Rights, verb string) error {
 	return w.mayWriteAs(cur.Name, cur, rights, verb)
 }
@@ -197,7 +199,8 @@ func (w *docTx) mayWriteAs(name string, cur Document, rights contract.Rights, ve
 }
 
 // mayCreate prüft das Recht, name in collection anzulegen: Neues zählt wie
-// Eigenes (write), unter vendor/<name>/ der Scope.
+// Eigenes (write), unter vendor/<name>/ der Scope, unter einem
+// Verzeichnis-Scope ohne write.
 func mayCreate(collection, name string, rights contract.Rights) error {
 	if d := rights.MayWrite(name, true); d != nil {
 		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s anlegen: %v", name, collection, d)}

@@ -75,8 +75,9 @@ type Tables struct {
 // CheckTables prüft lokale Tabellen ohne Datenbank, wie die CLI es beim
 // Anlegen tut: Namensregel, Eindeutigkeit (Nodes und Accounts gemeinsam),
 // User je Account (CheckUser), Form des Hashes, Rechte nur auf vorhandene
-// Nodes und Collections, die Scopes vendor/<name> nach der Namensregel. Was die Datenbank braucht (Dokumente in
-// wegfallenden Collections), prüft Import in der Transaktion.
+// Nodes und Collections, die Scopes vendor/<name> nach der Namensregel, die
+// Verzeichnis-Scopes nach contract.CheckDirScope. Was die Datenbank braucht
+// (Dokumente in wegfallenden Collections), prüft Import in der Transaktion.
 func CheckTables(t Tables) error {
 	colls := map[string]bool{}
 	for _, c := range t.Collections {
