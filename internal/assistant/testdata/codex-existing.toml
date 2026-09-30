@@ -1,0 +1,31 @@
+# Meine Codex-config
+model = "gpt-5"   # Modell
+
+# vor andere
+[mcp_servers.andere]
+# in andere
+command = "echo"
+args = ["x"]  # Kommentar am Ende
+env = { A = "1" }
+
+# vor kephalaion
+[ mcp_servers . "kephalaion" ]   # alter Eintrag
+# von Hand
+url = 'http://127.0.0.1:9999/mcp'
+bearer_token_env_var = "KEPH"
+startup_timeout_sec = 20
+
+[mcp_servers.kephalaion.http_headers]
+X-Keph-Account-vm = "alice"
+X-Keph-Token-vm = "im-klartext"
+
+[mcp_servers.kephalaion.tools.whoami]
+approval_mode = "approve"
+
+# vor dritte
+[mcp_servers.dritte]
+url   =   "http://example.invalid/mcp"   # seltsam formatiert
+
+[tui]
+# noch ein Kommentar
+notifications = false   # aus

@@ -1,0 +1,27 @@
+# Meine Codex-config
+model = "gpt-5"   # Modell
+approval_policy = "on-request"
+
+notes = """
+[mcp_servers.kephalaion]
+steht nur in einem Text
+"""
+matrix = [
+  ["a"],
+  ["mcp_servers.kephalaion"]
+]
+
+# vor andere
+[mcp_servers.andere]
+# in andere
+command = "echo"
+args = ["x"]  # Kommentar am Ende
+env = { A = "1" }
+
+# vor dritte
+[mcp_servers.dritte]
+url   =   "http://example.invalid/mcp"   # seltsam formatiert
+
+[tui]
+# noch ein Kommentar
+notifications = false   # aus

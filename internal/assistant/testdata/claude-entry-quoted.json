@@ -1,0 +1,1 @@
+{"type":"http","url":"http://127.0.0.1:7433/mcp","headersHelper":"'/home/anna b/bin \"k\"/kephalaion' node mcp headers --tokens-dir '/home/anna b/.config/kephalaion/tokens' --account eigen=kp --account vm=alice"}

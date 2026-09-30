@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/assistant/assistanttest"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/service"
 	"github.com/kephalaion/kephalaion/internal/upgrade"
@@ -32,6 +33,9 @@ func TestMain(m *testing.M) {
 	// Kein Test ruft systemctl oder launchctl: ohne Ersatz sieht status einen
 	// Rechner ohne systemd.
 	newServiceManager = func() *service.Manager { return noSystemd(dir) }
+	// Kein Test ruft einen echten KI-Assistenten auf: ohne Ersatz liegt keiner
+	// im PATH, und jeder Aufruf scheitert.
+	newAssistantManager = assistanttest.New(dir).Manager
 	// Kein Test fragt GitHub: serve und node whoami fragen einen
 	// nachgespielten, der v0.2.0 als neuestes Release nennt, zu fester Zeit.
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

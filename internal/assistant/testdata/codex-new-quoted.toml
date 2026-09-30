@@ -1,0 +1,3 @@
+[mcp_servers.kephalaion]
+url = "http://127.0.0.1:7433/mcp"
+http_headers_helper = "'/home/anna b/bin \"k\"/kephalaion' node mcp headers --tokens-dir '/home/anna b/.config/kephalaion/tokens' --account eigen=kp --account vm=alice"

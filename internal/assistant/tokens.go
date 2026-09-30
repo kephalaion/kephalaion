@@ -164,9 +164,9 @@ type Login struct {
 	File string
 }
 
-// Skipped ist ein Hub, der keine Anmeldung bekommt, mit dem Grund — ohne
+// SkippedHub ist ein Hub, der keine Anmeldung bekommt, mit dem Grund — ohne
 // Token.
-type Skipped struct {
+type SkippedHub struct {
 	Hub string
 	// Accounts sind die Accounts mit Token-Datei, wenn mehrere da sind und
 	// keiner gewählt ist; sonst leer.
@@ -179,7 +179,7 @@ type Skipped struct {
 // mit gewähltem Account ohne Token-Datei oder mit mehreren Accounts ohne Wahl
 // wird übergangen und genannt; ein Hub ohne Token-Datei und ohne Wahl fehlt
 // still. Gelesen werden nur die Namen, kein Token.
-func Logins(tokensDir string, choice Choice) (logins []Login, skipped []Skipped, err error) {
+func Logins(tokensDir string, choice Choice) (logins []Login, skipped []SkippedHub, err error) {
 	hubs, err := Hubs(tokensDir)
 	if err != nil {
 		return nil, nil, err
@@ -198,7 +198,7 @@ func Logins(tokensDir string, choice Choice) (logins []Login, skipped []Skipped,
 		if account := choice[hub]; account != "" {
 			file := TokenFile(tokensDir, hub, account)
 			if fi, err := os.Stat(file); err != nil || fi.IsDir() {
-				skipped = append(skipped, Skipped{Hub: hub,
+				skipped = append(skipped, SkippedHub{Hub: hub,
 					Reason: fmt.Sprintf("der gewählte Account %s hat keine Token-Datei (%s)", account, file)})
 				continue
 			}
@@ -207,19 +207,19 @@ func Logins(tokensDir string, choice Choice) (logins []Login, skipped []Skipped,
 		}
 		accounts, err := Accounts(filepath.Join(tokensDir, hub))
 		if err != nil {
-			skipped = append(skipped, Skipped{Hub: hub, Reason: fmt.Sprintf("Token-Dateien nicht lesbar: %v", err)})
+			skipped = append(skipped, SkippedHub{Hub: hub, Reason: fmt.Sprintf("Token-Dateien nicht lesbar: %v", err)})
 			continue
 		}
 		switch len(accounts) {
 		case 0:
 		case 1:
 			if err := ident.CheckPrincipalName("Account", accounts[0]); err != nil {
-				skipped = append(skipped, Skipped{Hub: hub, Reason: err.Error()})
+				skipped = append(skipped, SkippedHub{Hub: hub, Reason: err.Error()})
 				continue
 			}
 			logins = append(logins, Login{Hub: hub, Account: accounts[0], File: TokenFile(tokensDir, hub, accounts[0])})
 		default:
-			skipped = append(skipped, Skipped{Hub: hub, Accounts: accounts,
+			skipped = append(skipped, SkippedHub{Hub: hub, Accounts: accounts,
 				Reason: fmt.Sprintf("mehrere Accounts mit Token-Datei (%s), keiner gewählt", strings.Join(accounts, ", "))})
 		}
 	}
@@ -230,12 +230,12 @@ func Logins(tokensDir string, choice Choice) (logins []Login, skipped []Skipped,
 // Hub X-Keph-Account-<alias> und X-Keph-Token-<alias>. Ein Hub, dessen
 // Token-Datei sich nicht lesen lässt oder kein Token hält, fehlt und wird
 // genannt. Das Ergebnis ist die einzige Stelle mit Tokens im Klartext.
-func Headers(logins []Login) (headers map[string]string, skipped []Skipped) {
+func Headers(logins []Login) (headers map[string]string, skipped []SkippedHub) {
 	headers = map[string]string{}
 	for _, l := range logins {
 		token, err := ReadTokenFile(l.File)
 		if err != nil {
-			skipped = append(skipped, Skipped{Hub: l.Hub, Reason: err.Error()})
+			skipped = append(skipped, SkippedHub{Hub: l.Hub, Reason: err.Error()})
 			continue
 		}
 		headers[AccountHeaderPrefix+l.Hub] = l.Account

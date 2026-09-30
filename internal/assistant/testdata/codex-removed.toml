@@ -1,0 +1,19 @@
+# Meine Codex-config
+model = "gpt-5"   # Modell
+
+# vor andere
+[mcp_servers.andere]
+# in andere
+command = "echo"
+args = ["x"]  # Kommentar am Ende
+env = { A = "1" }
+
+# vor kephalaion
+
+# vor dritte
+[mcp_servers.dritte]
+url   =   "http://example.invalid/mcp"   # seltsam formatiert
+
+[tui]
+# noch ein Kommentar
+notifications = false   # aus

@@ -1,0 +1,25 @@
+# Meine Codex-config
+model = "gpt-5"   # Modell
+
+# vor andere
+[mcp_servers.andere]
+# in andere
+command = "echo"
+args = ["x"]  # Kommentar am Ende
+env = { A = "1" }
+
+# vor kephalaion
+[mcp_servers.kephalaion]
+url = "http://127.0.0.1:7433/mcp"
+http_headers_helper = "/home/anna/.local/bin/kephalaion node mcp headers --tokens-dir /home/anna/.config/kephalaion/tokens --account eigen=kp --account vm=alice"
+
+[mcp_servers.kephalaion.tools.whoami]
+approval_mode = "approve"
+
+# vor dritte
+[mcp_servers.dritte]
+url   =   "http://example.invalid/mcp"   # seltsam formatiert
+
+[tui]
+# noch ein Kommentar
+notifications = false   # aus

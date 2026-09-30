@@ -168,7 +168,7 @@ const nodeUsage = `Aufruf:
   kephalaion node sync [<alias>]
   kephalaion node doc list|get …
   kephalaion node dir push|pull …
-  kephalaion node mcp headers …
+  kephalaion node mcp add|remove|status|headers …
   kephalaion node whoami [<account>] [--hub <alias>] [--json]
 
 Kommandos:
@@ -186,8 +186,8 @@ Kommandos:
                Inhalt des Verzeichnisses (nur unter vendor/<name>/ und in
                Verzeichnissen mit Verzeichnis-Scope), pull holt ihn
   mcp          meldet den Node bei den KI-Assistenten des Users als
-               MCP-Server an; headers gibt ihnen die Header-Paare aus den
-               Token-Dateien
+               MCP-Server an (add, remove, status); headers gibt ihnen die
+               Header-Paare aus den Token-Dateien
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
 

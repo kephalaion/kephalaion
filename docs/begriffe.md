@@ -143,7 +143,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Kommandozeile für `node dir`, config und `tokens/` des Hosts nur lesbar eingebunden) oder mit
   eigenem Node, der über `ssh` mit dem Hub abgleicht. *Noch nicht gebaut*; die Einzelheiten
   entstehen im Projekt mit dem Devcontainer (`konzept.md`, „Devcontainer“).
-- **node mcp** — *im Bau (Task 022); gebaut ist `headers`.* `kephalaion node mcp
+- **node mcp** — *im Bau (Task 022); gebaut sind `headers` und `add`, `remove`, `status` für Claude Code
+  und Codex.* `kephalaion node mcp
   add|remove|status|headers`: trägt den Node bei den KI-Assistenten des Users als MCP-Server
   ein, entfernt ihn und zeigt den Stand je Assistent — auf User-Ebene, ein **entry**
   `kephalaion` für alle Hubs, möglichst über das eigene Kommando des Assistenten, das Token nie
