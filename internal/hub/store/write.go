@@ -70,10 +70,6 @@ type invalidError struct{ err error }
 func (e invalidError) Error() string   { return e.err.Error() }
 func (e invalidError) Unwrap() []error { return []error{ErrInvalid, e.err} }
 
-// dummyAccountHash wird verglichen, wenn es den Account nicht gibt: So
-// kostet ein unbekannter Name denselben Vergleich wie ein falsches Token.
-var dummyAccountHash = ident.HashToken("keph_unbekannter-account")
-
 // WriteAuth ist die Anmeldung eines Schreibvorgangs über einen Node: der
 // Account, der Hash des Tokens, das er vorgelegt hat, und der Node, der die
 // Anfrage trägt (carrier). Den Node selbst hat der Aufrufer schon angemeldet.

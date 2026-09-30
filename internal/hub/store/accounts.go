@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -203,6 +204,36 @@ func (s *sqliteStore) Account(ctx context.Context, name string) (Account, error)
 		return Account{}, err
 	}
 	return withRights(ctx, s.db, a)
+}
+
+// dummyAccountHash wird verglichen, wenn es den Account nicht gibt: So
+// kostet ein unbekannter Name denselben Vergleich wie ein falsches Token.
+var dummyAccountHash = ident.HashToken("keph_unbekannter-account")
+
+// CheckAccount ist die Anmeldung eines Accounts am Hub außerhalb einer
+// Transaktion: Name, Token und Sperre gegen accounts — dort steht der
+// maßgebliche Hash. Unbekannt, falsches Token und gesperrt ergeben ok false
+// und keinen Account; der Hash wird in jedem Fall in konstanter Zeit
+// verglichen, für einen unbekannten Namen gegen dummyAccountHash. Bei ok
+// trägt der Account seine Rechte aus den lebenden SYSTEM:A:-Zeilen. Der
+// Vertrag (whoami, rotate) und der Eingang der Weboberfläche benutzen sie;
+// die Schreibvorgänge über einen Node prüfen in ihrer Transaktion
+// (accountUser in write.go).
+func CheckAccount(ctx context.Context, st Store, name, token string) (acc Account, ok bool, err error) {
+	acc, err = st.Account(ctx, name)
+	known := err == nil
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Account{}, false, err
+	}
+	want := dummyAccountHash
+	if known {
+		want = acc.TokenHash
+	}
+	match := subtle.ConstantTimeCompare([]byte(ident.HashToken(token)), []byte(want)) == 1
+	if !known || !match || acc.Locked {
+		return Account{}, false, nil
+	}
+	return acc, true, nil
 }
 
 func (s *sqliteStore) Accounts(ctx context.Context) ([]Account, error) {

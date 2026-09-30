@@ -834,3 +834,67 @@ func TestAccountUser(t *testing.T) {
 		t.Errorf("Accounts von kleist = %+v", mine)
 	}
 }
+
+// errStore ist ein Store, dessen Account scheitert — für CheckAccount.
+type errStore struct {
+	Store
+	err error
+}
+
+func (e errStore) Account(context.Context, string) (Account, error) { return Account{}, e.err }
+
+// CheckAccount ist die eine Anmeldung eines Accounts außerhalb einer
+// Transaktion: ok nur mit dem richtigen Token und ohne Sperre, dann mit den
+// Rechten aus den lebenden Zeilen; unbekannt, falsches Token und gesperrt
+// sind nicht zu unterscheiden und liefern keinen Account.
+func TestCheckAccount(t *testing.T) {
+	ctx := context.Background()
+	s := newAccountStore(t)
+	token, err := s.AddAccount(ctx, "bob", "kleist", "Bobs Sitzung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GrantAccount(ctx, "bob", "team-x", contract.Rights{Write: true, Vendor: []string{"k-playbook"}}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := ident.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc, ok, err := CheckAccount(ctx, s, "bob", token)
+	if err != nil || !ok {
+		t.Fatalf("richtiges Token: ok %v, %v", ok, err)
+	}
+	want := []AccountRight{{Collection: "team-x", Rights: contract.Rights{Write: true, Vendor: []string{"k-playbook"}}}}
+	if acc.Name != "bob" || acc.User != "kleist" || acc.Description != "Bobs Sitzung" || !reflect.DeepEqual(acc.Rights, want) {
+		t.Errorf("Account %+v", acc)
+	}
+	denied := func(what, name, tok string) {
+		t.Helper()
+		acc, ok, err := CheckAccount(ctx, s, name, tok)
+		if err != nil || ok || !reflect.DeepEqual(acc, Account{}) {
+			t.Errorf("%s: ok %v, Account %+v, %v", what, ok, acc, err)
+		}
+	}
+	denied("falsches Token", "bob", other)
+	denied("leeres Token", "bob", "")
+	denied("unbekannter Account", "niemand", token)
+	// Das Token, dessen Hash für unbekannte Accounts verglichen wird, meldet
+	// niemanden an.
+	denied("Vergleichstoken", "niemand", "keph_unbekannter-account")
+	if err := s.SetAccountLocked(ctx, "bob", true); err != nil {
+		t.Fatal(err)
+	}
+	denied("gesperrt", "bob", token)
+	if err := s.SetAccountLocked(ctx, "bob", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := CheckAccount(ctx, s, "bob", token); err != nil || !ok {
+		t.Errorf("nach unlock: ok %v, %v", ok, err)
+	}
+	// Ein Fehler des Stores ist ein Fehler, keine Ablehnung.
+	boom := errors.New("kaputt")
+	if _, ok, err := CheckAccount(ctx, errStore{Store: s, err: boom}, "bob", token); !errors.Is(err, boom) || ok {
+		t.Errorf("Fehler des Stores: ok %v, %v", ok, err)
+	}
+}

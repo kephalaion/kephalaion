@@ -12,8 +12,8 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **serve** — `kephalaion serve`, der Dienst. Trägt die Rollen, die in der Konfiguration
   stehen: `hub:`, `node:` oder beide in einem Prozess. Keine eigene Rolle und kein eigener
   Eintrag in der config, sondern der eine Aufruf, der nicht endet: Er lauscht je Rolle auf
-  ihrem `listen` (MCP für Clients unter `/mcp`; am Hub-Listener die **greeting** an der
-  Wurzel und der Vertrag für Nodes unter **/hub**), nur auf
+  ihrem `listen` (MCP für Clients unter `/mcp`; am Hub-Listener an der Wurzel die **gui** für
+  Browser und die **greeting** für alles andere, der Vertrag für Nodes unter **/hub**), nur auf
   Loopback — Nodes anderer Rechner kommen über einen **reverse proxy** (`https`). Als Node
   gleicht er im Hintergrund ab (`sync_interval`); später hält er
   den Index warm. Alle anderen Kommandos sind kurze Aufrufe und arbeiten neben ihm direkt auf
@@ -117,13 +117,23 @@ Ausführlich: [`konzept.md`](konzept.md).
   Vertragsform mit dem Hinweis auf `/hub`; `check` gibt ihn weiter, und bei `rotate` und
   den Schreibvorgängen gilt so ein 404 als „nicht erreicht“ (nichts geschehen).
 - **greeting** (Begrüßung) — die Antwort des Hub-Listeners an seiner Wurzel (`GET /`, auch
-  `HEAD`): eine kurze Textnachricht mit Name, Rolle und Version („Kephalaion <version>, Rolle
-  hub. Der Hub antwortet unter /hub/v1/<vorgang>.“), `text/plain`, `Cache-Control: no-store`,
-  kein HTML, keine Links, nie eine Umleitung — ein Lebenszeichen für `curl` und den Browser,
-  keine GUI. Hinter einem Proxy liegt sie unter dessen Präfix (`/kephalaion/`) und gehört
-  hinter eine Anmeldung, weil sie die Version nennt; alles andere an der Wurzel ist 404
-  `text/plain` („unbekannter Pfad“), auch ein Pfad mit `//`, `.` oder `..`, den `ServeMux`
-  sonst umleitete.
+  `HEAD`), wenn `Accept` kein `text/html` nennt: eine kurze Textnachricht mit Name, Rolle und
+  Version („Kephalaion <version>, Rolle hub. Der Hub antwortet unter /hub/v1/<vorgang>.“),
+  `text/plain`, `Cache-Control: no-store`, `Vary: Accept`, kein HTML, keine Links, nie eine
+  Umleitung — ein Lebenszeichen für `curl`. Nennt `Accept` `text/html` (ein Browser), kommt an
+  derselben Stelle die **gui**. Hinter einem Proxy liegt sie unter dessen Präfix
+  (`/kephalaion/`) und gehört hinter eine Anmeldung, weil sie die Version nennt; alles andere
+  an der Wurzel ist 404 `text/plain` („unbekannter Pfad“), auch ein Pfad mit `//`, `.` oder
+  `..`, den `ServeMux` sonst umleitete.
+- **gui** (Weboberfläche) — die Seite des Hub-Listeners für Browser: an seiner Wurzel (`GET
+  /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`, der
+  Eingang `gui/api/whoami`). Sie fragt Account und **account token** ab, prüft beides am Hub
+  und zeigt, worauf der Account Zugriff hat: User, Beschreibung, Collections, Rechte und
+  Scopes `vendor/<name>`. Kein Teil des Vertrags, keine Verwaltung (die bleibt in der CLI).
+  Nur relative Pfade, nie eine Umleitung: Hinter einem Proxy liegt sie unter dessen Präfix
+  (`https://<name>/kephalaion/`) und hinter dessen Anmeldung — die ist nicht das Token, nach
+  dem die Seite fragt. `/gui` und `/gui/` selbst und alles andere darunter sind 404
+  `text/plain`. Nur am Hub-Listener; der Node-Listener (`/mcp`) hat keine.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
 
@@ -303,6 +313,13 @@ Ausführlich: [`konzept.md`](konzept.md).
   `rotate` gegen ein eigenes, danach ist es wertlos.
 - **token** — Geheimnis eines Accounts, Format `keph_<geheimnis>`. Jede Anfrage trägt
   Account-Name und Token. Gespeichert wird nur der Hash. Unabhängig vom Transport.
+- **account token** (Account-Token) — das **token** eines Accounts, wenn es von anderen zu
+  unterscheiden ist: das, was ein Client als `X-Keph-Token-<hub>` schickt und die **gui**
+  abfragt; es liegt meist in der Datei **--token-file**
+  (`~/.config/kephalaion/tokens/<hub>/<account>.token`). Nicht das Token eines Nodes (**node
+  entry**: damit meldet sich der Node selbst am Hub an, `Authorization: Bearer`) und nicht das
+  Passwort einer Anmeldung vor dem Hub (Reverse-Proxy). Das **setup token** ist das erste
+  Account-Token eines Accounts; nach dem ersten `rotate` gilt das eigene.
 - **scope** — ein Recht eines Accounts auf einer Collection, geschrieben
   `<collection>:<recht>`. Ein Account hat mehrere. Gespeichert je Collection in der
   Account-Zeile. Rechte:
@@ -390,7 +407,12 @@ Ausführlich: [`konzept.md`](konzept.md).
   `serve` höchstens einmal am Tag bei GitHub holt), je Hub-Eintrag `login` (`ok`, `invalid`, `missing`),
   Node-Name und Stand des Abgleichs (`sync`), bei `ok` Account, User und Collections; dazu
   `unknown_hubs`, die Aliase aus Headern ohne Eintrag. Nie Token, Hash, Adresse, Transport
-  oder `hub_id`.
+  oder `hub_id`. Dazu der Eingang der **gui** am Hub-Listener, `POST /gui/api/whoami` — kein
+  Vorgang des Vertrags, keine Fassung, ohne Node: Er prüft Account und **account token**
+  (`{"account", "token"}` als JSON) und nennt User, Beschreibung und alle Collections des
+  Accounts mit ihren Rechten (`write`, `supersede`, `vendor`), nicht nur die eines Nodes.
+  Unbekannter Account, falsches Token und gesperrt sind dieselbe 401; hinter einem Proxy liegt
+  er hinter dessen Anmeldung.
 - **node whoami** — `kephalaion node whoami [<account>] [--hub <alias>] [--json]`: ohne
   Account Version, je Hub Node-Name und Stand und die Accounts, die der Node aus seinen
   Replicas kennt; mit Account die Antwort des Werkzeugs `whoami` für ihn (`login: ok`, wo er

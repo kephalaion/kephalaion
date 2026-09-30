@@ -24,13 +24,10 @@ import (
 // Anfrage wird darauf begrenzt.
 const MaxPageSize = 5000
 
-// dummyHash wird verglichen, wenn es den Node nicht gibt, dummyAccountHash,
-// wenn es den Account nicht gibt: So kostet ein unbekannter Name dieselbe
-// Arbeit wie ein falsches Token.
-var (
-	dummyHash        = ident.HashToken("keph_unbekannter-node")
-	dummyAccountHash = ident.HashToken("keph_unbekannter-account")
-)
+// dummyHash wird verglichen, wenn es den Node nicht gibt: So kostet ein
+// unbekannter Name dieselbe Arbeit wie ein falsches Token. Für Accounts
+// steht dasselbe in store.CheckAccount.
+var dummyHash = ident.HashToken("keph_unbekannter-node")
 
 // Hub setzt contract.Hub über einem Hub-Store um.
 type Hub struct {
@@ -66,22 +63,12 @@ func (h *Hub) authenticate(ctx context.Context, auth contract.NodeAuth) ([]strin
 	return n.Collections, nil
 }
 
-// checkAccount prüft Name, Token und Sperre eines Accounts gegen accounts —
-// dort steht der maßgebliche Hash. Unbekannt, falsches Token und gesperrt
-// ergeben ok false; der Hash wird in jedem Fall in konstanter Zeit
-// verglichen.
+// checkAccount prüft Name, Token und Sperre eines Accounts — die gemeinsame
+// Anmeldung eines Accounts am Hub (store.CheckAccount), dieselbe wie am
+// Eingang der Weboberfläche. Unbekannt, falsches Token und gesperrt ergeben
+// ok false.
 func (h *Hub) checkAccount(ctx context.Context, a contract.AccountAuth) (acc store.Account, ok bool, err error) {
-	acc, err = h.st.Account(ctx, a.Account)
-	known := err == nil
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return store.Account{}, false, err
-	}
-	want := dummyAccountHash
-	if known {
-		want = acc.TokenHash
-	}
-	match := subtle.ConstantTimeCompare([]byte(ident.HashToken(a.Token)), []byte(want)) == 1
-	return acc, known && match && !acc.Locked, nil
+	return store.CheckAccount(ctx, h.st, a.Account, a.Token)
 }
 
 // checkVersion prüft die Fassung des Nodes, vor allem anderen.
