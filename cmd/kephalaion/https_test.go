@@ -530,8 +530,8 @@ func TestGUIBehindPrefix(t *testing.T) {
 	}
 	resp, body := do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["bob"]), nil)
 	if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"account":"bob","user":"kleist","description":"","collections":[`+
-		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[]}},`+
-		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[]}}]}` {
+		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}},`+
+		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[],"dirs":[]}}]}` {
 		t.Errorf("whoami der Seite unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
 	}
 	resp, body = do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["alice"]), nil)

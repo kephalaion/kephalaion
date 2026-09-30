@@ -21,8 +21,9 @@ import (
 )
 
 // fixture ist ein Hub-Store mit den Collections test, vorlagen und leer und
-// den Accounts bob (User kleist: in test write und der Scope
-// vendor/k-playbook, in vorlagen nur read) und carol ohne Collection.
+// den Accounts bob (User kleist: in test write, der Scope vendor/k-playbook
+// und die Verzeichnis-Scopes docs und a/b, in vorlagen nur read) und carol
+// ohne Collection.
 type fixture struct {
 	st     store.Store
 	tokens map[string]string
@@ -56,7 +57,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	// Absichtlich nicht nach Name gewährt: Die Antwort sortiert.
 	f.grant(t, "bob", "vorlagen", contract.Rights{})
-	f.grant(t, "bob", "test", contract.Rights{Write: true, Vendor: []string{"k-playbook"}})
+	f.grant(t, "bob", "test", contract.Rights{Write: true, Vendor: []string{"k-playbook"}, Dirs: []string{"docs", "a/b"}})
 	f.srv = reqlog.New(f.log).Middleware("hub", NewWhoami(st))
 	return f
 }
@@ -125,9 +126,9 @@ func wantError(t *testing.T, what string, resp *http.Response, body string, stat
 }
 
 // Ein Account mit zwei Collections: 200 mit User, Beschreibung, den
-// Collections nach Name samt Beschreibung und Rechten; vendor ist immer
-// eine Liste. Nach RevokeAccount fehlt die Collection, ohne Collection ist
-// die Liste leer, nicht null.
+// Collections nach Name samt Beschreibung und Rechten; vendor und dirs sind
+// immer eine Liste. Nach RevokeAccount fehlt die Collection, ohne Collection
+// ist die Liste leer, nicht null.
 func TestWhoami(t *testing.T) {
 	f := newFixture(t)
 	resp, body := f.post(t, "bob", f.tokens["bob"])
@@ -140,16 +141,17 @@ func TestWhoami(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := WhoamiResponse{Account: "bob", User: "kleist", Description: "Bobs Sitzung", Collections: []WhoamiCollection{
-		{Name: "test", Description: "Zum Probieren", Rights: WhoamiRights{Write: true, Vendor: []string{"k-playbook"}}},
-		{Name: "vorlagen", Description: "Vorlagen <b>für alle</b>", Rights: WhoamiRights{Vendor: []string{}}},
+		{Name: "test", Description: "Zum Probieren", Rights: WhoamiRights{Write: true, Vendor: []string{"k-playbook"},
+			Dirs: []string{"a/b", "docs"}}},
+		{Name: "vorlagen", Description: "Vorlagen <b>für alle</b>", Rights: WhoamiRights{Vendor: []string{}, Dirs: []string{}}},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Antwort\n%+v\nerwartet\n%+v", got, want)
 	}
-	// Die Form auf der Leitung: vendor als Liste, auch leer; read steht
-	// nicht eigens da, und weder Token noch Hash.
-	for _, w := range []string{`"rights":{"write":true,"supersede":false,"vendor":["k-playbook"]}`,
-		`"rights":{"write":false,"supersede":false,"vendor":[]}`} {
+	// Die Form auf der Leitung: vendor und dirs als Liste, auch leer; read
+	// steht nicht eigens da, und weder Token noch Hash.
+	for _, w := range []string{`"rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":["a/b","docs"]}`,
+		`"rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}`} {
 		if !strings.Contains(body, w) {
 			t.Errorf("Body ohne %s:\n%s", w, body)
 		}

@@ -68,7 +68,8 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report,
 		Name: "whoami",
 		Description: "Zeigt die Version des Nodes, ob es eine neuere gibt und wie das Upgrade geht (update), und je " +
 			"Hub die Anmeldung (ok, invalid, missing) und den Stand des Abgleichs; bei ok Account, User und " +
-			"Collections mit Adresse und Rechten (read, write, supersede). Ohne Argumente.",
+			"Collections mit Adresse und Rechten (read, write, supersede, Scopes vendor/<name> und dir <pfad>/; " +
+			"die Verzeichnis-Scopes auch als Liste dirs). Ohne Argumente.",
 	}, n.whoami)
 	mcp.AddTool(srv, &mcp.Tool{Name: "list", Description: listDescription}, n.list)
 	mcp.AddTool(srv, &mcp.Tool{Name: "read", Description: readDescription}, n.read)

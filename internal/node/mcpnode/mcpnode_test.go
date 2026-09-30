@@ -209,8 +209,8 @@ func TestWhoami(t *testing.T) {
 	out, raw := e.whoami(t, pair("keph", "bob", bob))
 	want := HubInfo{Hub: "keph", Login: LoginOK, Node: "laptop", Sync: hubOf(t, out, "keph").Sync, Account: "bob",
 		User: "kleist", Collections: []CollectionRights{
-			{Collection: "privat", Address: "keph:privat", Rights: []string{"read"}},
-			{Collection: "team-x", Address: "keph:team-x", Rights: []string{"read", "write"}},
+			{Collection: "privat", Address: "keph:privat", Rights: []string{"read"}, Dirs: []string{}},
+			{Collection: "team-x", Address: "keph:team-x", Rights: []string{"read", "write"}, Dirs: []string{}},
 		}}
 	if got := hubOf(t, out, "keph"); !reflect.DeepEqual(got, want) {
 		t.Errorf("bob: %+v", got)

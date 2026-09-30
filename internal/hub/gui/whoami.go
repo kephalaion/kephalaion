@@ -68,11 +68,13 @@ type WhoamiCollection struct {
 }
 
 // WhoamiRights sind die Rechte über read hinaus, wie contract.Rights — nur
-// ist vendor hier immer eine Liste, auch leer.
+// sind vendor und dirs (die Verzeichnis-Scopes) hier immer eine Liste, auch
+// leer.
 type WhoamiRights struct {
 	Write     bool     `json:"write"`
 	Supersede bool     `json:"supersede"`
 	Vendor    []string `json:"vendor"`
+	Dirs      []string `json:"dirs"`
 }
 
 // errorBody ist der Body einer Fehlerantwort, in der Form des Vertrags.
@@ -200,7 +202,7 @@ func whoamiResponse(acc store.Account, colls []store.Collection) WhoamiResponse 
 			Name:        r.Collection,
 			Description: desc[r.Collection],
 			Rights: WhoamiRights{Write: r.Write, Supersede: r.Supersede,
-				Vendor: append([]string{}, r.Vendor...)},
+				Vendor: append([]string{}, r.Vendor...), Dirs: append([]string{}, r.Dirs...)},
 		})
 	}
 	return out

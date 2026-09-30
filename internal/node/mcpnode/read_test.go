@@ -3,6 +3,7 @@ package mcpnode
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -195,5 +196,98 @@ func TestReadWritableVendor(t *testing.T) {
 		if out.Writable == nil || *out.Writable {
 			t.Errorf("otto liest %q: %+v", name, out)
 		}
+	}
+}
+
+// writable mit einem Verzeichnis-Scope (Task 021): unter <pfad>/ wahr, ohne
+// write und auch für Fremdes; daneben (docs2), darüber (Wurzel, Elternteil)
+// und anderswo nach der allgemeinen Regel. Der Scope ist additiv: write gilt
+// daneben weiter. whoami nennt ihn in Text und Struktur (dirs).
+func TestReadWritableDirs(t *testing.T) {
+	e := newDocEnv(t)
+	hub := e.hubs["keph"]
+	e.tokens["keph/dirs"], e.tokens["keph/beide"] = token(t), token(t)
+	hub.grant("dirs", "wissen", e.tokens["keph/dirs"], contract.Rights{Dirs: []string{"docs", "tief/er"}})
+	hub.grant("beide", "wissen", e.tokens["keph/beide"], contract.Rights{Write: true, Dirs: []string{"docs"}})
+	ids := map[string]string{}
+	for _, name := range []string{"a.md", "docs/b.md", "docs/sub/c.md", "docs2/d.md", "tief/e.md", "tief/er/f.md"} {
+		ids[name] = hub.put("wissen", name, "x")
+	}
+	e.sync(t)
+	// anna: nur write; dirs: nur die Verzeichnis-Scopes; beide: write und
+	// docs.
+	accounts := map[string]http.Header{"anna": pairOf(e, "keph", "anna"), "dirs": pairOf(e, "keph", "dirs"),
+		"beide": pairOf(e, "keph", "beide")}
+	cases := []struct {
+		name             string
+		kind             string
+		anna, dirs, both bool
+	}{
+		{"a.md", KindDocument, true, false, true},
+		{"docs/b.md", KindDocument, true, true, true},
+		{"docs/sub/c.md", KindDocument, true, true, true},
+		{"docs2/d.md", KindDocument, true, false, true},
+		{"tief/e.md", KindDocument, true, false, true},
+		{"tief/er/f.md", KindDocument, true, true, true},
+		{"", KindDirectory, true, false, true},
+		{"docs", KindDirectory, true, true, true},
+		{"docs/", KindDirectory, true, true, true},
+		{"docs/sub", KindDirectory, true, true, true},
+		{"docs2", KindDirectory, true, false, true},
+		{"tief", KindDirectory, true, false, true},
+		{"tief/er", KindDirectory, true, true, true},
+	}
+	for _, c := range cases {
+		want := map[string]bool{"anna": c.anna, "dirs": c.dirs, "beide": c.both}
+		for account, h := range accounts {
+			out, _, errText := e.read(t, h, ReadInput{Collection: "keph:wissen", Name: c.name})
+			if errText != "" || out.Kind != c.kind || out.Writable == nil || *out.Writable != want[account] {
+				t.Errorf("%s liest %q: %+v, %s; erwartet %s writable %v", account, c.name, out, errText, c.kind, want[account])
+			}
+			if c.kind != KindDocument {
+				continue
+			}
+			out, _, errText = e.read(t, h, ReadInput{Collection: "keph:", ID: ids[c.name]})
+			if errText != "" || out.Kind != c.kind || out.Writable == nil || *out.Writable != want[account] {
+				t.Errorf("%s liest id von %q: %+v, %s; erwartet writable %v", account, c.name, out, errText, want[account])
+			}
+		}
+	}
+
+	// whoami: im Text als „dir <pfad>/“, in der Struktur als dirs — immer
+	// eine Liste, auch leer.
+	var who WhoamiOutput
+	res, errText := e.call(t, pairOf(e, "keph", "dirs"), "whoami", struct{}{}, &who)
+	if errText != "" {
+		t.Fatal(errText)
+	}
+	var text string
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			text += tc.Text
+		}
+	}
+	if !strings.Contains(text, "angemeldet als dirs (User dirs): keph:wissen (read, dir docs/, dir tief/er/)") {
+		t.Errorf("Text:\n%s", text)
+	}
+	var got *HubInfo
+	for i := range who.Hubs {
+		if who.Hubs[i].Hub == "keph" {
+			got = &who.Hubs[i]
+		}
+	}
+	want := []CollectionRights{{Collection: "wissen", Address: "keph:wissen", Rights: []string{"read", "dir docs/", "dir tief/er/"},
+		Dirs: []string{"docs", "tief/er"}}}
+	if got == nil || !reflect.DeepEqual(got.Collections, want) {
+		t.Errorf("whoami: %+v", got)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"dirs":["docs","tief/er"]`) {
+		t.Errorf("Struktur: %s", raw)
+	}
+	res, _ = e.call(t, pairOf(e, "keph", "anna"), "whoami", struct{}{}, nil)
+	raw, _ = json.Marshal(res.StructuredContent)
+	if !strings.Contains(string(raw), `"collection":"wissen","dirs":[],"rights":["read","write"]`) {
+		t.Errorf("Struktur ohne Verzeichnis-Scopes: %s", raw)
 	}
 }

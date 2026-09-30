@@ -459,7 +459,7 @@ func TestServeHubListener(t *testing.T) {
 		return resp.StatusCode, strings.TrimSpace(string(body))
 	}
 	if code, body := whoami("bob", accountToken); code != 200 || body != `{"account":"bob","user":"kleist","description":"",`+
-		`"collections":[{"name":"test","description":"Zum Probieren","rights":{"write":true,"supersede":false,"vendor":["k-playbook"]}}]}` {
+		`"collections":[{"name":"test","description":"Zum Probieren","rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":[]}}]}` {
 		t.Errorf("whoami der Seite: HTTP %d %s", code, body)
 	}
 	wrong, err := ident.NewToken()

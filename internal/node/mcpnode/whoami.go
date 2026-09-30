@@ -70,11 +70,17 @@ type SyncInfo struct {
 	LastErrorAt string `json:"last_error_at,omitempty"`
 }
 
-// CollectionRights ist eine Collection mit Adresse und Rechten.
+// CollectionRights ist eine Collection mit Adresse und Rechten. Rights sind
+// die Rechte als Text, je Eintrag einer (contract.Rights.String: „read“,
+// „write“, „vendor/k-playbook“, „dir docs/“). Dirs sind die
+// Verzeichnis-Scopes als Namen ohne '/' am Ende, immer eine Liste — die
+// strukturierte Angabe, nach der node dir push sein Ziel prüft; ein Node vor
+// Task 021 lässt das Feld weg.
 type CollectionRights struct {
 	Collection string   `json:"collection"`
 	Address    string   `json:"address"`
 	Rights     []string `json:"rights"`
+	Dirs       []string `json:"dirs"`
 }
 
 // Whoami baut die Antwort von whoami aus den Anmeldungen, samt Textteil —
@@ -133,7 +139,7 @@ func Whoami(ctx context.Context, nodes store.Store, version string, update upgra
 			for _, r := range l.Rights {
 				addr := ident.Address(l.Hub, r.Collection)
 				info.Collections = append(info.Collections, CollectionRights{Collection: r.Collection, Address: addr,
-					Rights: strings.Split(r.Rights.String(), ", ")})
+					Rights: strings.Split(r.Rights.String(), ", "), Dirs: append([]string{}, r.Dirs...)})
 				parts = append(parts, fmt.Sprintf("%s (%s)", addr, r.Rights))
 			}
 			who = fmt.Sprintf("angemeldet als %s (User %s): %s", l.Account, l.User, strings.Join(parts, ", "))

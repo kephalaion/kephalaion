@@ -149,6 +149,10 @@ func TestIndexFields(t *testing.T) {
 		`Über einen Node siehst du davon nur die Collections, die dieser Node abgleicht (<code>kephalaion node whoami</code>).`,
 		`Unter <code>vendor/&lt;name&gt;/</code> zählt allein der Scope`,
 		`Direkt in <code>vendor/</code> schreibt niemand.`,
+		`<strong>Verzeichnis-Scope</strong> (<code>dir &lt;pfad&gt;/</code>): Unter <code>&lt;pfad&gt;/</code> darf der Account anlegen, ändern, löschen und umbenennen, auch ohne <code>write</code>`,
+		`Er nimmt niemandem etwas: <code>write</code> und <code>supersede</code> gelten dort wie überall.`,
+		`<code>kephalaion node dir push</code> schreibt nur dorthin`,
+		`Scopes<span class="sub"><code>vendor/&lt;name&gt;</code>, <code>dir &lt;pfad&gt;/</code></span>`,
 	} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index.html ohne %s", want)
@@ -187,6 +191,10 @@ func TestScriptFollowsDecisions(t *testing.T) {
 		"Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.",
 		"Hub nicht erreichbar.",
 		"Fehler am Hub.",
+		// Die Scopes wie in der Kommandozeile, auch die Verzeichnis-Scopes.
+		`Array.isArray(rights.dirs) ? rights.dirs : []`,
+		`return "vendor/" + String(name);`,
+		`return "dir " + String(dir) + "/";`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js ohne %s", want)

@@ -82,7 +82,8 @@
             (<code>write</code>)</span></th>
             <th scope="col">Fremdes<span class="sub">ändern, löschen, umbenennen
             (<code>supersede</code>)</span></th>
-            <th scope="col">Scopes<span class="sub"><code>vendor/&lt;name&gt;</code></span></th>
+            <th scope="col">Scopes<span class="sub"><code>vendor/&lt;name&gt;</code>,
+            <code>dir &lt;pfad&gt;/</code></span></th>
           </tr>
         </thead>
         <tbody id="result-rows"></tbody>
@@ -101,6 +102,12 @@
         Scope <code>vendor/&lt;name&gt;</code>. <code>write</code> und <code>supersede</code>
         gelten dort nicht, und wer das Dokument angelegt hat, spielt keine Rolle.</li>
         <li>Direkt in <code>vendor/</code> schreibt niemand.</li>
+        <li><strong>Verzeichnis-Scope</strong> (<code>dir &lt;pfad&gt;/</code>): Unter
+        <code>&lt;pfad&gt;/</code> darf der Account anlegen, ändern, löschen und umbenennen, auch
+        ohne <code>write</code> und gleich, wer das Dokument angelegt hat. Er nimmt niemandem
+        etwas: <code>write</code> und <code>supersede</code> gelten dort wie überall.
+        <code>kephalaion node dir push</code> schreibt nur dorthin und unter
+        <code>vendor/&lt;name&gt;/</code> — und ersetzt dort den ganzen Inhalt.</li>
       </ul>
       <p class="hint">Über einen Node siehst du davon nur die Collections, die dieser Node
       abgleicht (<code>kephalaion node whoami</code>).</p>

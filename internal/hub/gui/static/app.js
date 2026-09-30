@@ -182,6 +182,7 @@
   function collectionRow(c) {
     var rights = c.rights && typeof c.rights === "object" ? c.rights : {};
     var vendor = Array.isArray(rights.vendor) ? rights.vendor : [];
+    var dirs = Array.isArray(rights.dirs) ? rights.dirs : [];
     var tr = document.createElement("tr");
 
     var th = document.createElement("th");
@@ -196,15 +197,22 @@
     tr.appendChild(yesNo("Schreiben (write)", rights.write === true));
     tr.appendChild(yesNo("Fremdes (supersede)", rights.supersede === true));
 
+    // Die Scopes wie in der Kommandozeile: vendor/<name> und die
+    // Verzeichnis-Scopes als „dir <pfad>/“.
+    var labels = vendor.map(function (name) {
+      return "vendor/" + String(name);
+    }).concat(dirs.map(function (dir) {
+      return "dir " + String(dir) + "/";
+    }));
     var scopes = cell("Scopes");
-    if (vendor.length === 0) {
+    if (labels.length === 0) {
       scopes.appendChild(text("span", "—", "no"));
     } else {
       var list = document.createElement("ul");
       list.className = "scopes";
-      vendor.forEach(function (name) {
+      labels.forEach(function (label) {
         var li = document.createElement("li");
-        li.appendChild(text("code", "vendor/" + String(name)));
+        li.appendChild(text("code", label));
         list.appendChild(li);
       });
       scopes.appendChild(list);

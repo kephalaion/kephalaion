@@ -37,9 +37,11 @@ type ReadOutput struct {
 	// Writable sagt, ob der Account das Dokument nach der Regel des Hubs
 	// anlegen oder als Eigenes ändern dürfte (contract.Rights.Writable):
 	// unter vendor/<name>/ der Scope vendor/<name>, direkt in vendor/ nie,
-	// sonst write. Bei einem Verzeichnis und der Wurzel der Collection, ob
-	// darunter etwas angelegt werden dürfte (WritableUnder). Ob ein fremdes
-	// Dokument supersede braucht, sagt es nicht.
+	// unter einem Verzeichnis-Scope immer, sonst write. Bei einem
+	// Verzeichnis und der Wurzel der Collection, ob darunter etwas angelegt
+	// werden dürfte (WritableUnder). Ob ein fremdes Dokument supersede
+	// braucht, sagt es nicht — unter einem Verzeichnis-Scope braucht es ihn
+	// nicht.
 	Writable *bool `json:"writable,omitempty"`
 	// Frontmatter ist das Frontmatter als JSON-Objekt, FrontmatterError der
 	// Grund, wenn es sich nicht lesen ließ — nur mit dem Parameter
@@ -50,7 +52,8 @@ type ReadOutput struct {
 
 const readDescription = "Liest ein Dokument aus der Replica, per collection und name oder per id; der Inhalt ist " +
 	"der Text des Ergebnisses. kind: document, directory oder none. Mit content: false nur Name, id, Revision, " +
-	"angelegt, geändert, Größe und writable (write in der Collection; unter vendor/<name>/ der Scope vendor/<name>). " +
+	"angelegt, geändert, Größe und writable (write in der Collection; unter vendor/<name>/ der Scope vendor/<name>; " +
+	"unter einem Verzeichnis-Scope dir <pfad>/ immer). " +
 	"Mit frontmatter das Frontmatter (.md, bei einem Verzeichnis das seiner README.md) als JSON-Objekt; der Inhalt " +
 	"bleibt der volle Text."
 
