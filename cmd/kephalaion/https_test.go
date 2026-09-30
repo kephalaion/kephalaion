@@ -92,7 +92,7 @@ func TestNodeHubCA(t *testing.T) {
 	runT(t, "node", "hub", "set", "vm", "--ca-file", "", c).want(t, 0)
 	runT(t, "node", "hub", "show", "vm", c).want(t, 0, "  CA:           – (System-Roots)")
 	runT(t, "node", "hub", "set", "vm", "--ca-file", file, c).want(t, 0)
-	runT(t, "node", "hub", "set", "vm", "--transport", "http", "--address", "http://localhost:7434", c).want(t, 0)
+	runT(t, "node", "hub", "set", "vm", "--transport", "http", "--address", "http://localhost:7434/hub", c).want(t, 0)
 	if h, _ := nodeStore(t, cfg).Hub(context.Background(), "vm"); h.CA != "" || h.Transport != "http" {
 		t.Errorf("nach Wechsel auf http: %+v", h)
 	}
@@ -148,7 +148,7 @@ func TestExportImportCA(t *testing.T) {
 			"Format 6 kennt keine CA"},
 		{"F6 mit CA null", strings.Replace(toFormat6(t, data), "        hub_id: \"\"", "        ca:\n        hub_id: \"\"", 1),
 			"Format 6 kennt keine CA"},
-		{"CA bei http", strings.Replace(strings.Replace(data, vmAddr, "address: http://localhost:7434\n", 1),
+		{"CA bei http", strings.Replace(strings.Replace(data, vmAddr, "address: http://localhost:7434/hub\n", 1),
 			"transport: https", "transport: http", 1), "--ca-file gibt es nur bei Transport https"},
 		{"kaputte CA", strings.Replace(data, "-----BEGIN CERTIFICATE-----", "-----BEGIN ZERTIFIKAT-----", 1), "kein Zertifikat gefunden"},
 	} {

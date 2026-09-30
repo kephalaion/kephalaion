@@ -361,8 +361,10 @@ der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier
 - **Abgelehnt** — ein Fehler des Vertrags (ein Code unten), endgültig. Der Hub hat nichts
   geändert.
 - **Nicht erreicht** — die Anfrage hat den Hub nachweislich nicht erreicht: Die Verbindung kam
-  nicht zustande, oder er antwortete mit einer Weiterleitung. Nichts ist geschehen. Ebenso
-  **unbekannter Vorgang**: Der Hub kennt ihn nicht (siehe „Fassung“) und hat nichts ausgeführt.
+  nicht zustande, er antwortete mit einer Weiterleitung, oder die Antwort war ein 404 ohne
+  Vertragsform (ein Proxy ohne Route, die Wurzel des Binarys — der Hub antwortet 404 nur in
+  Vertragsform, also hat er nichts ausgeführt). Nichts ist geschehen. Ebenso **unbekannter
+  Vorgang**: Der Hub kennt ihn nicht (siehe „Fassung“) und hat nichts ausgeführt.
 - **Unklar** — jeder andere Fehler nach dem Abschicken: Zeitüberschreitung, abgebrochene
   Verbindung, unlesbare Antwort, 5xx; über `local` jeder Fehler, der kein Fehler des Vertrags
   ist, auch einer der Datenbank nach dem Commit. Der Hub kann ausgeführt haben. Nach `rotate`
@@ -404,12 +406,16 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 
 - **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/sync`,
   `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename` — relativ zur Adresse des
-  Hub-Eintrags: Trägt sie einen Pfad (`https://host/kephhub`), ist er ein Präfix, der Client
-  schickt `…/kephhub/v1/whoami`, und ein Proxy davor nimmt ihn weg (Caddy: `handle_path`);
-  der Hub selbst sieht immer `/v1/…`. Die Fassung im Pfad ist die Fassung
-  des Vertrags. Eine fremde Fassung (`/v2/…`, auch `/v0/…`) beantwortet der Hub mit 404 und
-  `unsupported_version`, vor der Anmeldung; ein unbekannter Vorgang ist 404 mit `invalid`, noch
-  vor dem Lesen des Bodys; eine andere Methode als POST 405.
+  Hub-Eintrags: Ihr Pfad ist ein Präfix, der Client schickt `<adresse>/v1/<vorgang>`. Die
+  Adresse eines `kephalaion serve` endet auf `/hub` (`http://localhost:7434/hub`; hinter einem
+  Reverse-Proxy etwa `https://host/kephalaion/hub`, der Proxy nimmt seinen Anteil weg, Caddy:
+  `uri strip_prefix /kephalaion`): Der Hub-Listener bedient den Vertrag unter `/hub/`, er
+  sieht also `/hub/v1/…`. Die Wurzel des Listeners gehört dem Binary, außerhalb des Vertrags
+  (`GET /` eine kurze Begrüßung, `GET /hub/` ein kurzer Text; `/v1/…` an der Wurzel und alles
+  andere 404 ohne Vertragsform — nie eine Weiterleitung). Die Fassung im Pfad ist die Fassung
+  des Vertrags, unverändert 1. Eine fremde Fassung (`/v2/…`, auch `/v0/…`) beantwortet der Hub
+  mit 404 und `unsupported_version`, vor der Anmeldung; ein unbekannter Vorgang ist 404 mit
+  `invalid`, noch vor dem Lesen des Bodys; eine andere Methode als POST 405.
 - **Anmeldung des Nodes** in Headern: `X-Keph-Node: <name>` und `Authorization: Bearer
   <token>`. Der Body ist JSON (die Felder oben); ein leerer Body gilt als `{}`. `content` ist
   bei `create` und `write` Pflicht; fehlt es oder ist es `null`, ist die Anfrage `invalid` —
@@ -447,11 +453,12 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 - **Unklarer Ausgang bei `rotate` und den Schreibvorgängen:** Kam die Verbindung nicht zustande,
   scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
   antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code des
-  Vertrags und bei 404 mit `invalid` (unbekannter Vorgang). Jeder andere Fehler nach dem
-  Abschicken — Zeitüberschreitung, abgebrochene Verbindung, unlesbare Antwort, 5xx, auch ein
-  502 oder 503 eines Proxys — ist unklar (`contract.ErrOutcomeUnknown`). Eine Antwort ohne
-  Code des Vertrags (Proxy, Host-Prüfung) trägt der Client als `httpapi.StatusError` mit
-  Status und Text.
+  Vertrags, bei 404 mit `invalid` (unbekannter Vorgang) und bei 404 ohne Vertragsform (ein
+  Proxy ohne Route, die Wurzel des Binarys — der Hub antwortet 404 nur in Vertragsform). Jeder
+  andere Fehler nach dem Abschicken — Zeitüberschreitung, abgebrochene Verbindung, unlesbare
+  Antwort, 5xx, auch ein 502 oder 503 eines Proxys — ist unklar (`contract.ErrOutcomeUnknown`).
+  Eine Antwort ohne Code des Vertrags (Proxy, Host-Prüfung, die Wurzel des Binarys) trägt der
+  Client als `httpapi.StatusError` mit Status und Text.
 - **Host:** Der Hub beantwortet nur Anfragen, deren `Host` dieser Rechner (`localhost`,
   `127.0.0.1`, `[::1]`) mit dem Port ist, auf dem die Anfrage ankam — dieselbe Prüfung wie am
   Node vor `/mcp`. Sonst antwortet er 403 ohne Vertragsform, noch vor Pfad und Anmeldung.

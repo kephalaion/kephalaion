@@ -256,7 +256,7 @@ func TestMCPWriteTwoNodes(t *testing.T) {
 	cB := "--config=" + cfgB
 	runT(t, "node", "init", "--db", "sqlite://"+filepath.Join(dir, "node.db"), cB).want(t, 0)
 	runIn(t, vmToken, "node", "hub", "add", "zentral", "--node", "vm", "--transport", "http",
-		"--address", "http://"+srvA.addrs[config.Hub], "--token-stdin", cB).want(t, 0)
+		"--address", "http://"+srvA.addrs[config.Hub]+"/hub", "--token-stdin", cB).want(t, 0)
 	runT(t, "node", "collection", "add", "zentral:team-x", cB).want(t, 0)
 	runT(t, "config", "set", "node", "sync_interval", "0", cB).want(t, 0)
 	runT(t, "node", "sync", cB).want(t, 0)
@@ -391,8 +391,8 @@ func TestMCPWriteTwoNodes(t *testing.T) {
 	srvB.stop(t)
 	hubLog, logB := srvA.log.String(), srvB.log.String()
 	for _, want := range [][]string{
-		{"hub POST /v1/create 200", "node=vm", "account=bob-vm"},
-		{"hub POST /v1/write 409", "node=vm", "account=bob-vm"},
+		{"hub POST /hub/v1/create 200", "node=vm", "account=bob-vm"},
+		{"hub POST /hub/v1/write 409", "node=vm", "account=bob-vm"},
 		{"node POST /mcp 200", "op=create", "hub=eigen node=laptop", "account=bob"},
 	} {
 		if !logLine(hubLog, want...) {

@@ -260,6 +260,44 @@ func TestParsePathAndClientAddress(t *testing.T) {
 	}
 }
 
+// Ein 404 ohne Vertragsform (die Wurzel des Binarys bei einer Adresse ohne
+// /hub, ein Proxy ohne Route) ist „nicht erreicht“: rotate und ein
+// Schreibvorgang scheitern eindeutig mit dem StatusError samt Text des Hubs,
+// nicht unklar, genau ein Aufruf; whoami wie bisher StatusError.
+func TestNotFoundWithoutContract(t *testing.T) {
+	const hint = "unbekannter Pfad /v1/rotate: der Vertrag liegt unter /hub/v1/… — fehlt /hub am Ende der Adresse des Hub-Eintrags?"
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, strings.Replace(hint, "/v1/rotate", r.URL.Path, 1), http.StatusNotFound)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	c.Backoff = time.Millisecond
+	ctx := context.Background()
+	want := func(name string, err error, path string) {
+		t.Helper()
+		var se *StatusError
+		if !errors.As(err, &se) || se.Status != http.StatusNotFound || errors.Is(err, contract.ErrOutcomeUnknown) ||
+			errors.Is(err, contract.ErrUnknownOperation) {
+			t.Errorf("%s: %v, erwartet StatusError 404 ohne unklaren Ausgang", name, err)
+		}
+		if !strings.Contains(err.Error(), strings.Replace(hint, "/v1/rotate", path, 1)) {
+			t.Errorf("%s: Fehler ohne den Text des Hubs: %v", name, err)
+		}
+		if n := calls.Swap(0); n != 1 {
+			t.Errorf("%s: %d Aufrufe, erwartet 1", name, n)
+		}
+	}
+	_, err := c.Rotate(ctx, contract.RotateRequest{Version: contract.Version, Auth: auth, Account: "bob",
+		Token: "keph_account", NewHash: strings.Repeat("a", 64)})
+	want("rotate", err, "/v1/rotate")
+	_, err = c.Create(ctx, contract.CreateRequest{Version: contract.Version, Auth: auth, Name: "a.md"})
+	want("create", err, "/v1/create")
+	_, err = c.Whoami(ctx, contract.WhoamiRequest{Version: contract.Version, Auth: auth})
+	want("whoami", err, "/v1/whoami")
+}
+
 // Der Client folgt keiner Weiterleitung: Das Ziel bekommt weder Body noch
 // Token, und rotate hinter 307 scheitert eindeutig, ohne Wiederholung.
 func TestNoRedirect(t *testing.T) {

@@ -44,10 +44,12 @@ type Client struct {
 var _ contract.Hub = (*Client)(nil)
 
 // NewClient liefert einen Client für den Hub unter address (http://… oder
-// https://…, wahlweise mit einem Pfad als Präfix: Hinter einem Proxy, der
-// mehrere Dienste bedient, liegt der Hub etwa unter https://host/kephhub, und
-// der Proxy nimmt den Präfix weg; die Vorgänge stehen dann unter
-// <adresse>/v1/<vorgang>). Keine Query, kein User. Welche Adressen ein Node
+// https://…, mit einem Pfad als Präfix: Die Vorgänge stehen unter
+// <adresse>/v1/<vorgang>. Der Hub-Listener von kephalaion serve bedient den
+// Vertrag unter /hub, seine Adresse ist also http://localhost:7434/hub;
+// hinter einem Proxy, der mehrere Dienste bedient, etwa
+// https://host/kephalaion/hub, und der Proxy nimmt seinen Anteil weg).
+// Keine Query, kein User. Welche Adressen ein Node
 // benutzen darf, prüft er selbst; der Client nimmt, was er bekommt. Bei
 // https prüft er das Zertifikat
 // des Hubs gegen rootCAs, ohne (nil) gegen die System-Roots; TLS mindestens
@@ -278,14 +280,24 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 		return &callError{err: fmt.Errorf("Hub %s antwortet mit HTTP %d (Weiterleitung nach %q); "+
 			"der Client folgt keinen Weiterleitungen", c.base, resp.StatusCode, resp.Header.Get("Location"))}
 	}
-	return &callError{err: fmt.Errorf("Hub %s antwortet mit %w", c.base, &StatusError{Status: resp.StatusCode, Message: msg}),
-		sent: true, retry: resp.StatusCode >= 500}
+	status := &StatusError{Status: resp.StatusCode, Message: msg}
+	if resp.StatusCode == http.StatusNotFound {
+		// Ein 404 ohne Vertragsform kommt nicht vom Handler des Vertrags —
+		// der antwortet 404 nur mit einem Code —, sondern von davor: ein
+		// Proxy ohne Route, die Wurzel des Binarys (die Adresse ohne /hub).
+		// Der Hub hat nichts ausgeführt: nicht erreicht, auch bei rotate und
+		// den Schreibvorgängen (docs/vertrag.md, „Ausgang und Wiederholung“).
+		return &callError{err: fmt.Errorf("Hub %s antwortet mit %w", c.base, status)}
+	}
+	return &callError{err: fmt.Errorf("Hub %s antwortet mit %w", c.base, status), sent: true, retry: resp.StatusCode >= 500}
 }
 
 // StatusError ist eine Antwort ohne Code des Vertrags: ein Status, den nicht
 // der Hub, sondern etwas davor gegeben hat (ein Proxy mit 502 oder 503, die
-// Host-Prüfung mit 403), oder ein Fehler des Hubs, der kein Fehler des
-// Vertrags ist (500 mit internal). Message ist der Text der Antwort, gekürzt.
+// Host-Prüfung mit 403, ein 404 der Wurzel des Binarys oder eines Proxys ohne
+// Route), oder ein Fehler des Hubs, der kein Fehler des Vertrags ist (500 mit
+// internal). Message ist der Text der Antwort, gekürzt. Ein 404 zählt als
+// nicht erreicht, alles andere nach dem Abschicken als unklar.
 type StatusError struct {
 	Status  int
 	Message string

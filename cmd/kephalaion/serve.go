@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,8 +35,13 @@ Der Dienst: startet je eingerichteter Rolle einen HTTP-Listener auf ihrem
 listen aus der config — beide Rollen in einem Prozess, wenn beide
 eingerichtet sind — und läuft, bis SIGINT oder SIGTERM ihn beendet.
 
-  hub    der Vertrag für Nodes: POST /v1/whoami, /v1/rotate, /v1/sync und
-         die Schreibvorgänge /v1/create, /v1/write, /v1/delete, /v1/rename
+  hub    an der Wurzel (/) eine kurze Begrüßung mit der Version; der Vertrag
+         für Nodes unter /hub: POST /hub/v1/whoami, /hub/v1/rotate,
+         /hub/v1/sync und die Schreibvorgänge /hub/v1/create, /hub/v1/write,
+         /hub/v1/delete, /hub/v1/rename — die Adresse eines Hub-Eintrags
+         endet deshalb auf /hub (http://localhost:7434/hub). /v1/… an der
+         Wurzel antwortet 404 mit dem Hinweis auf /hub; eine Umleitung gibt
+         es nie, auch nicht hinter einem Proxy mit Präfix
   node   MCP für Clients unter /mcp: whoami, list, read und changes aus der
          Replica, create, write, delete und rename über den Hub — ist er
          nicht erreichbar, wird nichts gespeichert, gelesen wird weiter
@@ -324,7 +331,7 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 		rl.hub = st
 		rl.server = &http.Server{
 			// Host wie am Node: dieser Rechner mit dem eigenen Port, sonst 403.
-			Handler:           loopback.Guard(httpapi.NewHandler(replication.New(st))),
+			Handler:           loopback.Guard(newHubHandler(st)),
 			ReadHeaderTimeout: httpapi.ReadHeaderTimeout,
 			ReadTimeout:       httpapi.ReadTimeout,
 			WriteTimeout:      httpapi.WriteTimeout,
@@ -350,6 +357,90 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 // newNodeHandler ist der Eingang des Nodes für Clients: MCP unter /mcp.
 func newNodeHandler(st nodestore.Store, update func() upgrade.Report, link mcpnode.HubLink) http.Handler {
 	return mcpnode.NewHandler(st, buildinfo.Get().Version, update, link)
+}
+
+// hubPath ist der Ort des Vertrags am Hub-Listener; die Adresse eines
+// Hub-Eintrags endet darauf.
+const hubPath = "/hub"
+
+// newHubHandler ist der Hub-Listener ohne die Host-Prüfung (die legt
+// startRole außen herum): Das Binary ordnet seine Teile selbst, ein Proxy
+// davor nimmt nur seinen Präfix weg. An der Wurzel eine kurze Begrüßung mit
+// der Version, an /hub und /hub/ ein kurzer Text ohne (diese Route liegt
+// nach außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
+// /v1/… sieht; /v1/… an der Wurzel ist die alte Adresse ohne /hub und
+// bekommt 404 mit dem Hinweis, alles andere 404 — beides text/plain, ohne
+// Vertragsform: Die Wurzel gehört dem Binary, nicht dem Hub, und der Client
+// zählt ein 404 ohne Vertragsform als nicht erreicht. Nie ein 3xx: /hub und
+// /v1 sind eigens registriert (sonst leitete der Mux GET /hub mit 301 auf
+// /hub/ um), und ein Pfad, den der Mux bereinigen würde, wird vorher mit 404
+// beantwortet — eine absolute Location ohne den Präfix des Proxys ginge ins
+// Leere.
+func newHubHandler(st hubstore.Store) http.Handler {
+	version := buildinfo.Get().Version
+	mux := http.NewServeMux()
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		hubText(w, r, http.StatusOK, "Kephalaion "+version+", Rolle hub.\n"+
+			"Der Hub antwortet unter "+hubPath+"/v1/<vorgang>.")
+	})
+	short := func(w http.ResponseWriter, r *http.Request) {
+		hubText(w, r, http.StatusOK, "Kephalaion Hub. Nodes: POST "+hubPath+"/v1/<vorgang>")
+	}
+	mux.HandleFunc(hubPath, short)
+	mux.HandleFunc(hubPath+"/{$}", short)
+	mux.Handle(hubPath+"/", http.StripPrefix(hubPath, httpapi.NewHandler(replication.New(st))))
+	oldAddress := func(w http.ResponseWriter, r *http.Request) {
+		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path+": der Vertrag liegt unter "+hubPath+
+			"/v1/… — fehlt "+hubPath+" am Ende der Adresse des Hub-Eintrags?")
+	}
+	mux.HandleFunc("/v1", oldAddress)
+	mux.HandleFunc("/v1/", oldAddress)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cleanRequestPath(r.URL.Path) != r.URL.Path {
+			hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// cleanRequestPath bereinigt einen Pfad so, wie http.ServeMux es vor dem
+// Abgleich tut (path.Clean; ein Schrägstrich am Ende bleibt). Weicht das
+// Ergebnis vom Pfad ab — doppelte Schrägstriche, Segmente . oder .. —,
+// antwortete der Mux mit 301 auf den bereinigten Pfad.
+func cleanRequestPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	np := path.Clean(p)
+	if strings.HasSuffix(p, "/") && np != "/" {
+		np += "/"
+	}
+	return np
+}
+
+// hubText antwortet mit einer kurzen Textnachricht: text/plain, nicht zu
+// cachen, ohne Body bei HEAD. Anderes als GET und HEAD ist an diesen Orten
+// 405 — bei einem 404 bleibt es beim 404, gleich welcher Methode.
+func hubText(w http.ResponseWriter, r *http.Request, status int, text string) {
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "no-store")
+	if status == http.StatusOK && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.Set("Allow", "GET, HEAD")
+		status, text = http.StatusMethodNotAllowed, "nur GET"
+	}
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead {
+		_, _ = io.WriteString(w, text+"\n")
+	}
 }
 
 // nodeHubLink ist der Weg der Werkzeuge des Nodes, die schreiben, zum Hub:

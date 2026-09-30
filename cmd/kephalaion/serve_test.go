@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/reqlog"
@@ -116,10 +118,10 @@ func TestServe(t *testing.T) {
 			t.Errorf("%s: Adresse %q", role, srv.addrs[role])
 		}
 	}
-	// Der Hub beantwortet den Vertrag.
+	// Der Hub beantwortet den Vertrag unter /hub.
 	post := func(node, tok string) int {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/v1/whoami", strings.NewReader("{}"))
+		req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/hub/v1/whoami", strings.NewReader("{}"))
 		req.Header.Set(httpapi.HeaderNode, node)
 		req.Header.Set("Authorization", "Bearer "+tok)
 		resp, err := http.DefaultClient.Do(req)
@@ -141,7 +143,7 @@ func TestServe(t *testing.T) {
 		t.Errorf("Token als Name: HTTP %d", code)
 	}
 	// Hinter einem Proxy: die Adresse des Aufrufers aus X-Forwarded-For im Log.
-	req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/v1/whoami", strings.NewReader("{}"))
+	req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/hub/v1/whoami", strings.NewReader("{}"))
 	req.Header.Set(httpapi.HeaderNode, "laptop")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Forwarded-For", "9.141.8.157, 10.0.0.1")
@@ -154,7 +156,7 @@ func TestServe(t *testing.T) {
 	_, port, _ := net.SplitHostPort(srv.addrs[config.Hub])
 	for host, want := range map[string]int{"localhost:" + port: 200, "evil.example:" + port: 403,
 		"localhost:1": 403, "localhost": 403} {
-		req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/v1/whoami", strings.NewReader("{}"))
+		req, _ := http.NewRequest(http.MethodPost, "http://"+srv.addrs[config.Hub]+"/hub/v1/whoami", strings.NewReader("{}"))
 		req.Host = host
 		req.Header.Set(httpapi.HeaderNode, "laptop")
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -179,7 +181,7 @@ func TestServe(t *testing.T) {
 	srv.stop(t)
 	log := srv.log.String()
 	for _, want := range []string{"hub lauscht auf 127.0.0.1:", "node lauscht auf 127.0.0.1:",
-		"hub POST /v1/whoami 200", "node=laptop", "hub POST /v1/whoami 401", "node=(ungültig)", "beendet",
+		"hub POST /hub/v1/whoami 200", "node=laptop", "hub POST /hub/v1/whoami 401", "node=(ungültig)", "beendet",
 		" via=9.141.8.157 node=laptop"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)
@@ -215,11 +217,110 @@ func TestServeLoopbackOnly(t *testing.T) {
 	}
 }
 
-// Die Hilfe nennt die Pfade des Vertrags und die Werkzeuge, auch die, die
-// schreiben.
+// Die Hilfe nennt die Pfade des Vertrags unter /hub und die Werkzeuge, auch
+// die, die schreiben.
 func TestServeHelp(t *testing.T) {
-	runT(t, "serve", "--help").want(t, 0, "/v1/sync und", "/v1/create, /v1/write, /v1/delete, /v1/rename",
+	runT(t, "serve", "--help").want(t, 0, "/hub/v1/sync und", "/hub/v1/create, /hub/v1/write,",
+		"http://localhost:7434/hub", "/v1/… an der\n         Wurzel antwortet 404",
 		"create, write, delete und rename über den Hub", "nie ein Inhalt", "Reverse-Proxy", "X-Forwarded-For")
+}
+
+// Der Hub-Listener ordnet seine Teile selbst: an der Wurzel die Begrüßung
+// mit der Version, an /hub und /hub/ der kurze Text ohne, unter /hub/ der
+// Vertrag (405 und 404 dort in Vertragsform), /v1/… an der Wurzel — die
+// alte Adresse ohne /hub — 404 text/plain mit dem Hinweis, alles andere 404
+// text/plain, auch ein Pfad, den der Mux sonst per 301 bereinigte. Kein
+// Pfad und keine Methode bekommt ein 3xx.
+func TestServeHubListener(t *testing.T) {
+	dir := isolate(t)
+	cfgPath := setup(t, dir)
+	srv := startServe(t, portZero(t, cfgPath))
+	base := "http://" + srv.addrs[config.Hub]
+	// Ohne Keep-Alive: Eine offene Verbindung hielte das Beenden auf.
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	version := buildinfo.Get().Version
+	const plain, jsonType = "text/plain; charset=utf-8", "application/json"
+	for _, c := range []struct {
+		method, path string
+		status       int
+		ctype        string
+		want         []string // im Body
+		without      []string // nicht im Body
+	}{
+		{http.MethodGet, "/", 200, plain, []string{"Kephalaion " + version, "Rolle hub", "/hub/v1/<vorgang>"}, nil},
+		{http.MethodHead, "/", 200, plain, nil, []string{"Kephalaion"}},
+		{http.MethodGet, "/hub", 200, plain, []string{"Kephalaion Hub", "POST /hub/v1/<vorgang>"}, []string{version}},
+		{http.MethodGet, "/hub/", 200, plain, []string{"Kephalaion Hub", "POST /hub/v1/<vorgang>"}, []string{version}},
+		{http.MethodHead, "/hub/", 200, plain, nil, []string{"Kephalaion"}},
+		{http.MethodPost, "/hub/", 405, plain, []string{"nur GET"}, nil},
+		{http.MethodPost, "/", 405, plain, []string{"nur GET"}, nil},
+		{http.MethodGet, "/hub/v1/whoami", 405, jsonType, []string{`"code":"invalid"`, "nur POST"}, nil},
+		{http.MethodPost, "/hub/nix", 404, jsonType, []string{`"code":"invalid"`, "unbekannter Pfad; erwartet POST /v1/"}, nil},
+		{http.MethodPost, "/hub/v1/nix", 404, jsonType, []string{`"code":"invalid"`, "unbekannter Vorgang"}, nil},
+		{http.MethodPost, "/hub/v1/whoami", 401, jsonType, []string{`"code":"unauthenticated"`}, nil},
+		{http.MethodPost, "/v1/whoami", 404, plain, []string{"unbekannter Pfad /v1/whoami: der Vertrag liegt unter /hub/v1/…",
+			"fehlt /hub am Ende der Adresse des Hub-Eintrags?"}, []string{`"code"`, "invalid"}},
+		{http.MethodGet, "/v1", 404, plain, []string{"unbekannter Pfad /v1:", "fehlt /hub"}, nil},
+		{http.MethodPost, "/v1/", 404, plain, []string{"fehlt /hub"}, nil},
+		{http.MethodGet, "/nix", 404, plain, []string{"unbekannter Pfad /nix"}, []string{`"code"`, "/hub"}},
+		{http.MethodPost, "/hubx", 404, plain, []string{"unbekannter Pfad /hubx"}, nil},
+		{http.MethodGet, "/hub//v1/whoami", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}},
+		{http.MethodPost, "/hub/v1//whoami", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}},
+		{http.MethodGet, "/hub/../hub/", 404, plain, []string{"unbekannter Pfad"}, []string{"Kephalaion"}},
+		{http.MethodGet, "/./hub", 404, plain, []string{"unbekannter Pfad"}, []string{"Kephalaion"}},
+		{http.MethodGet, "//hub/", 404, plain, []string{"unbekannter Pfad"}, []string{"Kephalaion"}},
+	} {
+		req, _ := http.NewRequest(c.method, base+c.path, strings.NewReader("{}"))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", c.method, c.path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		name := c.method + " " + c.path
+		if resp.StatusCode != c.status {
+			t.Errorf("%s: HTTP %d, erwartet %d; Body %q", name, resp.StatusCode, c.status, body)
+		}
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 || resp.Header.Get("Location") != "" {
+			t.Errorf("%s: Umleitung (HTTP %d, Location %q)", name, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		if got := resp.Header.Get("Content-Type"); got != c.ctype {
+			t.Errorf("%s: Content-Type %q, erwartet %q", name, got, c.ctype)
+		}
+		if c.ctype == plain && resp.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: Cache-Control %q", name, resp.Header.Get("Cache-Control"))
+		}
+		if c.method == http.MethodHead && len(body) != 0 {
+			t.Errorf("%s: Body %q, erwartet keinen", name, body)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(string(body), w) {
+				t.Errorf("%s: Body ohne %q:\n%s", name, w, body)
+			}
+		}
+		for _, w := range c.without {
+			if strings.Contains(string(body), w) {
+				t.Errorf("%s: Body mit %q:\n%s", name, w, body)
+			}
+		}
+	}
+	// Die Host-Prüfung liegt vor allem, auch vor der Begrüßung.
+	req, _ := http.NewRequest(http.MethodGet, base+"/", nil)
+	req.Host = "evil.example:80"
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Errorf("Begrüßung mit fremdem Host: HTTP %d, erwartet 403", resp.StatusCode)
+	}
+	srv.stop(t)
+	if log := srv.log.String(); !strings.Contains(log, "hub GET / 200") || !strings.Contains(log, "hub POST /v1/whoami 404") ||
+		!strings.Contains(log, "hub GET /hub//v1/whoami 404") {
+		t.Errorf("Log ohne die Zeilen der Wurzel:\n%s", log)
+	}
 }
 
 // Beenden per Signal: serve über die Kommandozeile, SIGTERM an den eigenen
