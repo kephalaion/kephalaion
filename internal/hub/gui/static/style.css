@@ -1,0 +1,374 @@
+/* Weboberfläche des Hubs. Systemschrift, keine fremden Quellen; hell und
+   dunkel über prefers-color-scheme; schmal ohne waagrechtes Scrollen. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1b1f24;
+  --muted: #5a6470;
+  --line: #d5dae0;
+  --accent: #1f5fbf;
+  --accent-text: #ffffff;
+  --note-bg: #eef4fd;
+  --note-line: #9dbdee;
+  --error-bg: #fdecec;
+  --error-line: #d9534f;
+  --error-text: #8a1f1b;
+  --yes: #17693a;
+  --no: #6b7480;
+  --code-bg: #eceff3;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171b;
+    --panel: #1d2127;
+    --text: #e6e9ed;
+    --muted: #a0a9b4;
+    --line: #363d47;
+    --accent: #7fb0f5;
+    --accent-text: #0e1726;
+    --note-bg: #1b2738;
+    --note-line: #3f689e;
+    --error-bg: #3a1d1d;
+    --error-line: #c9605c;
+    --error-text: #f4b6b3;
+    --yes: #6fd39a;
+    --no: #98a2ae;
+    --code-bg: #2a3038;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 100%;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 1.25rem 1rem 3rem;
+  background: var(--bg);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.top,
+main {
+  max-width: 52rem;
+  margin: 0 auto;
+}
+
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  margin-bottom: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+}
+
+h2:focus {
+  outline: none;
+}
+
+h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+.meta,
+.hint,
+.sub {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.meta {
+  margin: 0;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 1.25rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+  background: var(--code-bg);
+  border-radius: 0.25rem;
+  padding: 0.05em 0.3em;
+}
+
+.which {
+  background: var(--note-bg);
+  border-left: 0.25rem solid var(--note-line);
+  border-radius: 0.25rem;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1.25rem;
+}
+
+.which p:last-child {
+  margin-bottom: 0;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+}
+
+.token-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.token-row input {
+  flex: 1 1 auto;
+}
+
+.field .hint {
+  margin: 0.25rem 0 0;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  cursor: pointer;
+}
+
+button.quiet {
+  color: var(--text);
+  background: transparent;
+  border-color: var(--line);
+  font-weight: 400;
+  flex: 0 0 auto;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.message {
+  border-left: 0.25rem solid var(--note-line);
+  background: var(--note-bg);
+  border-radius: 0.25rem;
+  padding: 0.625rem 0.875rem;
+  margin: 0 0 1rem;
+}
+
+.message.error {
+  border-left-color: var(--error-line);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.who {
+  font-size: 1.0625rem;
+  margin-bottom: 0.25rem;
+}
+
+.description {
+  color: var(--muted);
+}
+
+/* Die Tabelle scrollt in ihrem eigenen Kasten, nie die Seite. */
+.table-box {
+  overflow-x: auto;
+  margin: 1rem 0 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+tbody tr:last-child th,
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+thead th {
+  font-size: 0.875rem;
+  background: var(--bg);
+}
+
+th .sub,
+td .sub {
+  display: block;
+  font-weight: 400;
+}
+
+.name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-weight: 600;
+}
+
+.yes {
+  color: var(--yes);
+  font-weight: 600;
+}
+
+.no {
+  color: var(--no);
+}
+
+.scopes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rules ul {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.rules li {
+  margin-bottom: 0.375rem;
+}
+
+/* Schmal (Telefon): Jede Collection wird ein Block, jede Zelle eine Zeile
+   mit dem Namen ihrer Spalte davor (data-label aus app.js). */
+@media (max-width: 40rem) {
+  body {
+    padding: 0.75rem 0.625rem 2rem;
+  }
+
+  section {
+    padding: 1rem 0.875rem;
+  }
+
+  .table-box {
+    border: 0;
+    overflow-x: visible;
+  }
+
+  table,
+  tbody,
+  tr,
+  th,
+  td {
+    display: block;
+    width: 100%;
+  }
+
+  thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    border: 1px solid var(--line);
+    border-radius: 0.375rem;
+    margin-bottom: 0.75rem;
+  }
+
+  tbody tr:last-child {
+    margin-bottom: 0;
+  }
+
+  tbody th {
+    background: var(--bg);
+    border-radius: 0.375rem 0.375rem 0 0;
+  }
+
+  tbody td {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  tbody td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+
+  tbody tr:last-child th {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .scopes {
+    text-align: right;
+  }
+}

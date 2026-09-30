@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/loopback"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
@@ -437,5 +440,140 @@ func TestServeHTTPS(t *testing.T) {
 	srv.stop(t)
 	if log := srv.log.String(); strings.Contains(log, "keph_") {
 		t.Errorf("Token im Log:\n%s", log)
+	}
+}
+
+// Die Weboberfläche hinter einem Proxy mit Präfix (wie Caddys handle
+// /kephalaion/* mit uri strip_prefix /kephalaion): Die Seite liegt unter
+// <präfix>/, und was sie relativ nennt — gui/style.css, gui/app.js, der
+// Eingang gui/api/whoami —, landet unter dem Präfix beim Binary, das ihn
+// nicht kennt. Der Hub-Weg <präfix>/hub/v1/… bleibt, wie er war. Steht vor
+// dem Rest eine Anmeldung (die VM), ist deren 401 keine Antwort des Hubs:
+// kein JSON mit code — daran erkennt die Seite die abgelaufene Anmeldung.
+func TestGUIBehindPrefix(t *testing.T) {
+	e := newCommEnv(t)
+	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	do := func(method, target, accept, ctype, body string, header map[string]string) (*http.Response, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, target, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
+		}
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 || resp.Header.Get("Location") != "" {
+			t.Errorf("%s %s: Umleitung (HTTP %d, Location %q)", method, target, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		return resp, string(raw)
+	}
+	open := proxyHubAt(t, e, nil, "", "/kephalaion", 0)
+	pageURL, err := url.Parse(open.URL + "/kephalaion/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// rel löst einen Pfad der Seite auf, wie der Browser es tut.
+	rel := func(ref string) string {
+		t.Helper()
+		u, err := pageURL.Parse(ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.String()
+	}
+
+	resp, page := do(http.MethodGet, pageURL.String(), browser, "", "", nil)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" ||
+		!strings.Contains(page, "Kephalaion-Account") {
+		t.Fatalf("Seite unter dem Präfix: HTTP %d, Content-Type %q:\n%s", resp.StatusCode, resp.Header.Get("Content-Type"), page)
+	}
+	// curl an derselben Stelle: weiter die Begrüßung.
+	if resp, body := do(http.MethodGet, pageURL.String(), "*/*", "", "", nil); resp.StatusCode != 200 ||
+		!strings.HasPrefix(body, "Kephalaion ") || strings.Contains(body, "<html") {
+		t.Errorf("Begrüßung unter dem Präfix: HTTP %d %q", resp.StatusCode, body)
+	}
+	// Die Verweise der Seite, so wie sie im HTML stehen.
+	for ref, ctype := range map[string]string{"gui/style.css": "text/css; charset=utf-8", "gui/app.js": "text/javascript; charset=utf-8"} {
+		if !strings.Contains(page, `"`+ref+`"`) {
+			t.Errorf("die Seite nennt %s nicht", ref)
+		}
+		if want := open.URL + "/kephalaion/" + ref; rel(ref) != want {
+			t.Errorf("%s löst sich zu %s auf, erwartet %s", ref, rel(ref), want)
+		}
+		if resp, _ := do(http.MethodGet, rel(ref), "*/*", "", "", nil); resp.StatusCode != 200 || resp.Header.Get("Content-Type") != ctype {
+			t.Errorf("%s: HTTP %d, Content-Type %q", rel(ref), resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+	// Der Eingang, relativ wie in app.js.
+	_, script := do(http.MethodGet, rel("gui/app.js"), "*/*", "", "", nil)
+	if !strings.Contains(script, `"gui/api/whoami"`) {
+		t.Fatal("app.js nennt gui/api/whoami nicht")
+	}
+	payload := func(account, token string) string {
+		b, _ := json.Marshal(map[string]string{"account": account, "token": token})
+		return string(b)
+	}
+	resp, body := do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["bob"]), nil)
+	if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"account":"bob","user":"kleist","description":"","collections":[`+
+		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[]}},`+
+		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[]}}]}` {
+		t.Errorf("whoami der Seite unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
+	}
+	resp, body = do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["alice"]), nil)
+	if resp.StatusCode != 401 || !strings.Contains(body, `"code":"unauthenticated"`) ||
+		resp.Header.Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Errorf("falsches Token unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Ohne den Präfix kennt der Proxy nichts davon.
+	if resp, _ := do(http.MethodGet, open.URL+"/gui/app.js", "*/*", "", "", nil); resp.StatusCode != 404 {
+		t.Errorf("/gui/app.js ohne Präfix: HTTP %d", resp.StatusCode)
+	}
+
+	// Der Hub-Weg bleibt unverändert: der Vertrag unter <präfix>/hub/v1/…,
+	// in Vertragsform.
+	r := e.run(t, "hub", "node", "add", "laptop-gui")
+	r.want(t, 0)
+	node := map[string]string{httpapi.HeaderNode: "laptop-gui", "Authorization": "Bearer " + tokenFrom(t, r.out)}
+	resp, body = do(http.MethodPost, open.URL+"/kephalaion/hub/v1/whoami", "", "application/json", "{}", node)
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/json" || !strings.Contains(body, `"node":"laptop-gui"`) {
+		t.Errorf("Hub-Weg unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
+	}
+	resp, body = do(http.MethodPost, open.URL+"/kephalaion/hub/v1/whoami", "", "application/json", "{}", nil)
+	if resp.StatusCode != 401 || resp.Header.Get("Content-Type") != "application/json" || !strings.Contains(body, `"code":"unauthenticated"`) {
+		t.Errorf("Hub-Weg ohne Anmeldung: HTTP %d %s", resp.StatusCode, body)
+	}
+	if resp, body := do(http.MethodGet, open.URL+"/kephalaion/hub", browser, "", "", nil); resp.StatusCode != 200 ||
+		!strings.HasPrefix(body, "Kephalaion Hub.") {
+		t.Errorf("/kephalaion/hub mit Accept text/html: HTTP %d %q — dort gibt es keine Seite", resp.StatusCode, body)
+	}
+
+	// Die VM: vor dem Rest steht eine Anmeldung. Ohne Sitzung antwortet sie,
+	// nicht der Hub — auf die Seite wie auf ihren Eingang, ohne JSON und ohne
+	// code; der Hub-Weg geht weiter ohne sie.
+	authed := proxyHubAt(t, e, nil, "", "/kephalaion", http.StatusUnauthorized)
+	if resp, _ := do(http.MethodGet, authed.URL+"/kephalaion/", browser, "", "", nil); resp.StatusCode != 401 {
+		t.Errorf("Seite hinter der Anmeldung ohne Sitzung: HTTP %d", resp.StatusCode)
+	}
+	resp, body = do(http.MethodPost, authed.URL+"/kephalaion/gui/api/whoami", "application/json", "application/json",
+		payload("bob", e.tokens["bob"]), nil)
+	if resp.StatusCode != 401 || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || strings.Contains(body, `"code"`) {
+		t.Errorf("Eingang hinter der Anmeldung ohne Sitzung: HTTP %d, Content-Type %q, %q", resp.StatusCode,
+			resp.Header.Get("Content-Type"), body)
+	}
+	if resp, _ := do(http.MethodPost, authed.URL+"/kephalaion/hub/v1/whoami", "", "application/json", "{}", node); resp.StatusCode != 200 {
+		t.Errorf("Hub-Weg neben der Anmeldung: HTTP %d", resp.StatusCode)
 	}
 }

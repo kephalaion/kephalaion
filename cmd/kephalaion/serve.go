@@ -19,6 +19,7 @@ import (
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
+	"github.com/kephalaion/kephalaion/internal/hub/gui"
 	"github.com/kephalaion/kephalaion/internal/hub/replication"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/loopback"
@@ -35,8 +36,11 @@ Der Dienst: startet je eingerichteter Rolle einen HTTP-Listener auf ihrem
 listen aus der config — beide Rollen in einem Prozess, wenn beide
 eingerichtet sind — und läuft, bis SIGINT oder SIGTERM ihn beendet.
 
-  hub    an der Wurzel (/) eine kurze Begrüßung mit der Version; der Vertrag
-         für Nodes unter /hub: POST /hub/v1/whoami, /hub/v1/rotate,
+  hub    an der Wurzel (/) für einen Browser (Accept mit text/html) die
+         Weboberfläche: Sie fragt Account und Account-Token ab und zeigt,
+         worauf der Account Zugriff hat; ihre Teile liegen unter /gui/. Für
+         alles andere (curl) dort eine kurze Begrüßung mit der Version. Der
+         Vertrag für Nodes unter /hub: POST /hub/v1/whoami, /hub/v1/rotate,
          /hub/v1/sync und die Schreibvorgänge /hub/v1/create, /hub/v1/write,
          /hub/v1/delete, /hub/v1/rename — die Adresse eines Hub-Eintrags
          endet deshalb auf /hub (http://localhost:7434/hub). /v1/… an der
@@ -363,26 +367,58 @@ func newNodeHandler(st nodestore.Store, update func() upgrade.Report, link mcpno
 // Hub-Eintrags endet darauf.
 const hubPath = "/hub"
 
+// guiPath ist der Ort der Teile der Weboberfläche am Hub-Listener: ihre
+// Dateien und ihr Eingang. Die Seite selbst liegt an der Wurzel und nennt
+// sie relativ (gui/app.js), damit sie auch unter dem Präfix eines Proxys
+// stimmen.
+const guiPath = "/gui"
+
 // newHubHandler ist der Hub-Listener ohne die Host-Prüfung (die legt
 // startRole außen herum): Das Binary ordnet seine Teile selbst, ein Proxy
-// davor nimmt nur seinen Präfix weg. An der Wurzel eine kurze Begrüßung mit
-// der Version, an /hub und /hub/ ein kurzer Text ohne (diese Route liegt
-// nach außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
-// /v1/… sieht; /v1/… an der Wurzel ist die alte Adresse ohne /hub und
-// bekommt 404 mit dem Hinweis, alles andere 404 — beides text/plain, ohne
-// Vertragsform: Die Wurzel gehört dem Binary, nicht dem Hub, und der Client
-// zählt ein 404 ohne Vertragsform als nicht erreicht. Nie ein 3xx: /hub und
-// /v1 sind eigens registriert (sonst leitete der Mux GET /hub mit 301 auf
-// /hub/ um), und ein Pfad, den der Mux bereinigen würde, wird vorher mit 404
-// beantwortet — eine absolute Location ohne den Präfix des Proxys ginge ins
-// Leere.
+// davor nimmt nur seinen Präfix weg.
+//
+//   - An der Wurzel entscheidet Accept: Nennt er text/html (ein Browser),
+//     kommt die Weboberfläche (internal/hub/gui), sonst eine kurze Begrüßung
+//     mit der Version (text/plain, für curl) — beide mit Vary: Accept.
+//   - Unter /gui/ die Teile der Seite: /gui/app.js, /gui/style.css und ihr
+//     Eingang POST /gui/api/whoami, der einen Account allein prüft, ohne
+//     Node; er ist kein Teil des Vertrags. /gui, /gui/ und alles andere
+//     darunter 404.
+//   - An /hub und /hub/ ein kurzer Text ohne Version (diese Route liegt nach
+//     außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
+//     /v1/… sieht.
+//   - /v1/… an der Wurzel ist die alte Adresse ohne /hub und bekommt 404 mit
+//     dem Hinweis, alles andere 404 — beides text/plain, ohne Vertragsform:
+//     Die Wurzel gehört dem Binary, nicht dem Hub, und der Client zählt ein
+//     404 ohne Vertragsform als nicht erreicht.
+//
+// Nie ein 3xx: /hub, /gui und /v1 sind eigens registriert (sonst leitete der
+// Mux GET /hub mit 301 auf /hub/ um, ebenso /gui), und ein Pfad, den der Mux
+// bereinigen würde, wird vorher mit 404 beantwortet — eine absolute Location
+// ohne den Präfix des Proxys ginge ins Leere.
 func newHubHandler(st hubstore.Store) http.Handler {
 	version := buildinfo.Get().Version
 	mux := http.NewServeMux()
+	page := gui.NewPage(version)
 	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		// Seite oder Begrüßung hängt an Accept; ein Cache dazwischen muss das
+		// wissen.
+		w.Header().Add("Vary", "Accept")
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && gui.AcceptsHTML(r) {
+			page.ServeHTTP(w, r)
+			return
+		}
 		hubText(w, r, http.StatusOK, "Kephalaion "+version+", Rolle hub.\n"+
 			"Der Hub antwortet unter "+hubPath+"/v1/<vorgang>.")
 	})
+	notFound := func(w http.ResponseWriter, r *http.Request) {
+		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
+	}
+	mux.Handle(guiPath+"/"+gui.FileScript, gui.NewFile(gui.FileScript))
+	mux.Handle(guiPath+"/"+gui.FileStyle, gui.NewFile(gui.FileStyle))
+	mux.Handle(guiPath+"/api/whoami", gui.NewWhoami(st))
+	mux.HandleFunc(guiPath, notFound)
+	mux.HandleFunc(guiPath+"/", notFound)
 	short := func(w http.ResponseWriter, r *http.Request) {
 		hubText(w, r, http.StatusOK, "Kephalaion Hub. Nodes: POST "+hubPath+"/v1/<vorgang>")
 	}
@@ -395,12 +431,10 @@ func newHubHandler(st hubstore.Store) http.Handler {
 	}
 	mux.HandleFunc("/v1", oldAddress)
 	mux.HandleFunc("/v1/", oldAddress)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
-	})
+	mux.HandleFunc("/", notFound)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cleanRequestPath(r.URL.Path) != r.URL.Path {
-			hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
+			notFound(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
