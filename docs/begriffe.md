@@ -12,7 +12,8 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **serve** — `kephalaion serve`, der Dienst. Trägt die Rollen, die in der Konfiguration
   stehen: `hub:`, `node:` oder beide in einem Prozess. Keine eigene Rolle und kein eigener
   Eintrag in der config, sondern der eine Aufruf, der nicht endet: Er lauscht je Rolle auf
-  ihrem `listen` (MCP für Clients unter `/mcp`, der Vertrag für Nodes unter `/v1/`), nur auf
+  ihrem `listen` (MCP für Clients unter `/mcp`; am Hub-Listener die **greeting** an der
+  Wurzel und der Vertrag für Nodes unter **/hub**), nur auf
   Loopback — Nodes anderer Rechner kommen über einen **reverse proxy** (`https`). Als Node
   gleicht er im Hintergrund ab (`sync_interval`); später hält er
   den Index warm. Alle anderen Kommandos sind kurze Aufrufe und arbeiten neben ihm direkt auf
@@ -83,10 +84,12 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **transport** — wie ein Node einen Hub erreicht: `https` (zu einem anderen Rechner, TLS bis
   zum Reverse-Proxy vor dem Hub), `ssh` (dasselbe HTTP, getunnelt; noch nicht gebaut) oder
   `local` (Funktionsaufruf im selben Prozess, mit denselben Prüfungen). Dazu `http` ohne TLS,
-  nur für `localhost` — zum Testen des HTTP-Wegs auf einem Rechner.
+  nur für `localhost` — zum Testen des HTTP-Wegs auf einem Rechner; Adresse
+  `http://localhost:7434/hub` (der Vertrag liegt unter **/hub**).
 - **https** — Transport zu einem Hub auf einem anderen Rechner: `--address
-  https://<host>[:<port>][/<pfad>]`; ein Pfad ist der Präfix, unter dem der Proxy den Hub
-  anbietet (`/kephhub`), die Vorgänge liegen unter `<adresse>/v1/…`. Der Node prüft das
+  https://<host>[:<port>]/<präfix>/hub`, etwa `https://<name>/kephalaion/hub`; der Pfad ist
+  ein Präfix, die Vorgänge liegen unter `<adresse>/v1/…`: Der Proxy nimmt seinen Anteil
+  (`/kephalaion`) weg, der Hub-Listener bedient `/hub/v1/…`. Der Node prüft das
   Zertifikat gegen die System-Roots oder, mit
   `--ca-file`, gegen die **ca** des Eintrags; TLS mindestens 1.2, HTTP/1.1, kein
   Client-Zertifikat — die Identität bleibt das Token. Scheitert die Prüfung, geht kein Token
@@ -99,11 +102,28 @@ Ausführlich: [`konzept.md`](konzept.md).
   `show` nennt Subject, Gültigkeit und SHA-256-Fingerabdruck, `list` „ja“ oder „–“; im Export
   ab Format 7.
 - **reverse proxy** — der Dienst vor dem Hub auf dessen Rechner (Caddy), der nach außen TLS
-  spricht und `/v1/*` an den Hub auf Loopback weiterreicht, mit `Host` auf dessen
+  spricht und `/kephalaion/hub/*` an den Hub auf Loopback weiterreicht — nur seinen Präfix
+  nimmt er weg (`uri strip_prefix /kephalaion`) —, mit `Host` auf dessen
   Loopback-Adresse gesetzt (`header_up Host {upstream_hostport}`). Der Hub bleibt unverändert
   und lauscht weiter nur auf Loopback; Zertifikat, ACME und Härtung liegen beim Proxy. Im
   Log des Hubs steht die Adresse des Aufrufers als `via` (aus `X-Forwarded-For`). Aufbau in
   [`installation.md`](installation.md).
+- **/hub** (Hub-Pfad) — der Ort des Vertrags am Hub-Listener von `serve`: `POST
+  /hub/v1/<vorgang>`. Die Adresse eines **hub entry** endet darauf (`http://localhost:7434/hub`,
+  hinter einem Proxy `https://<name>/kephalaion/hub`), der Client hängt `/v1/<vorgang>` an;
+  `hub init` und `status` nennen sie. `GET /hub` und `/hub/` selbst antworten mit einer Zeile
+  Text ohne Version („Kephalaion Hub. Nodes: POST /hub/v1/<vorgang>“) — diese Route liegt nach
+  außen ohne Anmeldung. `/v1/…` an der Wurzel (die alte Form ohne `/hub`) ist 404 ohne
+  Vertragsform mit dem Hinweis auf `/hub`; `check` gibt ihn weiter, und bei `rotate` und
+  den Schreibvorgängen gilt so ein 404 als „nicht erreicht“ (nichts geschehen).
+- **greeting** (Begrüßung) — die Antwort des Hub-Listeners an seiner Wurzel (`GET /`, auch
+  `HEAD`): eine kurze Textnachricht mit Name, Rolle und Version („Kephalaion <version>, Rolle
+  hub. Der Hub antwortet unter /hub/v1/<vorgang>.“), `text/plain`, `Cache-Control: no-store`,
+  kein HTML, keine Links, nie eine Umleitung — ein Lebenszeichen für `curl` und den Browser,
+  keine GUI. Hinter einem Proxy liegt sie unter dessen Präfix (`/kephalaion/`) und gehört
+  hinter eine Anmeldung, weil sie die Version nennt; alles andere an der Wurzel ist 404
+  `text/plain` („unbekannter Pfad“), auch ein Pfad mit `//`, `.` oder `..`, den `ServeMux`
+  sonst umleitete.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
 
@@ -344,7 +364,10 @@ Ausführlich: [`konzept.md`](konzept.md).
   Node-Namen und erlaubte Collections und merkt beim ersten Kontakt die `hub_id`. Bei `https`
   erklärt es, was schiefgeht: Zertifikat nicht vertraut (mit Aussteller; `--ca-file`?), gilt
   nicht für den Host, abgelaufen; der Proxy antwortet, aber der Hub dahinter nicht (502,
-  503); die Host-Prüfung des Hubs schlägt fehl (403: setzt der Proxy `Host`?).
+  503); die Host-Prüfung des Hubs schlägt fehl (403: setzt der Proxy `Host`?); der Pfad ist
+  nicht der Hub (404 ohne Vertragsform: fehlt **/hub** am Ende der Adresse, oder kennt der
+  Proxy die Route nicht?); eine Anmeldung des Proxys (401: Route hinter `forward_auth`, oder
+  die Adresse ohne `/hub` landet in der Anmeldung vor dem Rest).
   `kephalaion node account check <hub> <account>`: `whoami` mit Account-Teil, ob ein Token
   gilt; löst ein liegengebliebenes `pending` auf.
 - **--create** — `kephalaion node hub add <alias> --transport local --create`: legt den Node

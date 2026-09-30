@@ -268,12 +268,15 @@ Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 
 Der Hub lauscht nur auf Loopback und spricht kein TLS — das bleibt so. Ein Node auf einem
 anderen Rechner erreicht ihn über einen **Reverse-Proxy auf dem Rechner des Hubs** (hier
-Caddy), der nach außen `https` spricht, TLS beendet und `/v1/*` an `localhost:7434`
-weiterreicht. Der Hub braucht dafür keine Änderung und keine Einstellung: Der Proxy setzt
-`Host` auf die Loopback-Adresse des Hubs, damit dessen Host-Prüfung gilt (entschieden am
-2026-09-28, [`konzept.md`](konzept.md), „Kommunikation“). Die Identität bleibt das Token;
-TLS verschlüsselt und weist den Server aus. Ein Node, dessen Zertifikatsprüfung scheitert,
-schickt kein Token.
+Caddy), der nach außen `https` spricht, TLS beendet und `/kephalaion/hub/*` an
+`localhost:7434` weiterreicht. Der Hub braucht dafür keine Änderung und keine Einstellung:
+Der Proxy nimmt nur seinen Präfix `/kephalaion` weg — das Binary ordnet seine Teile selbst,
+der Hub-Listener bedient den Vertrag unter `/hub/` und antwortet an seiner Wurzel mit einer
+Begrüßung — und setzt `Host` auf die Loopback-Adresse des Hubs, damit dessen Host-Prüfung
+gilt (entschieden am 2026-09-28 und 2026-09-29, [`konzept.md`](konzept.md),
+„Kommunikation“). Die Adresse für Nodes ist `https://<name>/kephalaion/hub`. Die Identität
+bleibt das Token; TLS verschlüsselt und weist den Server aus. Ein Node, dessen
+Zertifikatsprüfung scheitert, schickt kein Token.
 
 ### Caddyfile
 
@@ -284,7 +287,8 @@ Name statt der IP, und die Zeile `tls internal` entfällt:
 ```text
 https://9.141.8.157 {
     tls internal
-    handle /v1/* {
+    handle /kephalaion/hub/* {
+        uri strip_prefix /kephalaion
         request_body {
             max_size 8MiB
         }
@@ -301,14 +305,23 @@ https://9.141.8.157 {
 }
 ```
 
-- Nur `/v1/*` geht zum Hub, alles andere ist 404 — der Proxy zeigt nach außen nichts vom
-  Hub, was der Vertrag nicht kennt.
-- Bedient der Proxy schon andere Dienste unter demselben Namen (eine Anmeldung per
-  `forward_auth` davor, eine Webseite), bekommt der Hub einen **Präfix**: statt `handle
-  /v1/*` ein `handle_path /kephhub/*` mit demselben Inhalt, vor dem Sammel-`handle` und ohne
-  `forward_auth` (Nodes sind Maschinen und weisen sich per Token aus). `handle_path` nimmt
-  `/kephhub` weg, der Hub sieht `/v1/…`; der Node trägt die Adresse mit dem Präfix ein
-  (`--address https://<name>/kephhub`), der Client hängt `/v1/<vorgang>` an.
+- Nur `/kephalaion/hub/*` geht zum Binary, alles andere ist 404 — der Proxy zeigt nach außen
+  nichts vom Hub, was der Vertrag nicht kennt, außer dem kurzen Text an `/kephalaion/hub/`
+  (ohne Version). `uri strip_prefix /kephalaion` nimmt nur den Präfix des Proxys weg; der
+  Hub-Listener sieht `/hub/v1/…` und bedient den Vertrag dort. Der Node trägt die Adresse
+  mit `/hub` am Ende ein (`--address https://<name>/kephalaion/hub`), der Client hängt
+  `/v1/<vorgang>` an. Ein anderer Präfix als `/kephalaion` geht ebenso; `/hub` gehört dem
+  Binary.
+- **Option — der Rest von `/kephalaion/*` nach außen:** Wer die Begrüßung an der Wurzel
+  (später eine GUI) zeigen will, stellt eine Anmeldung davor (`forward_auth` auf einen
+  Auth-Dienst): ein zweiter Block `handle /kephalaion/*` mit `forward_auth`, ebenfalls `uri
+  strip_prefix /kephalaion` und demselben `reverse_proxy`, dazu `redir /kephalaion
+  /kephalaion/ 308` vor beiden. Der Hub-Block bleibt ohne Anmeldung (Nodes sind Maschinen
+  und weisen sich per Token aus) und greift zuerst — Caddy sortiert gleiche Direktiven nach
+  Pfadlänge, deshalb `handle` statt `handle_path` in beiden Blöcken. Die Begrüßung nennt die
+  Version; deshalb gehört sie hinter die Anmeldung. Ohne Sitzung antwortet dann dort der
+  Auth-Dienst (302 oder 401), nie das Binary — Proben gegen die Wurzel gehen nur auf dem
+  Rechner des Hubs (unten).
 - `header_up Host {upstream_hostport}` schickt `Host: localhost:7434`; genau das verlangt der
   Hub (`vertrag.md`, „Host“). Ohne die Zeile antwortet er 403, und `node hub check` sagt es.
 - `request_body max_size 8MiB` liegt über den 7 MiB, die der Hub für einen Schreibvorgang
@@ -317,6 +330,20 @@ https://9.141.8.157 {
 - Das Zugriffslog als Datei ist die Grundlage für fail2ban (siehe „Bekannte Grenze“).
 - Prüfen vor dem Einspielen: `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`,
   danach `systemctl reload caddy`.
+- **Proben.** Von außen, ohne Token: `curl https://<name>/kephalaion/hub/` → 200, `Kephalaion
+  Hub. Nodes: POST /hub/v1/<vorgang>` (ohne Version); `curl -X POST
+  https://<name>/kephalaion/hub/v1/whoami` → 401 in Vertragsform (`unauthenticated`, vom Hub —
+  zählt bei einer Ratenbegrenzung des Proxys als Fehlversuch, also nicht wiederholen);
+  `curl https://<name>/kephalaion/hub/nix` → 404 in Vertragsform (`invalid`) vom Hub; ohne
+  die Option oben `curl https://<name>/kephalaion/` → 404 des Proxys. Auf dem Rechner des
+  Hubs: `curl http://localhost:7434/` → Begrüßung mit Version (`Kephalaion <version>, Rolle
+  hub.`); `curl -X POST http://localhost:7434/v1/whoami` → 404 `text/plain` mit dem Hinweis
+  „der Vertrag liegt unter /hub/v1/… — fehlt /hub am Ende der Adresse des Hub-Eintrags?“.
+  Vom Node: `node hub check <alias>` — mit `/hub` „erreichbar“; ohne `/hub` „der Pfad ist
+  nicht der Hub (HTTP 404: …): fehlt /hub am Ende der Adresse …“ (404 des Proxys oder der
+  Wurzel), hinter der Anmeldung der Option „eine Anmeldung des Proxys, nicht der Hub (HTTP
+  401: …): … oder fehlt /hub am Ende der Adresse?“. Kein Pfad des Binarys antwortet mit einer
+  Umleitung.
 
 ### Zertifikat: zwei Wege
 
@@ -327,9 +354,9 @@ Der Code kann beide; welcher gilt, entscheidet der Betrieb.
    holt das Zertifikat selbst bei Let's Encrypt: per HTTP-01 muss **Port 80 für alle offen**
    sein (nur für die Prüfung, dort gibt es keine Inhalte; auch bei jeder Verlängerung), oder
    per DNS-01 mit dem DNS-Plugin des Anbieters (nicht für `cloudapp.azure.com`, die Zone
-   gehört Azure). Die Nodes brauchen keine CA: `node hub add … --address https://<name>` ohne
-   `--ca-file`, das Zertifikat gilt gegen die System-Roots. Nur mit dem Namen, nicht mit der
-   IP — das Zertifikat gilt für den Namen.
+   gehört Azure). Die Nodes brauchen keine CA: `node hub add … --address
+   https://<name>/kephalaion/hub` ohne `--ca-file`, das Zertifikat gilt gegen die
+   System-Roots. Nur mit dem Namen, nicht mit der IP — das Zertifikat gilt für den Namen.
 2. **Ohne Namen (nur IP).** Let's Encrypt scheidet aus. Entweder Caddys eigene CA (`tls
    internal`: Caddy stellt auch für eine IP-Adresse ein Zertifikat aus) oder eine eigene,
    offline geführte CA mit einem Server-Zertifikat mit IP-SAN (`tls /etc/caddy/hub.crt
@@ -359,10 +386,10 @@ kephalaion hub node grant wsl-kleist test
 
 # Am Node (Weg 1, Name):
 read -rs TOKEN; printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
-  --transport https --address https://hub.example.org --token-stdin; unset TOKEN
+  --transport https --address https://hub.example.org/kephalaion/hub --token-stdin; unset TOKEN
 # Am Node (Weg 2, IP mit CA):
 printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
-  --transport https --address https://9.141.8.157 --ca-file ~/vm-ca.pem --token-stdin
+  --transport https --address https://9.141.8.157/kephalaion/hub --ca-file ~/vm-ca.pem --token-stdin
 
 kephalaion node hub check vm          # erreichbar, hub_id, Node-Name, erlaubte Collections
 kephalaion node collection add vm:test
@@ -372,11 +399,15 @@ kephalaion node sync vm
 `node hub check` nennt, was schiefgeht: „Zertifikat von … nicht vertraut (Aussteller …;
 --ca-file?)“, „Zertifikat gilt nicht für …“, „Zertifikat abgelaufen seit …“, „Proxy
 antwortet, aber der Hub dahinter nicht (HTTP 502)“ (läuft `kephalaion serve`?),
-„Host-Prüfung des Hubs schlägt fehl (HTTP 403)“ (fehlt `header_up Host`?), „der Proxy kennt
-den Pfad nicht (HTTP 404)“ (stimmt der Präfix, steht die Route?), „eine Anmeldung des
-Proxys, nicht der Hub (HTTP 401)“ (die Route steht hinter `forward_auth`; eine Weiterleitung
-zur Anmeldung meldet der Client als 3xx). Der Port 443 ist in der Adresse weglassbar. Am Hub steht jede Anfrage im Log mit der Adresse des Aufrufers aus
-`X-Forwarded-For` (`via`), ohne Token; im Caddy-Log stehen 200 auf `/v1/…` und 404 daneben.
+„Host-Prüfung des Hubs schlägt fehl (HTTP 403)“ (fehlt `header_up Host`?), „der Pfad ist
+nicht der Hub (HTTP 404)“ (fehlt `/hub` am Ende der Adresse, oder kennt der Proxy die Route
+nicht? — der Text nach dem Status sagt, wer antwortete: die Wurzel des Binarys nennt `/hub`),
+„eine Anmeldung des Proxys, nicht der Hub (HTTP 401)“ (die Route steht hinter
+`forward_auth`, oder die Adresse ohne `/hub` landet in der Anmeldung vor dem Rest; eine
+Weiterleitung zur Anmeldung meldet der Client als 3xx). Ein 404 ohne Vertragsform gilt auch
+bei `rotate` und den Schreibvorgängen als „nicht erreicht“ (nichts geschehen), nicht als
+unklar. Der Port 443 ist in der Adresse weglassbar. Am Hub steht jede Anfrage im Log mit der Adresse des Aufrufers aus
+`X-Forwarded-For` (`via`), ohne Token; im Caddy-Log stehen 200 auf `/kephalaion/hub/v1/…` und 404 daneben.
 
 ### Ansible
 
@@ -449,15 +480,17 @@ Handarbeit (`hub node add`, Übergabe per SSH).
 
 Der Hub begrenzt Fehlversuche nicht ([`vertrag.md`](vertrag.md), „Bekannte Grenzen“); nach
 außen wird das dringlicher. Caddy hat ohne Plugin keine Ratenbegrenzung. Übergang: fail2ban
-auf `/var/log/caddy/kephalaion.log` (401 und 403 auf `/v1/`), die Allowlist in der NSG, und
+auf `/var/log/caddy/kephalaion.log` (401 und 403 auf `/kephalaion/hub/v1/`), die Allowlist in der NSG, und
 die Begrenzung am Hub als eigene Aufgabe.
 
 ### Auf dem Rechner des Hubs zu bestätigen
 
 Zwei Annahmen dieser Anleitung sind nur aus der Caddy-Dokumentation belegt, nicht im Betrieb:
 dass `header_up Host {upstream_hostport}` beim Hub als `Host: localhost:7434` ankommt (sonst
-403, siehe `node hub check`), und ob die öffentliche IP über LB/NAT kommt und dort eine
-eigene Freigabe braucht.
+403, siehe `node hub check`; auf der Dev-VM am 2026-09-29 bestätigt), und ob die öffentliche
+IP über LB/NAT kommt und dort eine eigene Freigabe braucht. Seit Task 019 dazu: dass `uri
+strip_prefix /kephalaion` nur den Präfix wegnimmt und der Hub `/hub/v1/…` sieht (sonst 404
+mit dem Hinweis auf `/hub`, siehe „Proben“).
 
 ## Neue Schemafassung: node.db neu anlegen
 
@@ -576,7 +609,7 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`), `kephalaion:kephalaion`, `0700` |
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
-| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/v1/*` nach `localhost:7434` mit `header_up Host {upstream_hostport}`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
+| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
 
 Reihenfolge und Regeln:
 

@@ -193,19 +193,21 @@ kephalaion hub node add laptop-http --description "dieser Rechner, über HTTP"
 kephalaion hub node grant laptop-http team-x
 read -rs TOKEN            # Token einfügen, Enter
 printf '%s\n' "$TOKEN" | kephalaion node hub add test --node laptop-http --transport http \
-  --address http://localhost:7434 --token-stdin
+  --address http://localhost:7434/hub --token-stdin      # /hub: dort liegt der Vertrag
 unset TOKEN
 
 kephalaion status       # Collections, Accounts und Nodes am Hub, Hubs und Collections am Node
 ```
 
 Ohne `--create` trägt `node hub add` einen Node ein, den der Hub schon kennt: Name mit
-`--node`, Token über die Standardeingabe (`--token-stdin`). Ein Hub auf einem anderen Rechner
-ist `https` (`--address https://<host>[/<pfad>]`, der Pfad ist der Präfix am Proxy, etwa
-`/kephhub`): TLS beendet ein Reverse-Proxy auf seinem Rechner,
-das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA (`--ca-file
-<pfad>`, gespeichert wird der Inhalt); `node hub check` erklärt Zertifikatsfehler, einen Proxy
-ohne Hub dahinter und die Host-Prüfung — Aufbau in
+`--node`, Token über die Standardeingabe (`--token-stdin`). Die Adresse eines `serve` endet
+auf `/hub`: Der Hub-Listener bedient den Vertrag dort und antwortet an seiner Wurzel nur mit
+einer Begrüßung; `hub init` und `status` nennen die Adresse. Ein Hub auf einem anderen Rechner
+ist `https` (`--address https://<host>/<präfix>/hub`, etwa `https://<name>/kephalaion/hub`:
+der Präfix gehört dem Proxy, `/hub` dem Binary): TLS beendet ein Reverse-Proxy auf seinem
+Rechner, das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA
+(`--ca-file <pfad>`, gespeichert wird der Inhalt); `node hub check` erklärt Zertifikatsfehler,
+einen Proxy ohne Hub dahinter, die Host-Prüfung und eine Adresse ohne `/hub` — Aufbau in
 [`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“. `ssh`
 (`--address [user@]host[:port]`, optional `--ssh-key`) lässt sich eintragen, aber noch nicht
 benutzen. Namen von Collections, Nodes, Accounts und Hub-Aliasen bestehen aus
@@ -283,8 +285,10 @@ gibt das neue einmal aus. `rotate` wird nie wiederholt: Danach gilt das alte Tok
 ### serve und MCP
 
 `kephalaion serve` startet je eingerichteter Rolle einen Listener auf ihrem `listen`: den Hub
-für Nodes (`POST /v1/whoami|rotate|sync` und `/v1/create|write|delete|rename`, siehe
-[`docs/vertrag.md`](docs/vertrag.md)), den Node als MCP-Server für Clients unter `/mcp`. Als
+für Nodes (der Vertrag unter `/hub`: `POST /hub/v1/whoami|rotate|sync` und
+`/hub/v1/create|write|delete|rename`, siehe [`docs/vertrag.md`](docs/vertrag.md); an der
+Wurzel `/` eine kurze Begrüßung mit der Version, `/v1/…` dort ist 404 mit dem Hinweis auf
+`/hub`, nie eine Umleitung), den Node als MCP-Server für Clients unter `/mcp`. Als
 Dienst startet ihn `kephalaion service install` (siehe „Installation“); von Hand läuft er im
 Vordergrund, schreibt je Anfrage eine Zeile nach stderr (Methode, Pfad, Status, Dauer, Node- und
 Account-Namen, bei einem Schreibvorgang über MCP Vorgang, Hub und Fehlercode — nie ein Token,
@@ -313,7 +317,7 @@ einen Fehler beim ersten Mal und wenn sich seine Art ändert, und die Erholung:
 ```text
 2026-09-26T10:15:02+02:00 Abgleich im Hintergrund alle 30s
 2026-09-26T10:15:02+02:00 Abgleich privat: 3 Zeilen, Revision 7
-2026-09-26T10:15:02+02:00 Abgleich test gescheitert: Hub http://localhost:7434: dial tcp 127.0.0.1:7434: connect: connection refused
+2026-09-26T10:15:02+02:00 Abgleich test gescheitert: Hub http://localhost:7434/hub: dial tcp 127.0.0.1:7434: connect: connection refused
 2026-09-26T10:20:32+02:00 Abgleich test geht wieder
 ```
 
@@ -537,7 +541,7 @@ Eintrag `test` (`http`), während `serve` nicht läuft:
 Hub privat (hub_id 01M3ECGQP32QBHTGXERZSMVBWR): 1 Seite
   team-x: abgeglichen, 0 Zeilen, Revision 3
 Hub test: gescheitert
-node sync: Hub test: Hub http://localhost:7434: dial tcp 127.0.0.1:7434: connect: connection refused
+node sync: Hub test: Hub http://localhost:7434/hub: dial tcp 127.0.0.1:7434: connect: connection refused
 ```
 
 Collections, die der Hub nicht (mehr) erlaubt oder die der Node nicht mehr will

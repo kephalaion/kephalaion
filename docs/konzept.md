@@ -180,7 +180,9 @@ node:
   erreichen den Hub über einen Reverse-Proxy auf seinem Rechner, der TLS beendet und an
   `127.0.0.1:7434` weiterreicht (entschieden am 2026-09-28, Task 018; siehe „Kommunikation“).
   Ein Node-Eintrag mit `http` für den Test auf einem Rechner nennt die Adresse des Hubs:
-  `http://localhost:7434`.
+  `http://localhost:7434/hub` — der Hub-Listener bedient den Vertrag unter `/hub/`, an seiner
+  Wurzel antwortet er mit einer kurzen Begrüßung (Task 019, siehe „Kommunikation“);
+  `hub init` und `status` nennen die Adresse.
 - **Alles andere steht in der Datenbank der Rolle** und wird nur über die CLI geändert:
   die Hubs eines Nodes mit Transport und Token, die Collections, die ein Node haben will, am
   Hub Collections, Nodes und Accounts. Eine Quelle, eine Prüfung.
@@ -300,7 +302,9 @@ derselbe Eingang.
 Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung im Pfad, kein
 MCP; es ist zustandslos, die Revision trägt der Node. Gebaut ist es als `POST /v1/whoami`,
 `/v1/rotate`, `/v1/sync` und — seit Task 014 — `/v1/create`, `/v1/write`, `/v1/delete`,
-`/v1/rename` (Einzelheiten in [`vertrag.md`](vertrag.md), „HTTP“), der Node meldet
+`/v1/rename` (Einzelheiten in [`vertrag.md`](vertrag.md), „HTTP“) — relativ zur Adresse des
+Hub-Eintrags, die auf `/hub` endet: Der Hub-Listener von `serve` bedient den Vertrag unter
+`/hub/`, er sieht `/hub/v1/…` (Task 019) —, der Node meldet
 sich mit `X-Keph-Node` und `Authorization: Bearer <token>` an. Auf einem Rechner ist es
 Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem anderen Rechner
 `https`.
@@ -317,6 +321,21 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
   Token hinaus. Die Zertifikatswege und das Caddyfile stehen in
   [`installation.md`](installation.md). Neue Revisionen meldet der Hub später über einen
   Ereignisstrom (Server-Sent Events) oder Long-Polling; das Delta holt der Node danach selbst.
+- **Das Binary hinter einem Präfix (entschieden am 2026-09-29, gebaut in Task 019).** Von
+  außen ist Kephalaion ein Ort unter dem Proxy (`https://<name>/kephalaion/`), unter dem das
+  Binary seine Teile selbst ordnet: Der Proxy nimmt nur seinen Präfix weg (`uri strip_prefix
+  /kephalaion`) und reicht an den Hub-Listener; der antwortet an seiner Wurzel mit einer
+  kurzen **Begrüßung** (Name, Rolle, Version; `text/plain`, kein HTML, keine Links), bedient
+  den Vertrag unter `/hub/` — die Adresse eines Hub-Eintrags endet deshalb auf `/hub`, lokal
+  `http://localhost:7434/hub` —, und dort hat später eine GUI Platz (`/gui/` o. ä.). `/hub`
+  und `/hub/` selbst liefern einen kurzen Text ohne Version, damit ein Browser etwas Lesbares
+  sieht; `/v1/…` an der Wurzel (die alte Adresse ohne `/hub`) ist 404 ohne Vertragsform mit
+  dem Hinweis auf `/hub`, den `node hub check` weitergibt. Das Binary kennt seinen Präfix
+  nicht und sendet nie eine Umleitung (eine absolute `Location` ginge am Proxy vorbei ins
+  Leere); eine GUI arbeitet später mit relativen Pfaden oder liest `X-Forwarded-Prefix`.
+  Nach außen ohne Anmeldung geht nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
+  dem Token aus); wer den Rest zeigt, stellt eine Anmeldung davor — die Begrüßung nennt die
+  Version. Der MCP-Eingang des Nodes (`/mcp` auf 7433) ist davon unberührt.
 - **Über SSH (geparkt).** Der Node hält eine stehende SSH-Verbindung (Go-Bibliothek, kein
   externes `ssh`), mit Keepalive und Neuaufbau, und tunnelt dasselbe HTTP zum Hub auf
   Loopback. Derselbe Anschluss wie `https` (`connector` in `cmd/kephalaion`); Entwurf in
@@ -1888,6 +1907,12 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   (HTTPS, SSH, lokal im selben Prozess). Entschieden am 2026-09-28: `https` zuerst, über
   einen Reverse-Proxy vor dem Hub (gebaut in Task 018); `ssh` später, am selben Anschluss.
   Offen: die Begrenzung von Fehlversuchen, jetzt wo der Hub nach außen spricht.
+- **GUI unter `/kephalaion/`:** vorgemerkt. Seit Task 019 hängt das ganze Binary unter dem
+  Präfix des Proxys, die Wurzel liefert eine Begrüßung, der Hub liegt unter `/hub/`; eine GUI
+  bekäme ihren eigenen Ort daneben (`/gui/` o. ä.), hinter der Anmeldung des Proxys, und
+  arbeitete mit relativen Pfaden oder `X-Forwarded-Prefix` (Caddy: `header_up
+  X-Forwarded-Prefix /kephalaion`). Offen: ob auch der Node (MCP, `/mcp` auf 7433) unter
+  `/kephalaion/` erscheint; ein Prozess mit beiden Rollen hat weiter zwei Listener.
 - **Node als Dienst:** entschieden — er läuft ständig, pro User als Benutzerdienst oder
   global als Systemdienst; k-playbook prüft beim Briefing zusätzlich. Eingerichtet mit
   systemd, auf macOS (nur pro User) mit launchd (2026-09-26, „Installation und Betrieb“;

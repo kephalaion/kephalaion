@@ -182,7 +182,8 @@ Nacharbeit des Nutzers)
     502/503 des Proxys und die Host-Prüfung (403); Exportformat 7 mit `ca`
     (`vertrag.md`, „HTTP“; `konzept.md`, „Kommunikation“); Nachtrag nach Entscheidung des
     Nutzers vom 2026-09-29: die Adresse darf einen Pfad als Präfix tragen
-    (`https://<name>/kephhub`, Caddy `handle_path`), `check` erklärt dazu 404 und 401 des
+    (`https://<name>/kephhub`, Caddy `handle_path`; seit Task 019 `…/kephalaion/hub` mit
+    `uri strip_prefix /kephalaion`), `check` erklärt dazu 404 und 401 des
     Proxys;
   - Hub unverändert, nur `reqlog` nennt hinter dem Proxy die Adresse des Aufrufers aus
     `X-Forwarded-For` (`via`); `serve` bleibt auf Loopback;
@@ -195,10 +196,38 @@ Nacharbeit des Nutzers)
     (Abgleich, `create` über MCP, Anstoß, falsche CA). Abnahme auf der VM: Etappe 4, siehe
     „Zu testen“ (Befund `material/befunde/transport-entfernt.md`).
 
+- **Task 019 — Das Binary hinter einem Präfix: Begrüßung an der Wurzel, der Hub unter
+  `/hub/`** (2026-09-30, Etappen 1–3):
+  - Hub-Listener von `serve` (`newHubHandler`): `GET /` eine Begrüßung mit Version
+    (`text/plain`, `Cache-Control: no-store`), `/hub` und `/hub/` ein kurzer Text ohne
+    Version, unter `/hub/` der Vertrag (Fassung 1 unverändert, `http.StripPrefix`), `/v1/…`
+    an der Wurzel 404 `text/plain` mit dem Hinweis auf `/hub`, alles andere 404 `text/plain`;
+    nie ein 3xx — `/hub` und `/v1` eigens registriert, unsaubere Pfade (`//`, `.`, `..`) vor
+    dem Mux mit 404 statt der 301-Bereinigung von `ServeMux`; `loopback.Guard` davor;
+  - Vertrag: der Pfad ist relativ zur Adresse des Hub-Eintrags, die eines `serve` endet auf
+    `/hub`; ein 404 ohne Vertragsform gilt als „nicht erreicht“ — der Client setzt
+    `sent: false`, `rotate` und die Schreibvorgänge melden den Fehler mit dem Text des Hubs
+    statt „unklar“ (`vertrag.md`, „Ausgang und Wiederholung“, „HTTP“);
+  - Adressen: `http://localhost:7434/hub`, hinter einem Proxy `https://<name>/kephalaion/hub`
+    (der Proxy nimmt nur `/kephalaion` weg); Hilfe von `node hub add`, `hub init` und
+    `status` nennen sie; `node hub check` sagt bei 404 „der Pfad ist nicht der Hub … fehlt
+    /hub am Ende der Adresse, oder kennt der Proxy die Route nicht?“, bei 401 „… oder fehlt
+    /hub am Ende der Adresse (dann landet die Anfrage in der Anmeldung vor dem Rest)?“;
+  - Doku: `konzept.md` (config, „Kommunikation“: das Binary hinter einem Präfix, GUI später),
+    `installation.md` (Caddyfile in der allgemeinen Form mit `handle /kephalaion/hub/*` und
+    `uri strip_prefix /kephalaion`, die Anmeldung vor dem Rest als Option, Proben nach Ort),
+    `begriffe.md` (`/hub`, `greeting`), README, Hilfetexte;
+  - Tests: `TestServeHubListener` (22 Pfade und Methoden, nie `Location`),
+    `TestNotFoundWithoutContract`, `TestAccountRotateOldAddress`, `TestNodeHubCheckHTTPS`
+    gegen `proxyHubAt` mit `newHubHandler` (Präfix `/kephalaion`, Rest 401 bzw. 404).
+    Abnahme auf der VM: Etappe 4, siehe „Zu testen“ (Befund
+    `material/befunde/transport-entfernt.md`).
+
 ## In Arbeit
 
-- **Task 018, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
-  `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“; siehe „Zu testen“.
+- **Task 018 und 019, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
+  `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“ (mit `/kephalaion/hub` und
+  `uri strip_prefix /kephalaion`); siehe „Zu testen“.
 
 ## Zu tun
 
@@ -300,17 +329,36 @@ Nacharbeit des Nutzers)
 ## Zu testen
 
 - **Task 018, Etappe 4 — Abnahme des HTTPS-Wegs auf der VM** (Nacharbeit des Nutzers, nicht
-  Teil des Laufs): Binary mit Task 018 auf VM und WSL, `node.db` beidseits neu anlegen
-  (Schema 5), Block `handle_path /kephhub/*` im Caddyfile der VM mit `header_up Host
-  {upstream_hostport}` und ohne `forward_auth`, `hub node add wsl-kleist`; in der WSL `node
-  hub add vm … --transport https --address
-  https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephhub` (Weg 1, ohne CA),
-  `node hub check vm`, `node collection add vm:test`, `node sync vm`, `create` über MCP;
-  `journalctl -u kephalaion` mit `via` und ohne Token, Caddy-Log 200 auf `/v1/…`, 404 daneben.
-  Schritte mit Ansible-Spalte: `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“.
-  Danach den Befund „Proxy setzt Host, Hub unverändert“ bestätigen oder widerlegen
-  (`material/befunde/transport-entfernt.md`, unbestaetigt bis dahin) und diesen Eintrag
-  abhaken; die Annahme zu LB/NAT vor `9.141.8.157` ebenso.
+  Teil des Laufs; zusammen mit Task 019, nächster Eintrag): Binary mit Task 018 und 019 auf VM
+  und WSL, `node.db` beidseits neu anlegen (Schema 5), Blöcke `handle /kephalaion/hub/*`
+  (ohne `forward_auth`, `uri strip_prefix /kephalaion`, `header_up Host
+  {upstream_hostport}`) und `handle /kephalaion/*` (mit `forward_auth`) im Caddyfile der VM,
+  `hub node add wsl-kleist`; in der WSL `node hub add vm … --transport https --address
+  https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephalaion/hub` (Weg 1,
+  ohne CA), `node hub check vm`, `node collection add vm:test`, `node sync vm`, `create` über
+  MCP; `journalctl -u kephalaion` mit `via` und ohne Token, Caddy-Log 200 auf
+  `/kephalaion/hub/v1/…`. Schritte mit Ansible-Spalte: `~/dev/vm/kephalaion/README.md`,
+  „Abnahme des HTTPS-Wegs“. Danach den Befund „Proxy setzt Host, Hub unverändert“ bestätigen
+  oder widerlegen (`material/befunde/transport-entfernt.md`; `Host` am 2026-09-29 von der WSL
+  aus schon bestätigt) und diesen Eintrag abhaken; die Annahme zu LB/NAT vor `9.141.8.157`
+  ebenso.
+- **Task 019, Etappe 4 — Abnahme auf der VM: Wurzel, `/hub/`, alte Adresse** (Nacharbeit des
+  Nutzers, nicht Teil des Laufs; vorgeschrieben 2026-09-30 in `~/dev/vm/kephalaion/README.md`,
+  „Abnahme des HTTPS-Wegs“, W7 und „Vorab“): im Hub-Block des Caddyfile `uri strip_prefix
+  /kephalaion` statt `/kephalaion/hub` (`make caddy`), zusammen mit dem neuen Binary; die
+  Adresse `…/kephalaion/hub` bleibt. Proben getrennt nach Ort — von außen ohne Sitzung
+  `curl https://<name>/kephalaion/hub/` → 200 Hub-Text ohne Version, `POST
+  …/kephalaion/hub/v1/whoami` → 401 in Vertragsform (einmal), `…/kephalaion/hub/nix` → 404
+  `invalid`; `…/kephalaion/` → 302 und `POST …/kephalaion/v1/whoami` → 401 des Auth-Proxys
+  sind erwartet; auf der VM lokal `curl http://localhost:7434/` → Begrüßung mit Version, `POST
+  http://localhost:7434/v1/whoami` → 404 `text/plain` mit Hinweis; `node hub check` mit alter
+  Adresse `https://<name>/kephalaion` → 401 des Auth-Proxys mit dem `/hub`-Hinweis (einmal,
+  bei gestopptem `serve` der WSL). **fail2ban** zählt die 401 (10 in 10 min sperren 80/443):
+  401-Proben je genau einmal, kein Raten; ein `https`-Eintrag ohne `/hub` bei laufendem
+  `serve` holt je `sync_interval` ein 401 — Eintrag sofort zurücksetzen. `vmhttp` auf
+  `http://localhost:7434/hub` setzen oder entfernen. Danach Befund in
+  `material/befunde/transport-entfernt.md` (Wurzel, `/hub/`, Hinweis; bestaetigt oder
+  widerlegt) und diesen Eintrag abhaken.
 - **Task 008:** Abgleich im Hintergrund mit einem echten Client über längere Zeit; der
   Race-Detector lief über `cmd/kephalaion` und `internal/node/...` sauber. (Der Weg, `node.db`
   nach einem Sprung der Schemafassung neu anzulegen — Review-Punkt 9, `init` bricht bei
