@@ -201,8 +201,9 @@ kephalaion status       # Collections, Accounts und Nodes am Hub, Hubs und Colle
 
 Ohne `--create` trägt `node hub add` einen Node ein, den der Hub schon kennt: Name mit
 `--node`, Token über die Standardeingabe (`--token-stdin`). Die Adresse eines `serve` endet
-auf `/hub`: Der Hub-Listener bedient den Vertrag dort und antwortet an seiner Wurzel nur mit
-einer Begrüßung; `hub init` und `status` nennen die Adresse. Ein Hub auf einem anderen Rechner
+auf `/hub`: Der Hub-Listener bedient den Vertrag dort; an seiner Wurzel antwortet er einem
+Browser mit der Weboberfläche, sonst mit einer Begrüßung. `hub init` und `status` nennen die
+Adresse. Ein Hub auf einem anderen Rechner
 ist `https` (`--address https://<host>/<präfix>/hub`, etwa `https://<name>/kephalaion/hub`:
 der Präfix gehört dem Proxy, `/hub` dem Binary): TLS beendet ein Reverse-Proxy auf seinem
 Rechner, das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA
@@ -287,7 +288,8 @@ gibt das neue einmal aus. `rotate` wird nie wiederholt: Danach gilt das alte Tok
 `kephalaion serve` startet je eingerichteter Rolle einen Listener auf ihrem `listen`: den Hub
 für Nodes (der Vertrag unter `/hub`: `POST /hub/v1/whoami|rotate|sync` und
 `/hub/v1/create|write|delete|rename`, siehe [`docs/vertrag.md`](docs/vertrag.md); an der
-Wurzel `/` eine kurze Begrüßung mit der Version, `/v1/…` dort ist 404 mit dem Hinweis auf
+Wurzel `/` für einen Browser die Weboberfläche (siehe „Weboberfläche“), sonst eine kurze
+Begrüßung mit der Version, `/v1/…` dort ist 404 mit dem Hinweis auf
 `/hub`, nie eine Umleitung), den Node als MCP-Server für Clients unter `/mcp`. Als
 Dienst startet ihn `kephalaion service install` (siehe „Installation“); von Hand läuft er im
 Vordergrund, schreibt je Anfrage eine Zeile nach stderr (Methode, Pfad, Status, Dauer, Node- und
@@ -447,6 +449,30 @@ Collection und die Zeile des Accounts schon trägt — nach `hub account grant` 
 nächsten Abgleich; hat der Node den Hub noch nie abgeglichen, nennt die Meldung
 `kephalaion node sync <hub>` als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
 Admins am Hub, ohne Node.
+
+### Weboberfläche
+
+Der Hub-Listener zeigt einem Browser an seiner Wurzel eine Seite — lokal
+`http://localhost:7434/`, hinter einem Reverse-Proxy unter dessen Präfix, etwa
+`https://<name>/kephalaion/`. Sie fragt nach dem **Kephalaion-Account** und seinem
+**Account-Token** und zeigt dann, worauf der Account am Hub Zugriff hat: User, Beschreibung
+und je Collection lesen, schreiben (`write`: Neues und Eigenes), Fremdes ändern (`supersede`)
+und die Scopes `vendor/<name>`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie
+nichts; Accounts, Rechte und Nodes bleiben in der Kommandozeile (`hub account …`).
+
+- **Welches Token:** das des Accounts — das, was ein Client als `X-Keph-Token-<hub>` schickt,
+  meist in `~/.config/kephalaion/tokens/<hub>/<account>.token`, beginnt mit `keph_`. Nicht das
+  Passwort einer Anmeldung vor der Seite (des Proxys) und nicht das Token eines Nodes. Was
+  nicht wie ein Token aussieht, schickt die Seite nicht ab.
+- **Was mit dem Token geschieht:** Es geht nur für die eine Prüfung an den Hub (`POST
+  gui/api/whoami`, im Body), wird nirgends gespeichert und steht nie in der Adresse oder im
+  Log — dort steht nur der Account. Nach einem Neuladen fragt die Seite erneut. Unbekannter
+  Account, falsches Token und gesperrt ergeben dieselbe Antwort.
+- **`curl`** bekommt an der Wurzel weiter die Begrüßung (`text/plain`); die Seite kommt nur,
+  wenn `Accept` `text/html` nennt: `curl -H 'Accept: text/html' http://localhost:7434/`.
+- **Nach außen** gehört die Seite hinter die Anmeldung eines Proxys, und ein falsches Token
+  kann dort als Fehlversuch zählen (fail2ban) — siehe
+  [`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“.
 
 ### Dokumente einspielen und abgleichen
 

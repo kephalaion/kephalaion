@@ -34,9 +34,11 @@ wird ohne Angabe gefunden, `upgrade --check [--json]` und `whoami` sagen, ob es 
 Version gibt und wie das Upgrade geht; ein CI-Job für macOS ist gebaut, derzeit aber
 abgeschaltet. Seit Task 018 erreicht ein Node einen Hub auf einem anderen Rechner über
 `https`: TLS beendet ein Reverse-Proxy auf dem Rechner des Hubs, der Hub bleibt auf Loopback
-(„Kommunikation“). Noch nicht gebaut: `ssh`, Suche, die übrigen Werkzeuge zum Schreiben
-(`create_numbered`, Stufe 3) und das Lauschen auf der Docker-Bridge. Die Überlegungen
-entstanden in k-playbook und sind am 2026-09-25 hierher umgezogen.
+(„Kommunikation“). Seit Task 020 zeigt der Hub-Listener einem Browser an seiner Wurzel eine
+Weboberfläche: Nach Account und Account-Token nennt sie, worauf der Account Zugriff hat;
+verwaltet wird weiter über die Kommandozeile. Noch nicht gebaut: `ssh`, Suche, die übrigen
+Werkzeuge zum Schreiben (`create_numbered`, Stufe 3) und das Lauschen auf der Docker-Bridge.
+Die Überlegungen entstanden in k-playbook und sind am 2026-09-25 hierher umgezogen.
 Begriffe nach [`begriffe.md`](begriffe.md): Sie sind englisch, die Dokumentation ist deutsch.
 
 Ausgangspunkt ist die lokale Wissensablage von k-playbook (`k-playbook-local/knowledge/`,
@@ -181,7 +183,8 @@ node:
   `127.0.0.1:7434` weiterreicht (entschieden am 2026-09-28, Task 018; siehe „Kommunikation“).
   Ein Node-Eintrag mit `http` für den Test auf einem Rechner nennt die Adresse des Hubs:
   `http://localhost:7434/hub` — der Hub-Listener bedient den Vertrag unter `/hub/`, an seiner
-  Wurzel antwortet er mit einer kurzen Begrüßung (Task 019, siehe „Kommunikation“);
+  Wurzel antwortet er einem Browser mit der Weboberfläche (Task 020), allem anderen mit einer
+  kurzen Begrüßung (Task 019, siehe „Kommunikation“);
   `hub init` und `status` nennen die Adresse.
 - **Alles andere steht in der Datenbank der Rolle** und wird nur über die CLI geändert:
   die Hubs eines Nodes mit Transport und Token, die Collections, die ein Node haben will, am
@@ -324,18 +327,59 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
 - **Das Binary hinter einem Präfix (entschieden am 2026-09-29, gebaut in Task 019).** Von
   außen ist Kephalaion ein Ort unter dem Proxy (`https://<name>/kephalaion/`), unter dem das
   Binary seine Teile selbst ordnet: Der Proxy nimmt nur seinen Präfix weg (`uri strip_prefix
-  /kephalaion`) und reicht an den Hub-Listener; der antwortet an seiner Wurzel mit einer
-  kurzen **Begrüßung** (Name, Rolle, Version; `text/plain`, kein HTML, keine Links), bedient
-  den Vertrag unter `/hub/` — die Adresse eines Hub-Eintrags endet deshalb auf `/hub`, lokal
-  `http://localhost:7434/hub` —, und dort hat später eine GUI Platz (`/gui/` o. ä.). `/hub`
-  und `/hub/` selbst liefern einen kurzen Text ohne Version, damit ein Browser etwas Lesbares
+  /kephalaion`) und reicht an den Hub-Listener. Der antwortet an seiner Wurzel einem Browser
+  (`Accept` nennt `text/html`) mit der **Weboberfläche** (Task 020, nächster Punkt), allem
+  anderen — `curl` — mit einer kurzen **Begrüßung** (Name, Rolle, Version; `text/plain`, kein
+  HTML, keine Links), beide mit `Vary: Accept`; die Teile der Weboberfläche liegen unter
+  `/gui/`. Den Vertrag bedient er unter `/hub/` — die Adresse eines Hub-Eintrags endet deshalb
+  auf `/hub`, lokal `http://localhost:7434/hub`. `/hub` und `/hub/` selbst liefern einen
+  kurzen Text ohne Version, damit ein Browser dort etwas Lesbares
   sieht; `/v1/…` an der Wurzel (die alte Adresse ohne `/hub`) ist 404 ohne Vertragsform mit
   dem Hinweis auf `/hub`, den `node hub check` weitergibt. Das Binary kennt seinen Präfix
   nicht und sendet nie eine Umleitung (eine absolute `Location` ginge am Proxy vorbei ins
-  Leere); eine GUI arbeitet später mit relativen Pfaden oder liest `X-Forwarded-Prefix`.
+  Leere); die Weboberfläche nennt deshalb nur relative Pfade (`gui/app.js`,
+  `gui/api/whoami`), `X-Forwarded-Prefix` liest das Binary nicht.
   Nach außen ohne Anmeldung geht nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
-  dem Token aus); wer den Rest zeigt, stellt eine Anmeldung davor — die Begrüßung nennt die
-  Version. Der MCP-Eingang des Nodes (`/mcp` auf 7433) ist davon unberührt.
+  dem Token aus); wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und
+  Weboberfläche nennen die Version. Der MCP-Eingang des Nodes (`/mcp` auf 7433) ist davon
+  unberührt.
+- **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020).** Wer im Browser
+  `https://<name>/kephalaion/` öffnet, sieht nach Eingabe von Account und Account-Token,
+  worauf der Account am Hub Zugriff hat: User, Beschreibung und alle Collections mit read,
+  write, supersede und den Scopes `vendor/<name>`, in Worten erklärt. Verwalten kann die Seite
+  nichts; das bleibt vorerst in der Kommandozeile.
+  - **Wo.** Die Seite liegt an der Wurzel des Hub-Listeners (`GET /` mit `text/html` in
+    `Accept`), ihre Teile unter `/gui/`: `gui/app.js`, `gui/style.css`, `gui/icon.svg` und der
+    Eingang `POST gui/api/whoami`. `/gui` und `/gui/` selbst und alles andere darunter sind 404.
+    Der Node-Listener (`/mcp`) bekommt nichts davon.
+  - **Was sie abfragt** ist die Anmeldung, die ein Client am Node schickt
+    (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`): Account und Account-Token, beide. Nur mit
+    dem Token müsste der Hub per Hash suchen; dafür fehlt der Index auf `accounts.token_hash`,
+    und der hieße eine neue Schemafassung. Die Seite sagt ausdrücklich, dass nicht das
+    Passwort der Anmeldung an der Seite (des Proxys) gemeint ist und nicht das Token eines
+    Nodes, und schickt nur ab, was wie ein Token aussieht (`keph_` und 43 Zeichen) — ein
+    versehentlich eingefügtes Passwort geht so nie an den Hub.
+  - **Ein eigener Eingang**, kein Vorgang des Vertrags ([`vertrag.md`](vertrag.md) bleibt
+    unberührt) und ohne Fassung, denn Seite und Eingang kommen aus demselben Binary: `whoami`
+    des Vertrags verlangt immer einen Node und nennt nur dessen Collections, ein Browser hat
+    nur Account und Token. Geprüft wird wie dort — Hash in konstanter Zeit, Vergleichshash
+    für unbekannte Accounts, gesperrt gilt nicht; unbekannter Account, falsches Token und
+    gesperrt sind dieselbe 401. Die Rechte kommen aus den lebenden `SYSTEM:A:`-Zeilen.
+  - **Das Token bleibt nicht liegen.** Es verlässt den Browser nur im Body dieser einen
+    Anfrage (`POST`, JSON), wird nirgends gespeichert (kein Web Storage, kein Cookie), steht
+    nie in einer Adresse und nie im Log (dort nur der Name des Accounts); nach der Antwort ist
+    das Feld leer, nach einem Neuladen fragt die Seite erneut.
+  - **Härtung.** Eine strenge Content-Security-Policy (nur Eigenes, kein Inline-Script, kein
+    Inline-Style, `form-action 'none'`, `frame-ancestors 'none'`), `no-store`, keine fremden
+    Quellen; der Eingang nimmt nur `POST` mit `Content-Type: application/json` und höchstens
+    4 KiB. Daten des Hubs setzt die Seite als Text, nie als HTML.
+  - **Zwei Anmeldungen, zwei 401.** Hinter dem Proxy liegt die Seite hinter dessen Anmeldung.
+    Eine 401 des Hubs trägt JSON mit `code` `unauthenticated` („Account oder Token stimmt
+    nicht“); eine 401 oder 403 ohne diese Form, eine Umleitung oder eine HTML-Seite kommt von
+    der Anmeldung davor und heißt „Anmeldung an dieser Seite abgelaufen — neu laden“. Einer
+    Umleitung folgt die Seite nicht. Fehlversuche begrenzt der Hub selbst nicht; zählt der
+    Proxy 401 (fail2ban), zählen beide Arten mit, und die Seite warnt nach einer 401 des Hubs
+    davor.
 - **Über SSH (geparkt).** Der Node hält eine stehende SSH-Verbindung (Go-Bibliothek, kein
   externes `ssh`), mit Keepalive und Neuaufbau, und tunnelt dasselbe HTTP zum Hub auf
   Loopback. Derselbe Anschluss wie `https` (`connector` in `cmd/kephalaion`); Entwurf in
@@ -1968,12 +2012,13 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   (HTTPS, SSH, lokal im selben Prozess). Entschieden am 2026-09-28: `https` zuerst, über
   einen Reverse-Proxy vor dem Hub (gebaut in Task 018); `ssh` später, am selben Anschluss.
   Offen: die Begrenzung von Fehlversuchen, jetzt wo der Hub nach außen spricht.
-- **GUI unter `/kephalaion/`:** vorgemerkt. Seit Task 019 hängt das ganze Binary unter dem
-  Präfix des Proxys, die Wurzel liefert eine Begrüßung, der Hub liegt unter `/hub/`; eine GUI
-  bekäme ihren eigenen Ort daneben (`/gui/` o. ä.), hinter der Anmeldung des Proxys, und
-  arbeitete mit relativen Pfaden oder `X-Forwarded-Prefix` (Caddy: `header_up
-  X-Forwarded-Prefix /kephalaion`). Offen: ob auch der Node (MCP, `/mcp` auf 7433) unter
-  `/kephalaion/` erscheint; ein Prozess mit beiden Rollen hat weiter zwei Listener.
+- **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, die den Zugriff
+  eines Accounts zeigt („Kommunikation“, „Die Weboberfläche am Hub“): die Seite an der Wurzel,
+  ihre Teile unter `/gui/`, hinter der Anmeldung des Proxys, nur mit relativen Pfaden — ohne
+  `X-Forwarded-Prefix`. Offen bleibt die Verwaltung in der Oberfläche (Accounts, Rechte,
+  Nodes; vorerst die Kommandozeile), die Anzeige des Users der Anmeldung (`X-User` kann das
+  Binary nicht prüfen) und ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
+  erscheint; ein Prozess mit beiden Rollen hat weiter zwei Listener.
 - **Node als Dienst:** entschieden — er läuft ständig, pro User als Benutzerdienst oder
   global als Systemdienst; k-playbook prüft beim Briefing zusätzlich. Eingerichtet mit
   systemd, auf macOS (nur pro User) mit launchd (2026-09-26, „Installation und Betrieb“;

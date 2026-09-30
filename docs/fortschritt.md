@@ -1,7 +1,7 @@
 # Fortschritt
 
-Stand: 2026-09-29 (Tasks 001–016 abgeschlossen; 018 Etappen 1–3 ausgeführt, Etappe 4 ist
-Nacharbeit des Nutzers)
+Stand: 2026-09-30 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020
+Etappen 1–4 ausgeführt, die Abnahme auf der VM ist Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -223,11 +223,46 @@ Nacharbeit des Nutzers)
     Abnahme auf der VM: Etappe 4, siehe „Zu testen“ (Befund
     `material/befunde/transport-entfernt.md`).
 
+- **Task 020 — Weboberfläche am Hub: Kephalaion-Token abfragen, Zugriff des Accounts zeigen**
+  (2026-09-30, Etappen 1–4):
+  - Hub-Listener (`newHubHandler`): `GET /` entscheidet nach `Accept` — mit `text/html` die
+    Seite, sonst die Begrüßung wie bisher, beide mit `Vary: Accept`; unter `/gui/` die Teile
+    der Seite (`app.js`, `style.css`, `icon.svg`) und ihr Eingang `POST /gui/api/whoami`;
+    `/gui`, `/gui/` und alles andere darunter 404, nie ein 3xx; der Node-Listener bleibt, wie
+    er war;
+  - Paket `internal/hub/gui`: Seite und Dateien eingebettet (`embed`), strenge
+    Content-Security-Policy, `no-store`, nur relative Pfade; der Eingang nimmt nur `POST` mit
+    `application/json` bis 4 KiB, 400 `invalid` für die Form, dieselbe 401 für unbekannten
+    Account, falsches Token und gesperrt, Account im Log, nie Token oder Hash;
+  - eine Anmeldung eines Accounts für Vertrag und Weboberfläche: `store.CheckAccount` (Hash in
+    konstanter Zeit, Vergleichshash für unbekannte), `replication.checkAccount` benutzt sie;
+  - die Seite: fragt Kephalaion-Account und Account-Token ab und grenzt es vom Passwort der
+    Anmeldung davor ab, schickt nur ab, was wie ein Token aussieht, speichert nichts, zeigt
+    je Collection lesen, schreiben, Fremdes ändern und die Scopes `vendor/<name>` samt den
+    Regeln in Worten; unterscheidet die 401 des Hubs (JSON mit `code`) von der abgelaufenen
+    Anmeldung des Proxys (401/403 ohne diese Form, Umleitung, HTML) und von „Hub nicht
+    erreichbar“ (502/503, kein Netz);
+  - Durchlauf im Browser (Playwright gegen einen Wegwerf-Hub): die sieben Proben bestanden;
+    dabei gefunden und behoben: fehlendes Symbol (`/favicon.ico` 404 in der Konsole, jetzt
+    `gui/icon.svg`), zerlegte Tabellenköpfe, zwei Fehler der schmalen Ansicht — Befund
+    `material/befunde/gui.md`;
+  - Doku: `begriffe.md` (`gui`, `account token`, `greeting`, `whoami`), `konzept.md`
+    („Kommunikation“: die Weboberfläche am Hub; „Offene Punkte“), `installation.md` (Option
+    Weboberfläche hinter der Anmeldung, zwei Arten 401, „Bekannte Grenze“: fail2ban zählt jede
+    401), README („Weboberfläche“), Hilfe von `serve`;
+  - Tests: `internal/hub/gui` (Eingang, Seite, Header, Entscheidungen im Skript),
+    `TestCheckAccount`, `TestServeHubListener` (Seite nach `Accept`, `/gui/…`, Eingang über
+    `serve`), `TestGUIBehindPrefix` (Präfix `/kephalaion`, Anmeldung vor dem Rest).
+    Abnahme auf der VM: siehe „Zu testen“.
+
 ## In Arbeit
 
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
   `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“ (mit `/kephalaion/hub` und
   `uri strip_prefix /kephalaion`); siehe „Zu testen“.
+- **Task 020 — Abnahme der Weboberfläche auf der VM:** Nacharbeit des Nutzers (Deployment mit
+  `deploy-vm.sh` nur durch ihn), Schritte unter „Zu testen“ und in
+  `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
 
 ## Zu tun
 
@@ -299,8 +334,8 @@ Nacharbeit des Nutzers)
   - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;
   - Markdown-Export des Stores;
   - Begrenzung von Fehlversuchen bei der Anmeldung — dringlicher, seit der Hub hinter dem
-    Proxy nach außen spricht (Task 018); Übergang fail2ban auf das Caddy-Log
-    (`installation.md`, „Bekannte Grenze“).
+    Proxy nach außen spricht (Task 018), und auch am Eingang der Weboberfläche (Task 020);
+    Übergang fail2ban auf das Caddy-Log (`installation.md`, „Bekannte Grenze“).
 - **Kleinere Punkte aus dem Review von Task 008** (`done/008-…`, „Code-Review“, Vorschläge 3–12):
   - `reset` prüft nur `entry_id`, nicht die alte `hub_id` — doppeltes Verwerfen bei zwei
     parallelen Resets (3);
@@ -329,6 +364,34 @@ Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 020 — Abnahme der Weboberfläche auf der VM** (Nacharbeit des Nutzers; die KI führt
+  `deploy-vm.sh` nicht aus). fail2ban zählt dort jede 401 auf 80/443 (10 in 10 min sperren die
+  Adresse), deshalb die Schritte 4 und 5 je genau einmal:
+  1. Deployment des Binarys durch den Nutzer (`~/dev/vm/kephalaion/deploy-vm.sh`). Task 020
+     bringt keine neue Schemafassung: Binary ersetzen und Dienst neu starten genügt; das
+     Skript ist für 018/019 geschrieben und legt dabei `node.db` neu an. Caddy braucht nichts
+     Neues (`handle /kephalaion/*` mit `forward_auth` deckt `/kephalaion/` und
+     `/kephalaion/gui/…`).
+  2. Im Browser mit Sitzung `https://<name>/kephalaion/` → die Seite mit der Abfrage
+     (Kephalaion-Account, Account-Token), Version im Kopf.
+  3. Account `kamran-wsl` und sein Token (`~/.config/kephalaion/tokens/<hub>/kamran-wsl.token`)
+     → Übersicht: Collection `test` mit write (und was ihm sonst freigegeben ist).
+  4. Ein falsches, der Form nach gültiges Token **einmal** → „Account oder Token stimmt nicht.
+     Wiederholte Fehlversuche können deinen Rechner für eine Weile sperren.“ (401 des Hubs,
+     zählt für fail2ban).
+  5. Am Proxy abmelden (anderer Tab), dann auf der noch offenen Seite ein Token prüfen →
+     „Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.“, ohne
+     Hinweis auf die Sperre. Das ist eine weitere 401 im Caddy-Log (von authproxy), bewusst
+     nur einmal.
+  6. `curl` von außen ohne Sitzung: `curl -si https://<name>/kephalaion/` → 302 des
+     Auth-Proxys wie bisher; auf der VM `curl http://localhost:7434/` → weiter die Begrüßung,
+     mit `-H 'Accept: text/html'` die Seite.
+  7. `journalctl -u kephalaion` → `hub POST /gui/api/whoami 200 … via=<adresse>
+     account=kamran-wsl`, für Schritt 4 dieselbe Zeile mit 401 — nirgends ein Token.
+
+  Lokal belegt (Playwright gegen einen Wegwerf-Hub, abgelaufene Anmeldung mit einem
+  Stellvertreter-Proxy): `material/befunde/gui.md`. Auf der VM offen: Schritt 5 gegen Caddy
+  mit authproxy.
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM: abgenommen 2026-09-30.** Binary dev
   fa5d6a6 auf VM (global, `node.db` neu in Schema 5, Import) und WSL (pro User, frisch);
   Caddyfile mit `handle /kephalaion/hub/*` (ohne `forward_auth`, `uri strip_prefix
@@ -385,6 +448,13 @@ Nacharbeit des Nutzers)
 
 ## Zu besprechen
 
+- **Verwaltung in der Weboberfläche** (Accounts, Rechte, Nodes): vorerst die Kommandozeile;
+  eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (die
+  Anmeldung des Proxys kann das Binary nicht prüfen; `konzept.md`, „Offene Punkte“, GUI).
+- **Anmeldung eines Accounts und Antwortzeit:** Der Hash wird immer in konstanter Zeit
+  verglichen, aber ein bekannter Account kostet eine Abfrage mehr als ein unbekannter
+  (`store.CheckAccount` liest die Rechte mit). Nicht gemessen; ob das zu ändern ist, zusammen
+  mit der Begrenzung von Fehlversuchen entscheiden (Befund `material/befunde/gui.md`).
 - **Tägliche Frage nach einem Update abschaltbar?** (ohne Netz, Datenschutz; `konzept.md`,
   „Offene Punkte“, Node als Dienst). Richtung (2026-09-26): einstellbar oder zwischengespeichert,
   siehe „Zu tun“, Update-Hinweis.
