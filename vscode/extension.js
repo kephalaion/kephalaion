@@ -106,6 +106,140 @@ function readCredentials(log) {
   return creds;
 }
 
+// --- Der Node als MCP-Server für Copilot (docs/vscode.md, „MCP-Server für Copilot“) ---
+// Gemeldet über vscode.lm.registerMcpServerDefinitionProvider. Die gemeldete Definition trägt
+// weder Header noch Token: VS Code speichert sie zwischen (mcp.extCachedServers im Speicher des
+// Workspace). Die Header-Paare setzt erst resolveMcpServerDefinition ein, wenn VS Code den
+// Server startet; die Verbindung baut der Extension Host auf, in dem die Erweiterung läuft
+// (workspace: unter WSL im Linux) — wie die Erweiterung selbst den Node erreicht.
+
+const MCP_PROVIDER_ID = 'kephalaion.node';
+const MCP_LABEL = 'Kephalaion';
+const HUB_ALIAS = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+const TOKEN_FORMAT = /^keph_[A-Za-z0-9_-]{43}$/;
+
+function mcpEnabled() {
+  return vscode.workspace.getConfiguration('kephalaion').get('mcpServer.enabled', true) !== false;
+}
+
+// Protokolliert der Extension Host auf Trace, schreibt VS Code die Header jeder Anfrage an einen
+// MCP-Server ins Log (nur Authorization wird verdeckt) — mit dem Token. Solange das gilt,
+// meldet die Erweiterung den Server nicht.
+function traceLogging() {
+  return vscode.env.logLevel === vscode.LogLevel.Trace;
+}
+
+// Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers: der
+// gewählte (kephalaion.accounts), sonst der einzige. Ein Hub mit mehreren Accounts ohne Wahl
+// oder mit einem gewählten ohne Token-Datei fehlt. Nur Namen, kein Token.
+function mcpLogins() {
+  const chosen = chosenAccounts();
+  const logins = [];
+  const skipped = [];
+  for (const [hub, accounts] of Object.entries(tokenAccounts()).sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (!HUB_ALIAS.test(hub) || hub.startsWith('system')) {
+      skipped.push(`${hub}: kein gültiger Alias`);
+    } else if (chosen[hub]) {
+      if (accounts.includes(chosen[hub])) logins.push({ hub, account: chosen[hub] });
+      else skipped.push(`${hub}: gewählter Account ${chosen[hub]} hat keine Token-Datei`);
+    } else if (accounts.length === 1) {
+      logins.push({ hub, account: accounts[0] });
+    } else {
+      skipped.push(`${hub}: mehrere Accounts (${accounts.join(', ')}), keiner gewählt — „Kephalaion: Account wählen“`);
+    }
+  }
+  return { logins, skipped };
+}
+
+// Die Header-Paare für den Start des Servers, aus den Token-Dateien. Meldungen nennen nie ein
+// Token.
+function mcpHeaders(log) {
+  const base = path.join(configDir(), 'tokens');
+  const { logins, skipped } = mcpLogins();
+  for (const s of skipped) log(`MCP-Server: Hub ${s}`);
+  const headers = {};
+  for (const { hub, account } of logins) {
+    let token;
+    try {
+      token = fs.readFileSync(path.join(base, hub, `${account}.token`), 'utf8').split('\n')[0].trim();
+    } catch (e) {
+      log(`MCP-Server: Hub ${hub}: ${account}.token nicht lesbar (${e.code || 'Fehler'})`);
+      continue;
+    }
+    if (!TOKEN_FORMAT.test(token)) {
+      log(`MCP-Server: Hub ${hub}: ${account}.token hält kein gültiges Token`);
+      continue;
+    }
+    headers[`X-Keph-Account-${hub}`] = account;
+    headers[`X-Keph-Token-${hub}`] = token;
+  }
+  return headers;
+}
+
+// Stand, an dem sich zeigt, ob die Definition neu zu melden ist: Adresse, Einstellung, Trace,
+// Hubs mit ihren Accounts und die Token-Dateien (Name, Größe, Zeit) — ohne ihren Inhalt.
+function mcpState() {
+  const base = path.join(configDir(), 'tokens');
+  const files = [];
+  for (const [hub, accounts] of Object.entries(tokenAccounts())) {
+    for (const a of accounts) {
+      try {
+        const st = fs.statSync(path.join(base, hub, `${a}.token`));
+        files.push(`${hub}/${a}:${st.size}:${st.mtimeMs}`);
+      } catch {
+        files.push(`${hub}/${a}:-`);
+      }
+    }
+  }
+  return JSON.stringify([nodeUrl() || '', mcpEnabled(), traceLogging(), chosenAccounts(), files.sort()]);
+}
+
+class McpProvider {
+  constructor(log) {
+    this.log = log;
+    this._changed = new vscode.EventEmitter();
+    this.onDidChangeMcpServerDefinitions = this._changed.event;
+    this._state = mcpState();
+    this._warned = false;
+  }
+
+  // Neu melden, wenn sich etwas geändert hat, das die Definition oder die Header betrifft.
+  check() {
+    const s = mcpState();
+    if (s === this._state) return;
+    this._state = s;
+    this.log('MCP-Server: Stand geändert, neu gemeldet');
+    this._changed.fire();
+  }
+
+  provideMcpServerDefinitions() {
+    const url = nodeUrl();
+    if (!mcpEnabled() || !url) return [];
+    if (traceLogging()) {
+      if (!this._warned) {
+        this._warned = true;
+        this.log('MCP-Server nicht gemeldet: Der Extension Host protokolliert auf Trace, VS Code schriebe das Token ins Log');
+        vscode.window.showWarningMessage('Kephalaion: Solange VS Code auf „Trace“ protokolliert, wird der MCP-Server nicht '
+          + 'gemeldet — VS Code schriebe sonst das Token ins Log. Log-Level zurücksetzen („Developer: Set Log Level…“).');
+      }
+      return [];
+    }
+    this._warned = false;
+    // version: die Hubs mit ihren Accounts — ändern sie sich, liest VS Code die Werkzeuge neu.
+    const version = mcpLogins().logins.map((l) => `${l.hub}=${l.account}`).join(',') || 'ohne Anmeldung';
+    return [new vscode.McpHttpServerDefinition(MCP_LABEL, vscode.Uri.parse(url), {}, version)];
+  }
+
+  resolveMcpServerDefinition(server) {
+    if (!mcpEnabled() || traceLogging()) return undefined;
+    server.headers = mcpHeaders(this.log);
+    const hubs = Object.keys(server.headers).filter((h) => h.startsWith('X-Keph-Account-'))
+      .map((h) => `${h.slice('X-Keph-Account-'.length)}=${server.headers[h]}`);
+    this.log(`MCP-Server gestartet: ${server.uri}, ${hubs.length ? hubs.join(', ') : 'ohne Anmeldung'}`);
+    return server;
+  }
+}
+
 // --- MCP über HTTP, zustandslos (docs/konzept.md, „Kommunikation“) ---
 
 // Fehler von fetch, bei denen keine Verbindung zustande kam: nichts abgeschickt.
@@ -939,17 +1073,35 @@ function activate(context) {
     }),
   );
 
+  // Der Node als MCP-Server für Copilot; die API gibt es ab VS Code 1.101.
+  const mcp = new McpProvider(log);
+  if (vscode.lm && typeof vscode.lm.registerMcpServerDefinitionProvider === 'function') {
+    context.subscriptions.push(
+      vscode.lm.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, mcp),
+      mcp._changed,
+      vscode.env.onDidChangeLogLevel(() => mcp.check()),
+    );
+  } else {
+    log('MCP-Server nicht gemeldet: diese Fassung von VS Code kennt vscode.lm.registerMcpServerDefinitionProvider nicht');
+  }
+
   // Andere Wahl des Accounts oder andere Adresse — auch von Hand in settings.json.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration('kephalaion.mcpServer.enabled')) mcp.check();
     if (!e.affectsConfiguration('kephalaion.accounts') && !e.affectsConfiguration('kephalaion.nodeUrl')) return;
     node.invalidate();
     kfs.rebase(Object.keys(tokenAccounts()));
     status.refresh();
+    mcp.check();
   }));
 
   log(`Node: ${nodeUrl() || '(keine Adresse)'}, config ${configFile()}`);
   status.refresh();
-  const timer = setInterval(() => status.refresh(), POLL_MS);
+  // Alle 30 s: Status, und ob sich Token-Dateien geändert haben (rotate, neuer Account).
+  const timer = setInterval(() => {
+    status.refresh();
+    mcp.check();
+  }, POLL_MS);
   let polling = false;
   const pollChanges = async () => {
     if (polling) return;

@@ -254,7 +254,13 @@ func TestNodeMCPVSCode(t *testing.T) {
 	e.mcp(t, "remove", "--assistant", "vscode").want(t, 0, "vscode: übergangen: über die Erweiterung für VS Code")
 	e.mcp(t, "status").want(t, 0, "vscode: über die Erweiterung — Erweiterung kascada.kephalaion nicht gefunden",
 		"claude: nicht gefunden (claude liegt nicht im PATH)", "codex: nicht gefunden")
-	ext := filepath.Join(e.home, ".vscode-server", "extensions", "kascada.kephalaion-0.0.6")
+	old := filepath.Join(e.home, ".vscode-server", "extensions", "kascada.kephalaion-0.0.5")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mcp(t, "status", "--assistant", "vscode").want(t, 0,
+		"vscode: über die Erweiterung — Erweiterung 0.0.5 installiert ("+old+") — sie meldet den MCP-Server erst ab 0.0.6")
+	ext := filepath.Join(e.home, ".vscode-server", "extensions", "kascada.kephalaion-0.0.10")
 	if err := os.MkdirAll(ext, 0o755); err != nil {
 		t.Fatal(err)
 	}

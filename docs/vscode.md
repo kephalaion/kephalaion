@@ -6,7 +6,8 @@ description: Erweiterung, die Collections über einen FileSystemProvider als Ord
 # Kephalaion in VS Code
 
 **Stand: Lesen und Schreiben gebaut** (2026-09-27, Version 0.0.5, siehe „Umsetzung: Lesen“ und
-„Umsetzung: Schreiben“ unten): Statusleiste aus `whoami`, Collections als Ordner mit Inhalt über
+„Umsetzung: Schreiben“ unten; seit 0.0.6 auch der Node als MCP-Server für Copilot, siehe
+„MCP-Server für Copilot“): Statusleiste aus `whoami`, Collections als Ordner mit Inhalt über
 `list` und `read`, Änderungen über `changes`; speichern, neue Datei, neuer Ordner, löschen,
 umbenennen und verschieben über `create`, `write`, `delete` und `rename` (Task 014). Was die
 Erweiterung braucht, gibt es am Node: `whoami` in der Form, die die Statusleiste braucht —
@@ -158,7 +159,45 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   liefert `login: ok`, Account `kamran-desktop`, User `kamran`, Collection `home:eins` mit
   `read` und `write`. Die MCP-Konfigurationen der KI-Clients (`.mcp.json`,
   `.cursor/mcp.json`, `opencode.json`,
-  `.vscode/mcp.json`) liest die Erweiterung nicht.
+  `.vscode/mcp.json`) liest und schreibt die Erweiterung nicht; den Node als MCP-Server für
+  Copilot meldet sie über die API für Erweiterungen (unten, „MCP-Server für Copilot“).
+
+## MCP-Server für Copilot (Task 022, 0.0.6)
+
+Die Erweiterung meldet den Node als MCP-Server „Kephalaion“, damit Copilot in VS Code die
+Werkzeuge des Nodes sieht — ohne Eintrag in `mcp.json` und ohne Token in einer Datei von
+VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (WSL, SSH) nicht
+(`kephalaion node mcp add --assistant vscode` nennt deshalb nur die Erweiterung).
+
+- **API:** `vscode.lm.registerMcpServerDefinitionProvider` mit dem Beitrag
+  `mcpServerDefinitionProviders` (Anbieter `kephalaion.node`), stabil seit VS Code 1.101 —
+  deshalb `engines.vscode` `^1.101.0`. Die Definition ist ein `McpHttpServerDefinition` mit der
+  Adresse wie `nodeUrl` (`listen` bzw. `kephalaion.nodeUrl`, dazu `/mcp`).
+- **Das Token erst beim Start.** `provideMcpServerDefinitions` meldet die Definition ohne jeden
+  Header; `version` nennt nur Hubs und Accounts (`vm=kamran-wsl`). VS Code speichert gemeldete
+  Definitionen samt Headern zwischen (`mcp.extCachedServers` im Speicher des Workspace, bei WSL
+  auf der Windows-Seite) — deshalb dort nichts Geheimes. Die Header-Paare setzt
+  `resolveMcpServerDefinition` ein, wenn VS Code den Server startet; die aufgelöste Definition
+  speichert VS Code nicht, es reicht sie an den Extension Host weiter, der die Verbindung
+  aufbaut.
+- **Wer verbindet:** der Extension Host, in dem die Erweiterung läuft (`workspace`, unter WSL im
+  Linux), mit dem `fetch` von Node.js — wie die Erweiterung selbst. `Host` ist die Adresse aus
+  `listen`, ein `Origin` schickt er nicht; die Prüfung des Nodes lässt die Anfrage durch.
+- **Accounts wie `node mcp headers`:** je Hub der gewählte Account (`kephalaion.accounts`),
+  sonst der einzige mit Token-Datei. Ein Hub mit mehreren Accounts ohne Wahl oder mit einem
+  gewählten ohne Token-Datei fehlt im MCP-Eintrag (anders als in Statusleiste und Dateisystem,
+  wo die Erweiterung den ersten nimmt); das Log „Kephalaion“ nennt ihn.
+- **Neu gemeldet** wird, wenn sich Adresse, Wahl, die Einstellung oder die Token-Dateien ändern
+  (geprüft alle 30 s). Eine laufende Verbindung behält ihre Header: nach `kephalaion node account
+  rotate` den Server neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten) oder das
+  Fenster neu laden.
+- **Trace:** Protokolliert der Extension Host auf „Trace“ (`vscode.env.logLevel`), schreibt
+  VS Code bei jeder Anfrage an einen MCP-Server die Header ins Log des Servers — nur
+  `Authorization` wird verdeckt, ein `X-Keph-Token-…` nicht. Solange das gilt, meldet die
+  Erweiterung den Server nicht (Warnung, Eintrag im Log „Kephalaion“) und startet ihn nicht;
+  geht das Log-Level zurück, meldet sie ihn wieder.
+- **Abschalten:** Einstellung `kephalaion.mcpServer.enabled` (Vorgabe `true`, Scope
+  `machine-overridable`).
 
 ## Sprachen
 

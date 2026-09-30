@@ -2,11 +2,11 @@
   "name": "kephalaion",
   "displayName": "Kephalaion",
   "description": "Collections von Kephalaion als Ordner in VS Code",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "kascada",
   "license": "SEE LICENSE IN ../LICENSE",
   "repository": "https://github.com/kephalaion/kephalaion",
-  "engines": { "vscode": "^1.90.0" },
+  "engines": { "vscode": "^1.101.0" },
   "extensionKind": ["workspace"],
   "main": "./extension.js",
   "activationEvents": ["onStartupFinished", "onFileSystem:keph"],
@@ -18,6 +18,9 @@
       { "command": "kephalaion.chooseAccount", "title": "Kephalaion: Account wählen" },
       { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" }
+    ],
+    "mcpServerDefinitionProviders": [
+      { "id": "kephalaion.node", "label": "Kephalaion" }
     ],
     "configuration": {
       "title": "Kephalaion",
@@ -33,6 +36,12 @@
           "additionalProperties": { "type": "string" },
           "scope": "machine-overridable",
           "markdownDescription": "Account je Hub, etwa `{\"home\": \"kamran-desktop\"}` — nur nötig, wenn unter `~/.config/kephalaion/tokens/<hub>/` mehrere Token-Dateien liegen. Gesetzt über „Kephalaion: Account wählen“; gilt für diesen Rechner und wird nicht synchronisiert."
+        },
+        "kephalaion.mcpServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine-overridable",
+          "markdownDescription": "Meldet den Node als MCP-Server „Kephalaion“ für Copilot, mit den Header-Paaren aus den Token-Dateien (wie `kephalaion node mcp headers`). Das Token setzt die Erweiterung erst beim Start des Servers ein. Aus: kein MCP-Server von der Erweiterung."
         }
       }
     }

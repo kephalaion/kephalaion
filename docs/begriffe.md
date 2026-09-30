@@ -186,6 +186,12 @@ Ausführlich: [`konzept.md`](konzept.md).
   dieselbe Regel gilt nach `node account rotate` und `check`. Er ändert nur Assistenten, die
   schon einen Eintrag `kephalaion` haben; hat noch keiner der gefundenen einen, trägt er wie
   `add` bei allen gefundenen ein. Ohne Node in der config endet er ohne Meldung mit Exit 0.
+- **kephalaion.mcpServer.enabled** — Einstellung der Erweiterung für VS Code (Vorgabe `true`):
+  Die Erweiterung meldet den Node als MCP-Server „Kephalaion“ für Copilot
+  (`vscode.lm.registerMcpServerDefinitionProvider`, Anbieter `kephalaion.node`), mit Adresse
+  und Header-Paaren wie `node mcp headers`; das Token setzt sie erst beim Start des Servers ein
+  (`resolveMcpServerDefinition`), nie in die gemeldete Definition, die VS Code zwischenspeichert.
+  `false` schaltet das ab.
 
 ## Daten
 

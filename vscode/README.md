@@ -3,7 +3,8 @@
 Zeigt Collections von Kephalaion als Ordner (`keph://<hub>/<collection>/…`) und den Stand des
 Nodes in der Statusleiste. Idee und Weg: [`../docs/vscode.md`](../docs/vscode.md).
 
-Stand (0.0.5): lesen und schreiben.
+Stand (0.0.6): lesen und schreiben; der Node als MCP-Server für Copilot. Braucht VS Code 1.101
+oder neuer.
 
 - **Lesen** aus der Replica des Nodes über `list`, `read` und `changes` — auch offline, solange
   der Node läuft. Änderungen anderer erscheinen nach dem Abgleich des Nodes, ein Umbenennen
@@ -21,6 +22,13 @@ Stand (0.0.5): lesen und schreiben.
   überschreibbar mit der Einstellung `kephalaion.nodeUrl`.
 - **Anmeldung:** aus `~/.config/kephalaion/tokens/<hub>/<account>.token`; ohne Einrichtung. Bei
   mehreren Accounts an einem Hub: „Kephalaion: Account wählen“.
+- **MCP-Server für Copilot:** Die Erweiterung meldet den Node als MCP-Server „Kephalaion“, mit
+  den Header-Paaren aus den Token-Dateien wie `kephalaion node mcp headers` (ein Hub mit
+  mehreren Accounts ohne Wahl fehlt). Das Token setzt sie erst beim Start des Servers ein, nie
+  in die gemeldete Definition. Solange VS Code auf „Trace“ protokolliert, meldet sie ihn nicht:
+  VS Code schriebe die Header sonst ins Log. Nach `kephalaion node account rotate` den Server
+  neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten). Abschalten mit
+  `kephalaion.mcpServer.enabled: false`.
 
 Bauen und installieren (unter WSL aus einem WSL-Terminal, dann landet die Erweiterung im
 VS-Code-Server der WSL):
