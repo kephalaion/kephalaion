@@ -102,8 +102,8 @@ Optionen:
   --tokens-dir pfad          headers: das Verzeichnis der Token-Dateien;
                              sonst tokens/ neben der config des Users
                              (~/.config/kephalaion/tokens)
-  --config pfad              add, status: Ort der config (siehe kephalaion
-                             node init --help)
+  --config pfad              Ort der config (siehe kephalaion node init
+                             --help); remove braucht keine
 
 Exit-Codes:
   0   fertig; headers: JSON ausgegeben (auch {} und bei übergangenen Hubs)
@@ -284,9 +284,58 @@ func registerAssistants(ctx context.Context, name string, target assistant.Targe
 	return 0
 }
 
+// autoRegister ist der automatische Anstoß nach node account rotate und
+// check, wenn sie die Token-Datei file geschrieben haben: dieselbe Regel wie
+// node mcp add --auto, im Binary aufgerufen. Nur, wenn file unter dem eigenen
+// tokens/ liegt — bei --token-stdin gibt es keine Datei, und global schreibt
+// der Verwalter als Systembenutzer in eine Datei außerhalb. Scheitert der
+// Anstoß, bleibt es bei einer Warnung: rotate bzw. check selbst ist gelungen.
+func (c *command) autoRegister(file string) {
+	if file == "" {
+		return
+	}
+	dir, err := assistant.TokensDir()
+	if err != nil || !withinDir(file, dir) {
+		return
+	}
+	target, err := assistantTarget(*c.cfg)
+	if errors.Is(err, errNoNode) {
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(c.stderr, "%s: Warnung: bei den KI-Assistenten nicht angemeldet: %v\n", c.name, err)
+		return
+	}
+	if registerAssistants(context.Background(), c.name, target, assistant.AddOptions{Auto: true}, c.stdout, c.stderr) != 0 {
+		fmt.Fprintf(c.stderr, "%s: Warnung: Die Anmeldung bei den KI-Assistenten ist nicht vollständig "+
+			"(kephalaion node mcp status); das Token selbst ist ersetzt.\n", c.name)
+	}
+}
+
+// withinDir sagt, ob path in dir oder darunter liegt — beide absolut und mit
+// aufgelösten Links verglichen, soweit es sie gibt.
+func withinDir(path, dir string) bool {
+	resolve := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return real
+		}
+		// Die Datei selbst gibt es vielleicht nicht: ihr Verzeichnis auflösen.
+		if real, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			return filepath.Join(real, filepath.Base(p))
+		}
+		return p
+	}
+	rel, err := filepath.Rel(resolve(dir), resolve(path))
+	return err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
+}
+
 func runNodeMCPRemove(args []string, stdout, stderr io.Writer) int {
-	c := &command{name: "node mcp remove", usage: nodeMCPUsage, stdout: stdout, stderr: stderr}
-	c.fs = newFlagSet(c.name, c.usage, stderr)
+	// --config gilt auch hier (für Aufrufe mit einheitlichen Optionen); remove
+	// braucht keine config.
+	c := newCommand("node mcp remove", nodeMCPUsage, stdout, stderr)
 	var assistants stringList
 	c.fs.Var(&assistants, "assistant", "")
 	if _, code, ok := c.parse(args); !ok {

@@ -290,6 +290,7 @@ func TestNodeMCPNotFoundAndErrors(t *testing.T) {
 	e.mcp(t, "remove", "--assistant", "x").want(t, 2)
 	e.mcp(t, "status", "--assistant", "x").want(t, 2)
 	e.mcp(t, "remove", "--dry-run").want(t, 2)
+	e.mcp(t, "remove", "--config", e.cfg).want(t, 0, "claude: unverändert: kein Eintrag")
 }
 
 // --dry-run meldet, was geschähe, und schreibt nichts.

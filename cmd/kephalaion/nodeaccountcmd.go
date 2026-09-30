@@ -41,6 +41,12 @@ Kommandos:
   Datei, und .pending wird gelöscht. Ist der Ausgang unklar (etwa eine
   Zeitüberschreitung), bleiben beide — dann zuerst check. Solange pfad.pending
   liegt, verweigert rotate einen neuen Versuch.
+  Liegt die Datei unter tokens/ neben der config des Users
+  (~/.config/kephalaion/tokens/<hub>/<account>.token), meldet rotate — und
+  check, wenn es die Datei ersetzt — den Node danach bei den KI-Assistenten
+  an, wie kephalaion node mcp add --auto: nur bei denen mit Eintrag, beim
+  ersten Account bei allen gefundenen. Scheitert das, bleibt es bei einer
+  Warnung.
 --token-stdin
   liest das alte Token als eine Zeile von der Standardeingabe; rotate gibt
   das neue nach Erfolg einmal aus, bei unklarem Ausgang ebenfalls, deutlich
@@ -212,6 +218,9 @@ func (c *command) accountRotate(ctx context.Context, s nodestore.Store, cfg conf
 			fmt.Fprintf(c.stderr, "node account rotate: %s ließ sich nicht löschen: %v\n", src.pending(), err)
 		}
 		fmt.Fprintf(c.stdout, "Account %s: Token ersetzt (%s), gespeichert in %s.\n", account, ident.MaskToken(newToken), src.file)
+		// Zuletzt, nach den Meldungen zur Replica: der Anstoß bei den
+		// KI-Assistenten (erster Account: Eintrag überall).
+		defer c.autoRegister(src.file)
 	} else {
 		fmt.Fprintf(c.stdout, "Account %s: Token ersetzt.\n", account)
 		fmt.Fprintln(c.stdout, "Neues Token (wird nicht wieder angezeigt; das alte gilt nicht mehr):")
@@ -328,6 +337,7 @@ func (c *command) accountCheck(ctx context.Context, _ nodestore.Store, cfg confi
 		fmt.Fprintf(c.stdout, "Das neue Token gilt — der rotate kam an. %s ersetzt, %s gelöscht.\n", src.file, src.pending())
 		fmt.Fprintln(c.stdout, valid(st)+".")
 		fmt.Fprintf(c.stdout, "Die Replica holt der Abgleich nach: kephalaion node sync %s\n", h.Name)
+		c.autoRegister(src.file)
 		return nil
 	}
 	st, err = whoamiAccount(ctx, hub, h, account, current)

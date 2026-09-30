@@ -197,6 +197,23 @@ next_steps() {
 	say "  kephalaion node init          Rollen einrichten, siehe README (Einrichten)"
 	say "  kephalaion service install    den Dienst einrichten, der kephalaion serve startet"
 	say "                                (systemd --user bzw. LaunchAgent)"
+	say "  kephalaion node mcp add       nach dem ersten Account: den Node bei den"
+	say "                                KI-Assistenten anmelden (Claude Code, OpenCode, Codex)"
+}
+
+# register_assistants: der automatische Anstoß bei den KI-Assistenten. Ob es
+# eine config mit Node gibt, stellt das Binary fest (ohne endet es still mit
+# 0); es ändert nur Assistenten, die schon einen Eintrag haben, und trägt
+# überall ein, wenn noch keiner einen hat. Kennt das Binary node mcp nicht
+# (eine ältere Version), entfällt es. Scheitert es, nur ein Hinweis: Die
+# Installation ist trotzdem gelungen.
+register_assistants() {
+	"$TARGET" node mcp --help >/dev/null 2>&1 || return 0
+	if ! "$TARGET" node mcp add --auto </dev/null; then
+		say ""
+		say "Hinweis: Die Anmeldung bei den KI-Assistenten ist nicht vollständig (siehe oben)."
+		say "Nachsehen mit: kephalaion node mcp status"
+	fi
 }
 
 cleanup() {
@@ -225,6 +242,7 @@ main() {
 	say "Installiert: $TARGET"
 	"$TARGET" version || true
 	path_hint
+	register_assistants
 	next_steps
 }
 
