@@ -176,7 +176,8 @@ node:
 - **Fehlt ein Abschnitt, fehlt die Rolle.** `status` und `serve` lesen das direkt ab.
 - **`listen` — entschieden am 2026-09-25, zuvor in `settings` vorgesehen:** wo `serve` für
   diese Rolle lauscht. Es gehört zum „wo“ wie der Ort der Datenbank, und `serve` braucht es
-  beim Start. Standard Node `127.0.0.1:7433`, Hub `127.0.0.1:7434`; `init` schreibt den Wert
+  beim Start. Standard Node `127.0.0.1:7433`, Hub `127.0.0.1:7434` — bei IANA sind beide
+  Ports nicht vergeben (geprüft am 2026-09-30); `init` schreibt den Wert
   sichtbar in die Datei, `--listen` weicht ab. **`serve` lauscht für beide Rollen nur auf
   Loopback** (`127.0.0.1`, `::1`, `localhost`) und bricht sonst beim Start ab — Klartext-HTTP
   verlässt den Rechner nicht (Task 005). Das bleibt auch mit `https`: Nodes anderer Rechner
@@ -255,8 +256,8 @@ wie entfernt, mit einem einzigen Eingang.** Er läuft einmal je Rechner als Dien
 oder global für alle User (siehe „Installation und Betrieb“); jede Anfrage bedient eine
 eigene Goroutine. HTTP auf `127.0.0.1` braucht
 keinen Webserver auf dem Rechner. Zusätzlich prüft k-playbook beim Briefing, ob der Node
-läuft, und startet ihn sonst — auf dem Host; in einem Devcontainer läuft kein Node, dort kann
-es nur melden, dass der des Hosts nicht erreichbar ist. Nur der Node hält den Index warm, später ein
+läuft, und startet ihn sonst — einen Node auf dem Host startet es aus einem Devcontainer
+nicht, es meldet dann nur (siehe „Devcontainer“). Nur der Node hält den Index warm, später ein
 Einbettungsmodell, und nur er führt die Abgleichschleife und die Verbindungen zu den Hubs.
 
 **Eine Bridge für stdio ist zurückgestellt.** Bei stdio startet der Client den MCP-Server als
@@ -290,9 +291,8 @@ Node schicken. Umgesetzt: `Host` muss `localhost`, `127.0.0.1` oder `[::1]` mit 
 Port sein, `Origin` fehlt oder ist `http://localhost…`, `http://127.0.0.1…` (oder
 `http://[::1]…`); sonst 403.
 
-**Devcontainer nutzen den Node des Hosts** (entschieden am 2026-09-25, genauer gefasst am
-2026-09-30): kein Node im Container; ein Client im Container erreicht den Node des Hosts über
-`host.docker.internal`. Alles dazu steht im Abschnitt „Devcontainer“.
+**Devcontainer:** zwei Wege — am Node außerhalb des Containers oder mit eigenem Node, der über
+`ssh` mit dem Hub abgleicht (2026-09-30). Alles dazu steht im Abschnitt „Devcontainer“.
 
 **Anfragen werden beantwortet, während der Abgleich läuft.** Die Suche liest den zuletzt
 bestätigten Stand der Replica (SQLite im WAL-Modus trennt Leser und Schreiber). Ausnahme ist
@@ -300,8 +300,9 @@ der eigene Schreibvorgang: Dessen Ergebnis steht in der Replica, bevor die Antwo
 Client geht.
 
 **Entfernt: MCP über HTTPS** mit Token, später OAuth, für Clients ohne eigenen Node. Es ist
-derselbe Eingang. Für KI-Sitzungen, auch aus Devcontainern, nicht der Weg (2026-09-30): Sie
-brauchen die Antwort aus einer lokalen Replica.
+derselbe Eingang. Vorgemerkt am 2026-09-30 als nächster Schritt nach der Anmeldung bei den
+Assistenten: MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy. Für
+Devcontainer ist es nicht der Weg — dort soll die Antwort aus einer lokalen Replica kommen.
 
 **Node ↔ Hub: ein Protokoll, zwei Transportwege** — dazu der Funktionsaufruf im selben
 Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung im Pfad, kein
@@ -1185,15 +1186,13 @@ Projekte dieses Rechners.
   die Installation pro User zu entfernen. Die Doku verlangt das vor der globalen Einrichtung.
 - **Global ist ein Dienst für alle.** Node und, falls eingerichtet, Hub laufen in einem
   `serve` unter dem Systembenutzer. Die User betreiben nichts, sie sind Clients: je User ein
-  Account mit Token und der Eintrag in seinen MCP-Clients (Sache von k-playbook, über `node
-  mcp-config`, siehe „Devcontainer“). Das
+  Account mit Token und der Eintrag bei seinen Assistenten (`kephalaion node mcp add`, siehe
+  unten, „Bei den Assistenten angemeldet“). Das
   Anmeldemodell trägt das schon — jede Anfrage bringt Account und Token mit, und der Node
-  prüft gegen die Rechte dieses Accounts. Loopback teilen alle User eines Rechners;
-  Devcontainer erreichen den Node über `host.docker.internal`, bei der Installation pro User
-  ebenso (siehe „Devcontainer“). **Stand nach Task 011:** Die globale Installation ist gebaut
-  für User auf dem Rechner selbst, über Loopback, ohne Devcontainer — dafür muss der Node
-  `host.docker.internal` als `Host` annehmen (eigene Task; mit Docker Engine unter Linux
-  zusätzlich das Lauschen auf der Docker-Bridge).
+  prüft gegen die Rechte dieses Accounts. Loopback teilen alle User eines Rechners.
+  **Stand nach Task 011:** Die globale Installation ist gebaut für User auf dem Rechner
+  selbst, über Loopback, ohne Devcontainer — die Wege für Devcontainer, auch bei der
+  Installation pro User, stehen unter „Devcontainer“.
 - **Rechte im Dateisystem, global:** Die config ist für alle lesbar (`0644`) — sie enthält
   kein Geheimnis und sagt, wo der Node lauscht. Die Datenbanken gehören `kephalaion`
   (`/var/lib/kephalaion`, `0700`). Verwaltet wird als Systembenutzer, etwa
@@ -1305,6 +1304,27 @@ Datenbanken.
 - **k-playbook** bietet das Update in seiner Oberfläche an, wenn das Binary sich selbst
   ersetzen kann; sonst weist es nur auf die neue Version und den Weg hin.
 
+**Bei den Assistenten angemeldet — entschieden am 2026-09-30 (Task 022).** Der Node wird bei
+jedem KI-Assistenten des Users als MCP-Server eingetragen, auf User-Ebene, ein Eintrag
+`kephalaion` für alle Hubs: die Adresse aus `listen` der config, je Hub das Header-Paar aus den
+Token-Dateien `~/.config/kephalaion/tokens/<hub>/<account>.token` — sie liegen zentral je
+User. Das macht Kephalaion selbst (`kephalaion node mcp add`, dazu `remove` und `status`),
+möglichst über das eigene Kommando des Assistenten; k-playbook kann es aufrufen. Das Token
+steht nie im Klartext in der Konfiguration eines Assistenten:
+
+| Assistent | Eintragen | Token |
+|---|---|---|
+| Claude Code | `claude mcp add-json … --scope user` | `headersHelper` → `kephalaion node mcp headers` |
+| OpenCode | `opencode mcp add … --url … --header …` (globale config) | Verweis auf die Token-Datei (`{file:…}`) |
+| Codex | Tabelle in `~/.codex/config.toml` — `codex mcp add` kann keine eigenen Header | `http_headers_helper` → `kephalaion node mcp headers` |
+| VS Code (Copilot) | über die Erweiterung für VS Code — `code --add-mcp` wirkt im Remote-Terminal (WSL, SSH) nicht; zu prüfen | aus den Token-Dateien, wie die Erweiterung sie schon liest |
+
+`node mcp headers` liest bei jeder Verbindung die Token-Dateien und gibt die Header als JSON
+aus; nach `rotate` stimmt der Eintrag ohne Zutun. Eingetragen wird bei der Installation, wenn
+ein Account dazukommt, und jederzeit von Hand, wiederholbar. Global trägt jeder User für sich
+ein — die Tokens liegen bei ihm. Cursor und Gemini CLI vorerst nicht. Befund
+`material/befunde/mcp-client-registrierung.md`.
+
 **Doku für Menschen, Ansible und KI — entschieden am 2026-09-26, geschrieben in Task 011.**
 [`installation.md`](installation.md) beschreibt beide Arten, Dienst und Upgrade, dazu einen Abschnitt „Für Automatisierung“ mit
 den festen Angaben: URL-Schema der Assets, `SHA256SUMS`, Architekturen (`x86_64` → `amd64`,
@@ -1321,83 +1341,57 @@ das `apt upgrade` es nicht findet. Für macOS entspräche dem ein Homebrew-Tap.
 
 ## Devcontainer
 
-**Entschieden am 2026-09-25, genauer gefasst am 2026-09-30: Ein Devcontainer nutzt den Node
-seines Hosts, er hat keinen eigenen.** KI-Sitzungen brauchen die schnelle Antwort aus einer
-lokalen Replica. Deshalb hat jeder Rechner, auf dem Container laufen, seine eigene
-Installation mit Node — auch ein Mac, dessen Container Linux sind (pro User, `install.sh`).
-MCP über HTTPS an den Node eines anderen Rechners ist dafür nicht der Weg („Kommunikation“).
-Eine Bridge für stdio auch nicht: Sie bräuchte das Binary ebenso im Container und reichte nur
-weiter.
+**Stand am 2026-09-30: zwei Wege; die Einzelheiten entstehen im Projekt mit dem Devcontainer.**
+Zuerst muss alles auf dem Rechner selbst gehen — MCP und Kommandozeile sauber, die Assistenten
+angemeldet („Installation und Betrieb“, Task 022). Für einen Devcontainer gibt es dann zwei
+Wege, beide mit der Antwort aus einer lokalen Replica; MCP über HTTPS an den Node eines anderen
+Rechners ist für Devcontainer nicht der Weg („Kommunikation“), eine Bridge für stdio auch nicht
+— sie bräuchte das Binary ebenso im Container und reichte nur weiter.
 
-| | Host | Container |
-|---|---|---|
-| Binary | Installation pro User oder global, mit Dienst | dasselbe Binary (`install.sh`), ohne Dienst, ohne Rolle |
-| Node, Replica, Datenbanken | ja | nein |
-| config | `~/.config/kephalaion/config.yaml` bzw. `/etc/kephalaion/config.yaml` | die des Hosts, nur lesbar eingebunden |
-| Tokens | `~/.config/kephalaion/tokens/<hub>/<account>.token` | die des Hosts, nur lesbar eingebunden |
-| Kommandozeile | alle Kommandos | nur `node dir push\|pull` |
-| MCP für Clients | `http://127.0.0.1:7433/mcp` | `http://host.docker.internal:7433/mcp` |
-| Erweiterung für VS Code | außerhalb eines Containers | im Container (`extensionKind: workspace`) |
+1. **Am Node außerhalb des Containers** — dem des Hosts, wie am 2026-09-25 entschieden. Im
+   Container läuft kein Node; das Binary liegt dort nur als Kommandozeile für `node dir
+   push|pull`, einen MCP-Client des Nodes, der keine Datenbank schreibt. Alles, was eine
+   Datenbank öffnet oder selbst mit dem Hub spricht (`hub …`, `node hub|collection|account …`,
+   `node sync`, `node whoami`, `config import`), bleibt auf dem Host. config und `tokens/` des
+   Hosts sind im Container nur lesbar eingebunden: `~/.config/kephalaion`, bei einer globalen
+   Installation dazu `/etc/kephalaion/config.yaml` — diese Zeile nur auf Rechnern mit globaler
+   Installation, denn fehlt die Quelle eines Bind-Mounts, startet der Container nicht. Jeder
+   Rechner mit Containern hat so seine eigene Installation mit Node, auch ein Mac, dessen
+   Container Linux sind.
+2. **Über ssh an den Hub** — ein eigener Node im Container, mit eigenem Node-Eintrag und
+   Account am Hub, der über `ssh` abgleicht. Der Transport `ssh` ist noch nicht gebaut
+   (`https` ginge schon). Dazu gehören das Binary im Image, `serve` per `postStartCommand` —
+   im Container gibt es kein systemd — und `node.db` samt Replica in einem Volume, sonst ist
+   nach jedem Neubau des Containers alles neu einzurichten. Tokens nie im Image.
 
-- **Weg zum Node.** Unter Docker Desktop (Windows mit WSL, macOS) leitet Docker
-  `host.docker.internal` an den Loopback des Hosts weiter; der Node muss dafür nicht
-  zusätzlich lauschen. Er muss aber `host.docker.internal` mit seinem Port als `Host`
-  annehmen; heute antwortet er darauf 403. Die Prüfung von `Origin` bleibt. Die Prüfung von
-  `Host` schützt vor DNS-Rebinding im Browser, nicht vor Containern: Ein Container, der `Host`
-  selbst setzt, erreicht den Node schon heute. Gegen Container schützen die Tokens.
-- **Die Adresse steht einmal, in der config.** `listen` im Abschnitt `node:` ist die einzige
-  Quelle für Host und Port — global in `/etc/kephalaion/config.yaml`, für alle lesbar, pro
-  User unter `~/.config/kephalaion/`; `kephalaion status` zeigt sie. Die Ports 7433 (Node) und
-  7434 (Hub) sind nur die Vorgabe von `init`; bei IANA sind beide nicht vergeben. Der Container
-  liest dieselbe Datei. Weil dort `127.0.0.1` steht und das im Container der Container selbst
-  ist, setzt der Container `KEPHALAION_NODE_HOST=host.docker.internal`: Wer die Adresse des
-  Nodes aus `listen` bildet — `node dir`, die Erweiterung für VS Code, `node mcp-config` —,
-  nimmt dann den Port aus der config und den Host aus der Variable. `--node` bzw.
-  `kephalaion.nodeUrl` überschreiben weiter.
-- **Nur lesbar eingebunden, nie im Image:** `~/.config/kephalaion` des Hosts nach
-  `~/.config/kephalaion` im Container — config und `tokens/` in einem. Bei einer globalen
-  Installation liegt die config unter `/etc`; dann kommt `/etc/kephalaion/config.yaml` an
-  denselben Ort im Container dazu. Die Zeile gehört nur auf Rechner mit globaler Installation:
-  Fehlt die Quelle eines Bind-Mounts, startet der Container nicht. Die Pfade sind auf Linux
-  und macOS dieselben (XDG, siehe „Speicherung“).
-- **Kommandozeile im Container: nur `node dir push|pull`.** Es ist ein MCP-Client des Nodes
-  wie die KI und schreibt keine Datenbank. Alles, was eine Datenbank öffnet oder selbst mit dem
-  Hub spricht (`hub …`, `node hub|collection|account …`, `node sync`, `node whoami`,
-  `config import`), bleibt auf dem Host.
-- **Einträge in den MCP-Clients**, auf dem Host und im Container: die Adresse des Nodes und
-  je Hub das Header-Paar (`X-Keph-Account-<alias>`, `X-Keph-Token-<alias>`). Von Hand
-  geschrieben stünde der Port ein zweites Mal; deshalb gibt `kephalaion node mcp-config` den
-  Eintrag aus — Adresse aus der config (mit `KEPHALAION_NODE_HOST`), Accounts aus `tokens/`,
-  das Token nie im Klartext. k-playbook ruft es auf und trägt den Eintrag ein. Offen: die Form
-  je Client (Claude Code, OpenCode, Cursor, VS Code) und wie das Token in den Header kommt,
-  ohne in einer Datei zu stehen (Umgebungsvariable, Hilfskommando des Clients).
-- **k-playbook im Container** startet keinen Node; ist der des Hosts nicht erreichbar, meldet
-  es das nur.
-- **Docker Engine unter Linux** (ohne Docker Desktop) kennt `host.docker.internal` nur mit
-  `--add-host=host.docker.internal:host-gateway` (`runArgs`), und der Node müsste zusätzlich
-  auf der Docker-Bridge lauschen — nur dort, nicht im übrigen Netz. Zurückgestellt, bis es
-  gebraucht wird.
+**Für Weg 1 schon geklärt** (Befund `material/befunde/mcp-von-aussen.md`):
 
-**Skizze für `devcontainer.json`** — Stand der Planung, noch nicht gebaut:
+- Unter Docker Desktop (Windows mit WSL, macOS) erreicht ein Container den Node des Hosts über
+  `host.docker.internal`: Docker leitet an den Loopback des Hosts weiter, der Node muss nicht
+  zusätzlich lauschen. Unter WSL probiert, auf dem Mac nicht.
+- Im Container ist `127.0.0.1` der Container selbst. Zwei Lösungen, zu wählen im Projekt mit
+  dem Devcontainer:
+  - **Ein Weiterleiter im Container** von `127.0.0.1:7433` zum Host: Dann gilt alles wie auf
+    dem Host — `listen` aus der eingebundenen config, dieselben Einträge der Assistenten, auch
+    eine vom Host eingebundene Konfiguration eines Assistenten —, ohne Änderung am Binary (mit
+    socat probiert). Preis: ein Prozess, der im Container läuft.
+  - **`host.docker.internal` als Adresse:** Der Node müsste es als `Host` annehmen (heute 403),
+    und Kommandozeile, Erweiterung für VS Code und die Einträge der Assistenten bräuchten im
+    Container eine andere Adresse als auf dem Host.
+- Die Prüfung von `Host` schützt vor DNS-Rebinding im Browser, nicht vor Containern: Ein
+  Container, der `Host` selbst setzt, erreicht den Node schon heute. Gegen Container schützen
+  die Tokens.
+- Docker Engine unter Linux (ohne Docker Desktop) kennt `host.docker.internal` nur mit
+  `--add-host=host.docker.internal:host-gateway`, und der Node müsste zusätzlich auf der
+  Docker-Bridge lauschen — nur dort, nicht im übrigen Netz. Zurückgestellt, bis es gebraucht
+  wird.
 
-```jsonc
-{
-  "containerEnv": { "KEPHALAION_NODE_HOST": "host.docker.internal" },
-  "mounts": [
-    "source=${localEnv:HOME}/.config/kephalaion,target=/home/vscode/.config/kephalaion,type=bind,readonly"
-    // nur bei globaler Installation auf dem Host:
-    // "source=/etc/kephalaion/config.yaml,target=/etc/kephalaion/config.yaml,type=bind,readonly"
-  ],
-  "postCreateCommand": "curl -fsSL https://github.com/kephalaion/kephalaion/releases/latest/download/install.sh | sh"
-}
-```
-
-**Stand am 2026-09-30:** Unter WSL mit Docker Desktop probiert — ein Container erreicht den
-Node des Hosts über `host.docker.internal`; MCP und `node dir pull` scheitern nur an der
-Prüfung von `Host` (403). Nicht gebaut: die Annahme von `host.docker.internal`,
-`KEPHALAION_NODE_HOST`, `node mcp-config`. Die Erweiterung für VS Code nimmt `listen` heute
-unverändert. Nicht probiert: macOS. Zu tun in [`fortschritt.md`](fortschritt.md); Befund
-`material/befunde/mcp-von-aussen.md`.
+**Für beide Wege:** Die Assistenten im Container werden angemeldet wie auf dem Host
+(`kephalaion node mcp add`, „Installation und Betrieb“), oder ihre Konfiguration kommt vom Host.
+Die Tokens liegen zentral je User unter `~/.config/kephalaion/tokens/`; OpenCode verweist direkt
+auf diese Dateien, im Container muss der Ort deshalb derselbe sein. Die Erweiterung für VS Code
+läuft im Container (`extensionKind: workspace`). k-playbook startet im Container keinen Node, der
+auf dem Host laufen soll; es meldet nur, wenn er nicht erreichbar ist.
 
 ## Datenmodell
 
