@@ -14,20 +14,29 @@ import (
 // static sind die Dateien der Seite, eingebettet ins Binary: keine fremden
 // Quellen, kein CDN, keine Webfonts.
 //
-//go:embed static/index.html static/app.js static/style.css
+//go:embed static/index.html static/app.js static/style.css static/icon.svg
 var static embed.FS
 
 // Die Dateien der Seite unter /gui/, wie index.html sie lädt (relativ:
-// gui/app.js, gui/style.css).
+// gui/app.js, gui/style.css, gui/icon.svg).
 const (
 	FileScript = "app.js"
 	FileStyle  = "style.css"
+	// FileIcon ist das Symbol der Seite. Ohne es fragt ein Browser
+	// /favicon.ico an der Wurzel des Hosts — hinter einem Proxy außerhalb
+	// seines Präfixes, lokal ein 404 des Hub-Listeners, das als Fehler in
+	// der Konsole steht.
+	FileIcon = "icon.svg"
 )
+
+// Files sind die Dateien der Seite, in fester Reihenfolge.
+var Files = []string{FileScript, FileStyle, FileIcon}
 
 // contentTypes nennt den Content-Type je Datei der Seite.
 var contentTypes = map[string]string{
 	FileScript: "text/javascript; charset=utf-8",
 	FileStyle:  "text/css; charset=utf-8",
+	FileIcon:   "image/svg+xml",
 }
 
 // ContentSecurityPolicy gilt für die Seite und ihre Dateien: nur Eigenes,
@@ -70,7 +79,7 @@ func NewPage(version string) http.Handler {
 	return serveBytes("text/html; charset=utf-8", page.Bytes())
 }
 
-// NewFile liefert eine Datei der Seite, FileScript oder FileStyle.
+// NewFile liefert eine Datei der Seite, eine aus Files.
 func NewFile(name string) http.Handler {
 	ctype, ok := contentTypes[name]
 	if !ok {

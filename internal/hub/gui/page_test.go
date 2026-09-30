@@ -78,7 +78,11 @@ func TestPage(t *testing.T) {
 			t.Errorf("%s %q, erwartet %q", k, got, want)
 		}
 	}
-	for _, h := range []http.Handler{page, NewFile(FileScript), NewFile(FileStyle)} {
+	handlers := []http.Handler{page}
+	for _, name := range Files {
+		handlers = append(handlers, NewFile(name))
+	}
+	for _, h := range handlers {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/", nil))
 		if rec.Code != 200 || rec.Body.Len() != 0 || rec.Header().Get("Content-Length") == "0" {
@@ -110,8 +114,19 @@ func TestIndexFollowsPolicy(t *testing.T) {
 	if len(scripts) != 1 || scripts[0] != `<script src="gui/app.js" defer>` {
 		t.Errorf("index.html: Skripte %q, erwartet nur gui/app.js", scripts)
 	}
-	if !strings.Contains(index, `<link rel="stylesheet" href="gui/style.css">`) {
-		t.Error("index.html ohne gui/style.css")
+	for _, want := range []string{`<link rel="stylesheet" href="gui/style.css">`,
+		`<link rel="icon" type="image/svg+xml" href="gui/icon.svg">`} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index.html ohne %s", want)
+		}
+	}
+	// Das Symbol ist ein Bild aus dem Binary: ohne Skript, ohne Inline-Style
+	// und ohne Verweis nach außen (der Namensraum ist keine Quelle).
+	icon := strings.Replace(file(t, "icon.svg"), `xmlns="http://www.w3.org/2000/svg"`, "", 1)
+	for _, bad := range []string{"<script", "style=", "<style", "href", "http://", "https://", "<image", "<foreignObject"} {
+		if strings.Contains(icon, bad) {
+			t.Errorf("icon.svg enthält %q", bad)
+		}
 	}
 }
 
@@ -185,5 +200,31 @@ func TestScriptFollowsDecisions(t *testing.T) {
 	// der abgelaufenen Anmeldung.
 	if strings.Count(js, "sperren") != 1 {
 		t.Errorf("app.js nennt die Sperre %d-mal, erwartet einmal (nur bei 401 des Hubs)", strings.Count(js, "sperren"))
+	}
+}
+
+// Das Stylesheet: hell und dunkel, schmal als Blöcke, die Tabelle scrollt
+// nur in ihrem eigenen Kasten, nichts Fremdes. overflow-wrap: anywhere ließ
+// die Spalten der Tabelle unter ihre Wörter schrumpfen („Les-en“, Befund
+// gui.md) — break-word bricht nur, was sonst überliefe.
+func TestStyle(t *testing.T) {
+	css := file(t, "style.css")
+	for _, want := range []string{"@media (prefers-color-scheme: dark)", "@media (max-width: 48rem)", "overflow-x: auto",
+		"overflow-wrap: break-word", "content: attr(data-label)", "[hidden]", "system-ui"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("style.css ohne %q", want)
+		}
+	}
+	for _, bad := range []string{"overflow-wrap: anywhere;", "@import", "url(", "@font-face", "http://", "https://"} {
+		if strings.Contains(css, bad) {
+			t.Errorf("style.css enthält %q", bad)
+		}
+	}
+	// Die Spaltennamen für die schmale Ansicht setzt app.js als data-label.
+	js := file(t, "app.js")
+	for _, want := range []string{`setAttribute("data-label", label)`, `yesNo("Lesen", true)`, `"Schreiben (write)"`, `"Fremdes (supersede)"`, `cell("Scopes")`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js ohne %s", want)
+		}
 	}
 }

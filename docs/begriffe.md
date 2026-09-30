@@ -126,10 +126,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   an der Wurzel ist 404 `text/plain` („unbekannter Pfad“), auch ein Pfad mit `//`, `.` oder
   `..`, den `ServeMux` sonst umleitete.
 - **gui** (Weboberfläche) — die Seite des Hub-Listeners für Browser: an seiner Wurzel (`GET
-  /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`, der
-  Eingang `gui/api/whoami`). Sie fragt Account und **account token** ab, prüft beides am Hub
-  und zeigt, worauf der Account Zugriff hat: User, Beschreibung, Collections, Rechte und
-  Scopes `vendor/<name>`. Kein Teil des Vertrags, keine Verwaltung (die bleibt in der CLI).
+  /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`,
+  `gui/icon.svg`, der Eingang `gui/api/whoami`). Sie fragt Account und **account token** ab,
+  prüft beides am Hub und zeigt, worauf der Account Zugriff hat: User, Beschreibung,
+  Collections, Rechte und Scopes `vendor/<name>`. Kein Teil des Vertrags, keine Verwaltung
+  (die bleibt in der CLI).
   Nur relative Pfade, nie eine Umleitung: Hinter einem Proxy liegt sie unter dessen Präfix
   (`https://<name>/kephalaion/`) und hinter dessen Anmeldung — die ist nicht das Token, nach
   dem die Seite fragt. `/gui` und `/gui/` selbst und alles andere darunter sind 404

@@ -63,7 +63,10 @@ body {
   padding: 1.25rem 1rem 3rem;
   background: var(--bg);
   color: var(--text);
-  overflow-wrap: anywhere;
+  /* break-word, nicht anywhere: Ein langes Wort bricht, wo es sonst
+     überliefe, aber die Spalten der Tabelle schrumpfen nicht unter ihre
+     Wörter („Les-en“). */
+  overflow-wrap: break-word;
 }
 
 .top,
@@ -126,7 +129,7 @@ code {
   font-size: 0.9em;
   background: var(--code-bg);
   border-radius: 0.25rem;
-  padding: 0.05em 0.3em;
+  padding: 0.05em 0.25em;
 }
 
 .which {
@@ -268,6 +271,25 @@ thead th {
   background: var(--bg);
 }
 
+/* Der Name der Collection und ihre Beschreibung bekommen den Platz, der
+   übrig ist; die Spalten der Rechte bleiben schmal. */
+tbody th {
+  width: 40%;
+  min-width: 9rem;
+}
+
+tbody td,
+.scopes code {
+  white-space: nowrap;
+}
+
+/* Schreiben und Fremdes tragen eine Erklärung im Kopf: breit genug für zwei
+   Zeilen statt fünf. */
+thead th:nth-child(3),
+thead th:nth-child(4) {
+  min-width: 10.5rem;
+}
+
 th .sub,
 td .sub {
   display: block;
@@ -303,9 +325,10 @@ td .sub {
   margin-bottom: 0.375rem;
 }
 
-/* Schmal (Telefon): Jede Collection wird ein Block, jede Zelle eine Zeile
-   mit dem Namen ihrer Spalte davor (data-label aus app.js). */
-@media (max-width: 40rem) {
+/* Schmal (Telefon, schmales Fenster): Jede Collection wird ein Block, jede
+   Zelle eine Zeile mit dem Namen ihrer Spalte davor (data-label aus app.js)
+   — bevor die Tabelle in ihrem Kasten scrollen müsste. */
+@media (max-width: 48rem) {
   body {
     padding: 0.75rem 0.625rem 2rem;
   }
@@ -352,10 +375,20 @@ td .sub {
     border-radius: 0.375rem 0.375rem 0 0;
   }
 
+  tbody th {
+    width: 100%;
+    min-width: 0;
+  }
+
   tbody td {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
+    white-space: normal;
+  }
+
+  .scopes code {
+    white-space: normal;
   }
 
   tbody td::before {
@@ -364,8 +397,15 @@ td .sub {
     flex: 0 0 auto;
   }
 
-  tbody tr:last-child th {
+  /* Im Block trennt jede Zeile eine Linie, nur die letzte nicht — in jeder
+     Collection, nicht nur in der letzten der Tabelle. */
+  tbody tr:last-child th,
+  tbody tr:last-child td {
     border-bottom: 1px solid var(--line);
+  }
+
+  tbody tr td:last-child {
+    border-bottom: 0;
   }
 
   .scopes {

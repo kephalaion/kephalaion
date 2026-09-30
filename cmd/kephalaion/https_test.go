@@ -445,11 +445,12 @@ func TestServeHTTPS(t *testing.T) {
 
 // Die Weboberfläche hinter einem Proxy mit Präfix (wie Caddys handle
 // /kephalaion/* mit uri strip_prefix /kephalaion): Die Seite liegt unter
-// <präfix>/, und was sie relativ nennt — gui/style.css, gui/app.js, der
-// Eingang gui/api/whoami —, landet unter dem Präfix beim Binary, das ihn
-// nicht kennt. Der Hub-Weg <präfix>/hub/v1/… bleibt, wie er war. Steht vor
-// dem Rest eine Anmeldung (die VM), ist deren 401 keine Antwort des Hubs:
-// kein JSON mit code — daran erkennt die Seite die abgelaufene Anmeldung.
+// <präfix>/, und was sie relativ nennt — gui/style.css, gui/app.js,
+// gui/icon.svg, der Eingang gui/api/whoami —, landet unter dem Präfix beim
+// Binary, das ihn nicht kennt. Der Hub-Weg <präfix>/hub/v1/… bleibt, wie er
+// war. Steht vor dem Rest eine Anmeldung (die VM), ist deren 401 keine
+// Antwort des Hubs: kein JSON mit code — daran erkennt die Seite die
+// abgelaufene Anmeldung.
 func TestGUIBehindPrefix(t *testing.T) {
 	e := newCommEnv(t)
 	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -506,7 +507,8 @@ func TestGUIBehindPrefix(t *testing.T) {
 		t.Errorf("Begrüßung unter dem Präfix: HTTP %d %q", resp.StatusCode, body)
 	}
 	// Die Verweise der Seite, so wie sie im HTML stehen.
-	for ref, ctype := range map[string]string{"gui/style.css": "text/css; charset=utf-8", "gui/app.js": "text/javascript; charset=utf-8"} {
+	for ref, ctype := range map[string]string{"gui/style.css": "text/css; charset=utf-8",
+		"gui/app.js": "text/javascript; charset=utf-8", "gui/icon.svg": "image/svg+xml"} {
 		if !strings.Contains(page, `"`+ref+`"`) {
 			t.Errorf("die Seite nennt %s nicht", ref)
 		}

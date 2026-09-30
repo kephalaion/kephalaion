@@ -247,7 +247,7 @@ func TestServeHubListener(t *testing.T) {
 	version := buildinfo.Get().Version
 	const plain, jsonType = "text/plain; charset=utf-8", "application/json"
 	const html, guiJSON = "text/html; charset=utf-8", "application/json; charset=utf-8"
-	const script, style = "text/javascript; charset=utf-8", "text/css; charset=utf-8"
+	const script, style, icon = "text/javascript; charset=utf-8", "text/css; charset=utf-8", "image/svg+xml"
 	// browser ist, was ein Browser für eine Seite als Accept schickt.
 	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 	greeting := []string{"Kephalaion " + version, "Rolle hub", "/hub/v1/<vorgang>"}
@@ -270,7 +270,8 @@ func TestServeHubListener(t *testing.T) {
 			"Gemeint ist das Token deines Kephalaion-Accounts", "X-Keph-Token-&lt;hub&gt;",
 			"<strong>Nicht gemeint</strong> ist das Passwort, mit dem du dich an dieser Seite",
 			"nicht das Token eines Nodes", "Version <span id=\"version\">" + version + "</span> · Rolle hub",
-			"href=\"gui/style.css\"", "src=\"gui/app.js\"", "Anderes Token prüfen"}, []string{"/hub/v1/<vorgang>"}, browser},
+			"href=\"gui/style.css\"", "src=\"gui/app.js\"", "href=\"gui/icon.svg\"", "Anderes Token prüfen"},
+			[]string{"/hub/v1/<vorgang>"}, browser},
 		{http.MethodGet, "/", 200, html, []string{"Kephalaion-Account"}, nil, "TEXT/HTML"},
 		{http.MethodHead, "/", 200, html, nil, []string{"Kephalaion"}, browser},
 		{http.MethodPost, "/", 405, plain, []string{"nur GET"}, nil, browser},
@@ -278,6 +279,11 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodGet, "/gui/app.js", 200, script, []string{"\"gui/api/whoami\"", "keph_"}, nil, "*/*"},
 		{http.MethodHead, "/gui/app.js", 200, script, nil, []string{"whoami"}, ""},
 		{http.MethodGet, "/gui/style.css", 200, style, []string{"prefers-color-scheme: dark"}, nil, "text/css,*/*;q=0.1"},
+		// Das Symbol der Seite: ohne es fragte der Browser /favicon.ico an der
+		// Wurzel des Hosts, am Präfix eines Proxys vorbei.
+		{http.MethodGet, "/gui/icon.svg", 200, icon, []string{"<svg "}, nil, "image/avif,image/webp,image/svg+xml,*/*;q=0.8"},
+		{http.MethodHead, "/gui/icon.svg", 200, icon, nil, []string{"svg"}, ""},
+		{http.MethodGet, "/favicon.ico", 404, plain, []string{"unbekannter Pfad /favicon.ico"}, nil, ""},
 		{http.MethodPost, "/gui/app.js", 405, plain, []string{"nur GET"}, nil, ""},
 		{http.MethodPost, "/gui/style.css", 405, plain, []string{"nur GET"}, nil, ""},
 		{http.MethodGet, "/gui/api/whoami", 405, guiJSON, []string{`"code":"invalid"`, "nur POST"}, nil, ""},
@@ -355,7 +361,7 @@ func TestServeHubListener(t *testing.T) {
 		}
 		// Seite und Dateien tragen die Header der Weboberfläche; kein Inline-
 		// Script, kein Inline-Style, nichts Fremdes.
-		if page := c.status == 200 && (c.ctype == html || c.ctype == script || c.ctype == style); page {
+		if page := c.status == 200 && (c.ctype == html || c.ctype == script || c.ctype == style || c.ctype == icon); page {
 			for k, want := range map[string]string{
 				"Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; " +
 					"img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",

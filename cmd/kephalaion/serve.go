@@ -380,10 +380,10 @@ const guiPath = "/gui"
 //   - An der Wurzel entscheidet Accept: Nennt er text/html (ein Browser),
 //     kommt die Weboberfläche (internal/hub/gui), sonst eine kurze Begrüßung
 //     mit der Version (text/plain, für curl) — beide mit Vary: Accept.
-//   - Unter /gui/ die Teile der Seite: /gui/app.js, /gui/style.css und ihr
-//     Eingang POST /gui/api/whoami, der einen Account allein prüft, ohne
-//     Node; er ist kein Teil des Vertrags. /gui, /gui/ und alles andere
-//     darunter 404.
+//   - Unter /gui/ die Teile der Seite: ihre Dateien (gui.Files: /gui/app.js,
+//     /gui/style.css, /gui/icon.svg) und ihr Eingang POST /gui/api/whoami,
+//     der einen Account allein prüft, ohne Node; er ist kein Teil des
+//     Vertrags. /gui, /gui/ und alles andere darunter 404.
 //   - An /hub und /hub/ ein kurzer Text ohne Version (diese Route liegt nach
 //     außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
 //     /v1/… sieht.
@@ -414,8 +414,9 @@ func newHubHandler(st hubstore.Store) http.Handler {
 	notFound := func(w http.ResponseWriter, r *http.Request) {
 		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path)
 	}
-	mux.Handle(guiPath+"/"+gui.FileScript, gui.NewFile(gui.FileScript))
-	mux.Handle(guiPath+"/"+gui.FileStyle, gui.NewFile(gui.FileStyle))
+	for _, name := range gui.Files {
+		mux.Handle(guiPath+"/"+name, gui.NewFile(name))
+	}
 	mux.Handle(guiPath+"/api/whoami", gui.NewWhoami(st))
 	mux.HandleFunc(guiPath, notFound)
 	mux.HandleFunc(guiPath+"/", notFound)
