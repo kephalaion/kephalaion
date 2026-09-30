@@ -748,6 +748,39 @@ Daraus folgen drei Dinge:
 neben ihm läuft und eine Replica hält wie jeder andere. Sonst gäbe es die Zerlegung in
 Abschnitte zweimal. Der Hub sucht nicht.
 
+### Deutsche Texte (vorgemerkt am 2026-09-30)
+
+FTS5 bringt nur einen englischen Stemmer mit (`porter`); `unicode61` zerlegt in Wörter und
+kann Diakritika entfernen (`remove_diacritics`), sonst nichts. Die meisten Dokumente sind
+deutsch. Damit bleiben Lücken:
+
+- **Beugung.** „Datenbanken“ findet „Datenbank“ nicht.
+- **Komposita.** „Index“ findet „Datenbankindex“ nicht. Das löst auch ein Stemmer nicht.
+- **Umlaute und ß.** `remove_diacritics` macht aus „ü“ ein „u“, nicht „ue“; „Schlüssel“ und
+  „Schluessel“ finden sich nicht.
+
+Wege, alle ohne zweiten Dienst — zu entscheiden mit Stufe 1:
+
+1. **Stemmen in Go, eigene Spalte.** Die Zerlegung schreibt jeden Abschnitt zweimal in die
+   FTS5-Tabelle: wie er ist und gestemmt (Snowball für Deutsch, der ß zu ss macht und Umlaute
+   wegnimmt). Die Anfrage wird genauso gestemmt und fragt beide Spalten; die ungestemmte
+   wiegt in `bm25()` schwerer und trägt englische Begriffe, Bezeichner und genaue Treffer.
+2. **`trigram` als zweiter Index.** Findet Teilwörter und damit Komposita, auch Bezeichner in
+   Code. Kosten: ein deutlich größerer Index, unschärferes Ranking, Suchbegriffe unter drei
+   Zeichen finden nichts. Eher als Rückfall, wenn die erste Suche wenig liefert.
+3. **Bleve, wenn FTS5 nicht reicht.** Volltextbibliothek in reinem Go mit Analyzer für
+   Deutsch, eingebettet ins Binary. Der Index wäre ein zweiter Speicher neben der Replica,
+   aber jederzeit aus ihr neu zu bauen; die Replica bleibt die Wahrheit, das atomare Delta
+   gilt dann nur für sie.
+
+Stemmer und Tokenizer gehören zur Fassung der Zerlegung: Ändert sich einer, wird der Index neu
+gebaut, und Index und Anfrage benutzen immer dieselbe Fassung.
+
+Offen: ob eine Collection ihre Sprache trägt oder der Node sie erkennt; ob „ae/oe/ue“ als
+Umlaut gelten; ob Komposita über `trigram` reichen oder eine Zerlegung mit Wörterbuch nötig
+wird. Vor der Entscheidung wird gemessen, an echten Dokumenten aus k-playbook und mit Fragen,
+die heute nichts finden.
+
 ## Wenn der Hub selbst einordnet (zurückgestellt)
 
 Der Hub soll Schnipsel einordnen, zusammenführen und Überholtes erkennen. Das heißt, dass
@@ -981,6 +1014,31 @@ SQLite gleichermaßen unter einer Millisekunde.
 Auf dem Node ist das SQLite über einen reinen Go-Treiber (`modernc.org/sqlite`), weil ohne C
 gebaut wird. Die Replica bleibt lokal: Sie ist abgeleitet, jederzeit neu abzugleichen, und
 lokal am schnellsten.
+
+**Entschieden am 2026-09-30: kein Redis auf dem Node.** Erwogen als schnellere Suche mit
+Index (RediSearch, seit Redis 8 im Kern). Deren Suche kann viel — BM25, Stemming auch für
+Deutsch, unscharfe Suche, Hervorhebung, Vektoren —, aber Redis passt nicht zum Node:
+
+- **Ein zweiter Dienst je Rechner.** Der Node kommt als ein Binary. Redis müsste auf jedem
+  Rechner installiert, abgesichert (Rechte, Passwort, Socket) und aktualisiert werden, auch
+  auf Laptops, unter WSL und im Devcontainer.
+- **`node.db` bleibt trotzdem.** Einstellungen, Hub-Token und Stand des Abgleichs müssen
+  dauerhaft liegen; Redis hält im Arbeitsspeicher und sichert nebenher. Es wären zwei
+  Speicher statt einem.
+- **Kein atomares Delta.** `MULTI/EXEC` kennt kein Rollback; Replica, Index und Revision
+  könnten auseinanderlaufen — genau das, was die Datenbank hier verhindern soll.
+- **Alles im Arbeitsspeicher.** Große Collections werden teuer; SQLite liest von der Platte
+  und hält nur die benutzten Seiten.
+- **Kein Gewinn an Tempo.** Redis spielt seine Stärke bei vielen Clients übers Netz aus. Am
+  Node fragen wenige Clients eines Rechners; FTS5 antwortet im selben Prozess, Redis erst über
+  einen Socket.
+- **Eine Replica ist eine Datei.** Hub entfernen oder neue `hub_id` heißt Datei weg; in Redis
+  bräuchte es Präfixe oder nummerierte Datenbanken.
+- **Lizenz.** RSAL/SSPL, seit Redis 8 wahlweise AGPL — vor einer Auslieferung wäre das zu
+  prüfen.
+
+Reicht FTS5 nicht, ist der nächste Schritt eine eingebettete Bibliothek, kein Dienst (siehe
+„Indizierung“, „Deutsche Texte“).
 
 **Der Hub soll eine richtige Datenbank bekommen können** — PostgreSQL, betrieben und
 regelmäßig gesichert wie jede andere. Anfangs ist es SQLite, einstellbar bei der
@@ -1893,7 +1951,10 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 5. **Semantische Suche.** Einbettungen rechnet der Hub einmal für den Store und liefert
    sie mit. Offen bleibt die Frage, die schon einmal zum Verzicht geführt hat: Auch die
    *Frage* braucht eine Einbettung. Entweder ein kleines Modell lokal, oder BM25 zuerst und
-   semantisch nur bei schlechter Antwort nachfragen.
+   semantisch nur bei schlechter Antwort nachfragen. Die Einbettungen liegen als BLOB in der
+   Replica und werden in Go ohne eigenen Index verglichen; bei einigen zehntausend
+   Abschnitten dürfte das reichen (Annahme, zu messen). Ein Vektorindex oder -dienst kommt
+   erst, wenn die Messung dagegen spricht.
 
 ## Offene Punkte
 

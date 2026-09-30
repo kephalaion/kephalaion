@@ -286,7 +286,8 @@ Nacharbeit des Nutzers)
   ist (`konzept.md`, „Offene Punkte“, Token-Rotation).
 - **Danach (Konzept, „Stufen“):**
   - Stufe 1: Zerlegung in Abschnitte, FTS5-Index, MCP-Werkzeug `search`, Abschnitte in
-    `read`; Ereignisstrom (SSE/Long-Polling, Todo #10);
+    `read`; Ereignisstrom (SSE/Long-Polling, Todo #10); dabei die Tokenisierung für Deutsch
+    entscheiden (`konzept.md`, „Indizierung“, „Deutsche Texte“);
   - Stufe 2, Rest nach Task 014: `create_numbered`;
   - Stufe 3: `append`, `replace_section`, `supersede`, `replace_directory`;
   - Transport `ssh` (Entwurf geparkt in `k-playbook-local/inbox/chat/`, derselbe Anschluss
