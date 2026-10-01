@@ -108,6 +108,18 @@ Ausführlich: [`konzept.md`](konzept.md).
   und lauscht weiter nur auf Loopback; Zertifikat, ACME und Härtung liegen beim Proxy. Im
   Log des Hubs steht die Adresse des Aufrufers als `via` (aus `X-Forwarded-For`). Aufbau in
   [`installation.md`](installation.md).
+- **node address** (Adresse des Nodes) — wie ein Client auf der Kommandozeile den Node nennt
+  (`--node` bei `node dir` und `node mcp add|status`): die Basis ohne `/mcp`, angehängt wird
+  `/mcp`. Lokal `http://127.0.0.1:7433` (aus `listen`), über einen Proxy
+  `https://<name>/<präfix>`, etwa `https://<name>/kephalaion` (Task 023). `http` nur zu diesem
+  Rechner (`localhost`, `127.0.0.1`, `[::1]`) und zu `host.docker.internal`, alles andere nur
+  `https` — sonst gingen Tokens im Klartext übers Netz; keine Query, kein User, keiner
+  Weiterleitung folgen. Bei `https` prüft die Kommandozeile das Zertifikat gegen die
+  System-Roots oder die CA aus `--ca-file`, TLS mindestens 1.2. Vor dem ersten Token fragt sie
+  den Node mit `initialize` ohne Token an; antwortet statt seiner der Proxy (401, Weiterleitung,
+  HTML), heißt das „Präfix falsch oder Anmeldung des Proxys“. **Entfernt** (remote) ist jede
+  Adresse außer `http` zu Loopback — also `https` und `http://host.docker.internal`; für einen
+  **entry** mit entfernter Adresse gilt die Wahl der Hubs (**--hub**).
 - **via proxy** (über den Proxy) — eine Anfrage an `/mcp`, die den Header `X-Forwarded-For`
   trägt; daran erkennt der Node, dass sie über einen **reverse proxy** kam (Task 023). Kein
   zweiter Listener, keine Einstellung. Voraussetzung: Der Proxy setzt den Header selbst und
@@ -250,8 +262,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   beim Node ab (`whoami`, Stand des letzten Abgleichs: nach `grant` erst `node sync`), ein
   anderes Ziel ist Exit 2; `pull` löscht lokal nur mit `--delete`. Optionen `--exclude`,
   `--last` (`push`), `--dry-run`, `--timeout`; Exit 3 heißt unvollständig — erneut ausführen.
-  Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016, Ziele außerhalb von
-  `vendor/` Task 021).
+  Den Node nennt `--node` (eine **node address**, auch über `https` mit `--ca-file`), sonst
+  `listen` der config. Paket `internal/dirsync`, Client in `cmd/kephalaion` (Task 016, Ziele
+  außerhalb von `vendor/` Task 021, `https` Task 023).
 - **personal** (persönliches Verzeichnis) — *vorgemerkt.* Eigenschaft eines Verzeichnisses:
   Auflisten, Lesen und Schreiben zeigen nur Dokumente des eigenen Users, der Schalter `all`
   alles; die Suche bleibt unberührt. Eine Ansicht, kein Recht — anders als eine private

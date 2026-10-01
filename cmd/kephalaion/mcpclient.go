@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,19 +44,25 @@ type mcpTarget struct {
 	hub, collection, account string
 }
 
-// connectNode verbindet sich mit dem MCP-Eingang unter endpoint, angemeldet
-// am Hub hub als account mit token, und liefert das Ziel für die Collection.
-// done beendet die Sitzung.
-func connectNode(ctx context.Context, endpoint, hub, collection, account, token string) (tgt *mcpTarget, done func(), err error) {
+// connectNode verbindet sich mit dem MCP-Eingang unter addr, angemeldet am
+// Hub hub als account mit token, und liefert das Ziel für die Collection.
+// Zuerst prüft es den Node ohne Token (probeNode): Ein Zertifikatsfehler,
+// eine Anmeldung des Proxys oder ein falscher Präfix fällt so auf, bevor ein
+// Token hinausgeht. rootCAs prüft das Zertifikat bei https (nil:
+// System-Roots), caFile nennt die Meldung. done beendet die Sitzung.
+func connectNode(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, caFile, hub, collection, account,
+	token string) (tgt *mcpTarget, done func(), err error) {
+	if _, err := probeNode(ctx, addr, rootCAs, caFile); err != nil {
+		return nil, nil, err
+	}
 	h := http.Header{}
 	h.Set("X-Keph-Account-"+hub, account)
 	h.Set("X-Keph-Token-"+hub, token)
 	client := mcp.NewClient(&mcp.Implementation{Name: "kephalaion", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint,
-		HTTPClient:           &http.Client{Transport: headerTransport{header: h, next: http.DefaultTransport}},
-		DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: addr.Endpoint(),
+		HTTPClient: nodeClient(rootCAs, h), DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Node unter %s nicht erreichbar: %w", endpoint, err)
+		return nil, nil, fmt.Errorf("Node unter %s nicht erreichbar: %w", addr.Endpoint(), err)
 	}
 	return &mcpTarget{session: session, addr: hub + ":" + collection, hub: hub, collection: collection, account: account},
 		func() { _ = session.Close() }, nil
@@ -71,6 +78,10 @@ func (t *mcpTarget) DirScopes(ctx context.Context) ([]string, error) {
 	var out mcpnode.WhoamiOutput
 	if _, err := t.call(ctx, "whoami", struct{}{}, &out); err != nil {
 		return nil, err
+	}
+	if out.Hidden {
+		return nil, fmt.Errorf("Account %s ist am Node an keinem Hub gültig angemeldet (über einen Proxy nennt der Node "+
+			"dann keine Hubs): stimmt das Token, und heißt der Hub am Node %s?", t.account, t.hub)
 	}
 	i := slices.IndexFunc(out.Hubs, func(h mcpnode.HubInfo) bool { return h.Hub == t.hub })
 	if i < 0 {

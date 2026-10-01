@@ -17,7 +17,6 @@ import (
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/dirsync"
 	"github.com/kephalaion/kephalaion/internal/ident"
-	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
 )
 
 const nodeDirUsage = `Aufruf:
@@ -25,7 +24,7 @@ const nodeDirUsage = `Aufruf:
                            [--last pfad] [--exclude glob]… [--dry-run] [--timeout dauer]
   kephalaion node dir pull <hub>:<collection> <verzeichnis> <lokaler-ordner>
                            [--delete] [--exclude glob]… [--dry-run] [--timeout dauer]
-  Anmeldung: [--node url] [--account name] [--token-file pfad | --token-stdin]
+  Anmeldung: [--node url [--ca-file pfad]] [--account name] [--token-file pfad | --token-stdin]
 
 Gleicht einen lokalen Ordner mit einem Verzeichnis einer Collection ab — als
 Client des Nodes über MCP, mit Account und Token des Aufrufers. Verglichen
@@ -67,12 +66,19 @@ gemeldet, nicht wiederholt; der Lauf geht weiter und endet unvollständig.
 forbidden, not_readable und ein nicht erreichbarer Node brechen ab.
 
 Anmeldung:
-  Die Adresse des Nodes kommt aus listen im Abschnitt node: der config
-  (--config), sonst --node <url> (etwa im Devcontainer). Der Account ist
-  --account, ohne Angabe der einzige unter <config-dir>/tokens/<hub>/
-  (<account>.token; .pending wird übergangen); bei mehreren nennt der Fehler
-  sie. Das Token kommt aus dieser Datei, --token-file oder --token-stdin —
-  nie als Argument, nie in einer Ausgabe.
+  Die Adresse des Nodes ist --node <url>, sonst listen im Abschnitt node: der
+  config (--config). Mit --node auch ein Node hinter einem Proxy auf einem
+  anderen Rechner: https://<name>/<präfix>, etwa https://<name>/kephalaion
+  (die Basis ohne /mcp); das Zertifikat wird gegen die System-Roots geprüft,
+  mit --ca-file gegen diese CA. http geht nur zu diesem Rechner (localhost,
+  127.0.0.1, [::1]) und zu host.docker.internal. Vor dem ersten Token fragt
+  die Kommandozeile den Node ohne Token an; antwortet statt seiner der Proxy
+  (401, Weiterleitung, HTML), heißt das: Präfix falsch oder Anmeldung des
+  Proxys. <hub> ist der Alias des Hub-Eintrags am Node, den --node nennt.
+  Der Account ist --account, ohne Angabe der einzige unter
+  <config-dir>/tokens/<hub>/ (<account>.token; .pending wird übergangen); bei
+  mehreren nennt der Fehler sie. Das Token kommt aus dieser Datei,
+  --token-file oder --token-stdin — nie als Argument, nie in einer Ausgabe.
 
 Ausgabe: eine Zeile je Vorgang (+ angelegt, ~ geändert, - gelöscht,
 ! gemeldet oder übergangen), zuletzt der Bericht: angelegt, geändert,
@@ -87,8 +93,11 @@ Exit-Codes:
       erneut ausführen
 
 Optionen:
-  --node url           Adresse des Nodes, http://127.0.0.1:<port>; sonst aus
+  --node url           Adresse des Nodes ohne /mcp: http://127.0.0.1:<port>,
+                       über einen Proxy https://<name>/<präfix>; sonst aus
                        der config
+  --ca-file pfad       mit --node https://…: das Zertifikat gegen diese CA
+                       (PEM) prüfen statt gegen die System-Roots
   --account name       der Account; sonst der einzige mit Token-Datei
   --token-file pfad    Datei mit dem Token (eine Zeile)
   --token-stdin        das Token als eine Zeile von der Standardeingabe
@@ -120,6 +129,7 @@ func runNodeDir(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			c := newCommand("node dir "+name, u, stdout, stderr, "<hub>:<collection>", "<verzeichnis>", "<lokaler-ordner>")
 			d := &dirCommand{c: c, pull: pull, stdin: stdin}
 			d.node = c.fs.String("node", "", "")
+			d.caFile = c.fs.String("ca-file", "", "")
 			d.account = c.fs.String("account", "", "")
 			d.tokenFile = c.fs.String("token-file", "", "")
 			d.tokenStdin = c.fs.Bool("token-stdin", false, "")
@@ -150,6 +160,7 @@ type dirCommand struct {
 	pull       bool
 	stdin      io.Reader
 	node       *string
+	caFile     *string
 	account    *string
 	tokenFile  *string
 	tokenStdin *bool
@@ -204,7 +215,11 @@ func (d *dirCommand) run(pos []string) int {
 			return d.usageError("%v", err)
 		}
 	}
-	endpoint, err := d.endpoint()
+	addr, err := d.address()
+	if err != nil {
+		return d.c.fail(err)
+	}
+	rootCAs, err := readNodeCA(addr, *d.caFile)
 	if err != nil {
 		return d.c.fail(err)
 	}
@@ -222,7 +237,8 @@ func (d *dirCommand) run(pos []string) int {
 	}
 	// Die Verbindung selbst und jeder Vorgang laufen ohne den Abbruch: Der
 	// laufende Vorgang geht zu Ende.
-	tgt, closeNode, err := connectNode(context.WithoutCancel(ctx), endpoint, hub, collection, account, token)
+	tgt, closeNode, err := connectNode(context.WithoutCancel(ctx), addr, rootCAs, *d.caFile, hub, collection, account,
+		token)
 	if err != nil {
 		return d.c.fail(err)
 	}
@@ -285,29 +301,28 @@ func (d *dirCommand) checkDirScope(ctx context.Context, tgt *mcpTarget, dir stri
 		contract.VendorDir, tgt.account, tgt.addr, dirsync.DirName(dir), granted, tgt.account, tgt.collection, tgt.hub), false
 }
 
-// endpoint ist die Adresse des MCP-Eingangs: --node, sonst listen im
-// Abschnitt node: der config.
-func (d *dirCommand) endpoint() (string, error) {
+// address ist die Adresse des Nodes: --node, sonst listen im Abschnitt node:
+// der config.
+func (d *dirCommand) address() (nodeAddress, error) {
 	if *d.node != "" {
-		u := strings.TrimRight(*d.node, "/")
-		if !strings.HasPrefix(u, "http://") {
-			return "", fmt.Errorf("--node %q: erwartet http://<host>:<port> (nur dieser Rechner)", *d.node)
-		}
-		return u + mcpnode.Path, nil
+		return parseNodeAddress(*d.node)
+	}
+	if *d.caFile != "" {
+		return nodeAddress{}, errors.New("--ca-file nur zusammen mit --node https://…")
 	}
 	loc, err := config.Locate(*d.c.cfg)
 	if err != nil {
-		return "", err
+		return nodeAddress{}, err
 	}
 	cfg, _, err := config.Load(loc.Path)
 	if err != nil {
-		return "", err
+		return nodeAddress{}, err
 	}
 	listen := cfg.Listen(config.Node)
 	if listen == "" {
-		return "", fmt.Errorf("kein Node in der config %s; Adresse mit --node <url> angeben", loc.Path)
+		return nodeAddress{}, fmt.Errorf("kein Node in der config %s; Adresse mit --node <url> angeben", loc.Path)
 	}
-	return assistant.NodeURL(listen, mcpnode.Path), nil
+	return localNodeAddress(listen), nil
 }
 
 // credentials liefert Account und Token: --token-file oder --token-stdin
