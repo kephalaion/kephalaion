@@ -226,6 +226,50 @@ func Logins(tokensDir string, choice Choice) (logins []Login, skipped []SkippedH
 	return logins, skipped, nil
 }
 
+// SelectedLogins ist Logins für eine Wahl der Hubs: nur diese Hubs, nach
+// Alias; ein gewählter Hub ohne Token-Datei und ohne Wahl des Accounts wird
+// übergangen und genannt. Ohne Wahl (nil) alle Hubs wie Logins.
+func SelectedLogins(tokensDir string, hubs []string, choice Choice) (logins []Login, skipped []SkippedHub, err error) {
+	if hubs == nil {
+		return Logins(tokensDir, choice)
+	}
+	want := map[string]bool{}
+	for _, h := range hubs {
+		want[h] = true
+	}
+	sub := Choice{}
+	for hub, account := range choice {
+		if want[hub] {
+			sub[hub] = account
+		}
+	}
+	all, skip, err := Logins(tokensDir, sub)
+	if err != nil {
+		return nil, nil, err
+	}
+	got := map[string]bool{}
+	for _, l := range all {
+		if want[l.Hub] {
+			logins = append(logins, l)
+			got[l.Hub] = true
+		}
+	}
+	for _, s := range skip {
+		if want[s.Hub] {
+			skipped = append(skipped, s)
+			got[s.Hub] = true
+		}
+	}
+	for _, h := range hubs {
+		if !got[h] {
+			skipped = append(skipped, SkippedHub{Hub: h, Reason: fmt.Sprintf("gewählt, aber keine Token-Datei unter %s",
+				filepath.Join(tokensDir, h))})
+		}
+	}
+	sort.Slice(skipped, func(i, j int) bool { return skipped[i].Hub < skipped[j].Hub })
+	return logins, skipped, nil
+}
+
 // Headers liest die Tokens der Anmeldungen und liefert die Header-Paare: je
 // Hub X-Keph-Account-<alias> und X-Keph-Token-<alias>. Ein Hub, dessen
 // Token-Datei sich nicht lesen lässt oder kein Token hält, fehlt und wird

@@ -160,15 +160,26 @@ func TestNodeURL(t *testing.T) {
 
 func TestHelperArgs(t *testing.T) {
 	choice := Choice{"vm": "bob", "eigen": "kp"}
-	args := HelperArgs("/opt/k/kephalaion", "/home/anna/.config/kephalaion/tokens", choice)
+	args := HelperArgs("/opt/k/kephalaion", "/home/anna/.config/kephalaion/tokens", nil, choice)
 	want := []string{"/opt/k/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/home/anna/.config/kephalaion/tokens",
 		"--account", "eigen=kp", "--account", "vm=bob"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("HelperArgs = %v", args)
 	}
-	bin, dir, got, ok := ParseHelperArgs(args)
-	if !ok || bin != "/opt/k/kephalaion" || dir != "/home/anna/.config/kephalaion/tokens" || !got.Equal(choice) {
-		t.Fatalf("ParseHelperArgs = %q, %q, %v, %v", bin, dir, got, ok)
+	bin, dir, hubs, got, ok := ParseHelperArgs(args)
+	if !ok || bin != "/opt/k/kephalaion" || dir != "/home/anna/.config/kephalaion/tokens" || hubs != nil ||
+		!got.Equal(choice) {
+		t.Fatalf("ParseHelperArgs = %q, %q, %v, %v, %v", bin, dir, hubs, got, ok)
+	}
+	// Mit Wahl der Hubs (Task 023): --hub vor --account, in der Reihenfolge
+	// der Wahl.
+	args = HelperArgs("/opt/k/kephalaion", "/t", []string{"vm"}, Choice{"vm": "bob"})
+	want = []string{"/opt/k/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--hub", "vm", "--account", "vm=bob"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("HelperArgs mit Hub = %v", args)
+	}
+	if _, _, hubs, got, ok := ParseHelperArgs(args); !ok || !reflect.DeepEqual(hubs, []string{"vm"}) || got["vm"] != "bob" {
+		t.Fatalf("ParseHelperArgs mit Hub = %v, %v, %v", hubs, got, ok)
 	}
 	for _, bad := range [][]string{
 		nil,
@@ -177,10 +188,43 @@ func TestHelperArgs(t *testing.T) {
 		{"/x/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--account"},
 		{"/x/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--fremd", "x"},
 		{"/x/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--account", "ohne-gleich"},
+		{"/x/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--hub", "System"},
+		{"/x/kephalaion", "node", "mcp", "headers", "--tokens-dir", "/t", "--account", "vm=bob", "--hub", "vm"},
 	} {
-		if _, _, _, ok := ParseHelperArgs(bad); ok {
+		if _, _, _, _, ok := ParseHelperArgs(bad); ok {
 			t.Errorf("ParseHelperArgs(%v): gilt als Helfer", bad)
 		}
+	}
+}
+
+// SelectedLogins: nur die gewählten Hubs; ein gewählter ohne Token-Datei
+// wird genannt, ein Hub, der später unter tokens/ hinzukommt, nicht
+// aufgenommen. Ohne Wahl wie Logins.
+func TestSelectedLogins(t *testing.T) {
+	dir := t.TempDir()
+	writeToken(t, dir, "vm", "kp.token", tokenA+"\n")
+	writeToken(t, dir, "eigen", "a.token", tokenA+"\n")
+	writeToken(t, dir, "eigen", "b.token", tokenB+"\n")
+	logins, skipped, err := SelectedLogins(dir, []string{"vm"}, nil)
+	if err != nil || len(logins) != 1 || logins[0].Hub != "vm" || logins[0].Account != "kp" || len(skipped) != 0 {
+		t.Fatalf("vm: %v %v %v", logins, skipped, err)
+	}
+	writeToken(t, dir, "neu", "x.token", tokenA+"\n")
+	if again, _, _ := SelectedLogins(dir, []string{"vm"}, nil); !reflect.DeepEqual(again, logins) {
+		t.Errorf("nach neuem Hub: %v", again)
+	}
+	logins, skipped, _ = SelectedLogins(dir, []string{"eigen", "fehlt"}, Choice{"vm": "kp"})
+	if len(logins) != 0 || len(skipped) != 2 || skipped[0].Hub != "eigen" || len(skipped[0].Accounts) != 2 ||
+		skipped[1].Hub != "fehlt" || !strings.Contains(skipped[1].Reason, "gewählt, aber keine Token-Datei") {
+		t.Errorf("eigen, fehlt: %v %+v", logins, skipped)
+	}
+	logins, _, _ = SelectedLogins(dir, []string{"eigen"}, Choice{"eigen": "b"})
+	if len(logins) != 1 || logins[0].Account != "b" {
+		t.Errorf("eigen=b: %v", logins)
+	}
+	all, _, _ := SelectedLogins(dir, nil, nil)
+	if len(all) != 2 {
+		t.Errorf("ohne Wahl: %v", all)
 	}
 }
 

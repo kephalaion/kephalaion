@@ -84,7 +84,7 @@ func helperChoice(helper string) Choice {
 	if !ok {
 		return nil
 	}
-	_, _, choice, ok := ParseHelperArgs(args)
+	_, _, _, choice, ok := ParseHelperArgs(args)
 	if !ok {
 		return nil
 	}

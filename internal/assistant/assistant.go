@@ -105,14 +105,26 @@ func (m *Manager) run(ctx context.Context, name string, args ...string) (string,
 }
 
 // Target ist, was eingetragen wird: die Adresse des Nodes, das Binary und
-// das Verzeichnis der Token-Dateien — alle aufgelöst und absolut.
+// das Verzeichnis der Token-Dateien — alle aufgelöst und absolut —, dazu die
+// Wahl der Hubs.
 type Target struct {
-	// URL ist die Adresse des MCP-Eingangs, etwa http://127.0.0.1:7433/mcp.
+	// URL ist die Adresse des MCP-Eingangs, etwa http://127.0.0.1:7433/mcp
+	// oder https://<name>/kephalaion/mcp.
 	URL string
 	// Binary ist der absolute Pfad von kephalaion, für den Helfer.
 	Binary string
 	// TokensDir ist das Verzeichnis der Token-Dateien.
 	TokensDir string
+	// Hubs ist die Wahl der Hubs eines Eintrags mit entfernter Adresse: Nur
+	// ihre Header-Paare gehen an den Node — fest im Eintrag, ein Hub, der
+	// später unter tokens/ hinzukommt, geht nicht mit. nil heißt alle Hubs
+	// mit Token-Datei (lokal, Task 022).
+	Hubs []string
+}
+
+// logins ermittelt die Anmeldungen für das Ziel: mit Wahl der Hubs nur diese.
+func (t Target) logins(choice Choice) ([]Login, []SkippedHub, error) {
+	return SelectedLogins(t.TokensDir, t.Hubs, choice)
 }
 
 // entry ist der Eintrag eines Assistenten, wie er sein soll: die Adresse und
@@ -134,7 +146,7 @@ func (e entry) choice() Choice {
 
 // helper ist die Kommandozeile des Helfers für diesen Eintrag.
 func (e entry) helper() string {
-	return ShellJoin(HelperArgs(e.Binary, e.TokensDir, e.choice()))
+	return ShellJoin(HelperArgs(e.Binary, e.TokensDir, e.Hubs, e.choice()))
 }
 
 // found ist der Eintrag kephalaion, wie er bei einem Assistenten steht.
@@ -352,7 +364,7 @@ func (m *Manager) Add(ctx context.Context, t Target, opts AddOptions) (Report, e
 		}
 		choice, notes := resolveChoice(t.TokensDir, s, all, opts.Choice)
 		rep.Notes = appendNew(rep.Notes, notes...)
-		logins, skip, err := Logins(t.TokensDir, choice)
+		logins, skip, err := t.logins(choice)
 		if err != nil {
 			return Report{}, err
 		}
@@ -484,7 +496,7 @@ func (m *Manager) Status(ctx context.Context, t Target, assistants []string) ([]
 			continue
 		}
 		choice, _ := resolveChoice(t.TokensDir, s, all, nil)
-		logins, skip, err := Logins(t.TokensDir, choice)
+		logins, skip, err := t.logins(choice)
 		if err != nil {
 			return nil, nil, err
 		}

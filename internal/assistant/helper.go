@@ -2,15 +2,22 @@ package assistant
 
 import (
 	"strings"
+
+	"github.com/kephalaion/kephalaion/internal/ident"
 )
 
 // HelperArgs ist der Aufruf des Helfers, den ein Assistent bei jeder
 // Verbindung startet: <binary> node mcp headers --tokens-dir <pfad>, dazu je
-// Hub der Wahl --account <hub>=<account>. binary und tokensDir sind absolut
-// und aufgelöst: Ein Assistent aus einer GUI erbt kein PATH, und Codex leert
-// die Umgebung (kein XDG_CONFIG_HOME).
-func HelperArgs(binary, tokensDir string, choice Choice) []string {
+// gewähltem Hub --hub <alias> (Wahl der Hubs eines Eintrags mit entfernter
+// Adresse; ohne Wahl alle Hubs mit Token-Datei) und je Hub der Wahl --account
+// <hub>=<account>. binary und tokensDir sind absolut und aufgelöst: Ein
+// Assistent aus einer GUI erbt kein PATH, und Codex leert die Umgebung (kein
+// XDG_CONFIG_HOME).
+func HelperArgs(binary, tokensDir string, hubs []string, choice Choice) []string {
 	args := []string{binary, "node", "mcp", "headers", "--tokens-dir", tokensDir}
+	for _, hub := range hubs {
+		args = append(args, "--hub", hub)
+	}
 	for _, hub := range choice.Hubs() {
 		args = append(args, "--account", hub+"="+choice[hub])
 	}
@@ -19,27 +26,34 @@ func HelperArgs(binary, tokensDir string, choice Choice) []string {
 
 // ParseHelperArgs liest einen Aufruf, wie HelperArgs ihn baut, zurück. ok ist
 // false, wenn args kein solcher Aufruf ist.
-func ParseHelperArgs(args []string) (binary, tokensDir string, choice Choice, ok bool) {
+func ParseHelperArgs(args []string) (binary, tokensDir string, hubs []string, choice Choice, ok bool) {
 	if len(args) < 6 || args[1] != "node" || args[2] != "mcp" || args[3] != "headers" || args[4] != "--tokens-dir" {
-		return "", "", nil, false
+		return "", "", nil, nil, false
 	}
 	binary, tokensDir = args[0], args[5]
 	rest := args[6:]
 	if len(rest)%2 != 0 {
-		return "", "", nil, false
+		return "", "", nil, nil, false
 	}
 	var values []string
 	for i := 0; i < len(rest); i += 2 {
-		if rest[i] != "--account" {
-			return "", "", nil, false
+		switch {
+		case rest[i] == "--hub" && len(values) == 0:
+			if ident.CheckName("Hub", rest[i+1]) != nil {
+				return "", "", nil, nil, false
+			}
+			hubs = append(hubs, rest[i+1])
+		case rest[i] == "--account":
+			values = append(values, rest[i+1])
+		default:
+			return "", "", nil, nil, false
 		}
-		values = append(values, rest[i+1])
 	}
 	choice, err := ParseChoice(values)
 	if err != nil {
-		return "", "", nil, false
+		return "", "", nil, nil, false
 	}
-	return binary, tokensDir, choice, true
+	return binary, tokensDir, hubs, choice, true
 }
 
 // shellSafe sind die Zeichen, die in einer Shell ohne Anführungszeichen für

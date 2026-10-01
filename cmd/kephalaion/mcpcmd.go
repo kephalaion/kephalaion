@@ -2,24 +2,29 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
 )
 
 const nodeMCPUsage = `Aufruf:
   kephalaion node mcp add     [--assistant name]… [--account <hub>=<account>]… [--dry-run] [--auto]
+                              [--node url [--ca-file pfad] [--hub alias]…]
   kephalaion node mcp remove  [--assistant name]…
-  kephalaion node mcp status  [--assistant name]…
-  kephalaion node mcp headers [--tokens-dir pfad] [--account <hub>=<account>]…
+  kephalaion node mcp status  [--assistant name]… [--node url [--ca-file pfad] [--hub alias]…]
+  kephalaion node mcp headers [--tokens-dir pfad] [--hub alias]… [--account <hub>=<account>]…
 
 Meldet den Node bei den KI-Assistenten des Users als MCP-Server an: ein
 Eintrag kephalaion je Assistent auf User-Ebene, für alle Hubs — die Adresse
@@ -84,6 +89,31 @@ sonst gilt die der anderen Einträge; ein gewählter Account ohne Token-Datei
 gilt als keine Wahl. Ein Hub mit mehreren Accounts ohne Wahl wird übergangen
 und genannt, die übrigen werden eingetragen (Exit 1).
 
+Ein Node auf einem anderen Rechner (--node):
+  --node <url> trägt statt der Adresse aus der config diese ein: ein Node
+  hinter einem Proxy, https://<name>/<präfix> (etwa
+  https://<name>/kephalaion; die Basis ohne /mcp) — auch auf einem Rechner
+  ohne eigene config. http geht nur zu diesem Rechner (localhost, 127.0.0.1,
+  [::1]) und zu host.docker.internal. Zuerst fragen add und status den Node
+  an: das Zertifikat gegen die System-Roots oder --ca-file, dann initialize
+  ohne Token. Scheitert das (Zertifikat, Gegenseite ohne TLS, Präfix falsch
+  oder Anmeldung des Proxys, nicht erreichbar), schreibt add nichts und sagt
+  warum; status meldet es. --ca-file dient nur dieser Prüfung — die
+  Assistenten prüfen das Zertifikat mit ihren eigenen Trust-Stores.
+
+  Wahl der Hubs: An eine entfernte Adresse (https, oder
+  http://host.docker.internal) gehen nur die Header-Paare der gewählten Hubs
+  (--hub <alias>, wiederholbar; <alias> ist der Hub-Eintrag am entfernten
+  Node). Die Wahl steht fest im Eintrag — beim Helfer als --hub, bei OpenCode
+  als Verweise nur auf ihre Token-Dateien —, ein Hub, der später unter
+  tokens/ hinzukommt, geht nicht mit. Ohne --hub nimmt add den Hub nur, wenn
+  unter tokens/ genau einer liegt; sonst bricht es ab und schreibt nichts
+  (Exit 2), auch mit eigenem Node.
+
+  Auf einem Rechner mit eigenem Node gilt --node nur bis zum nächsten
+  automatischen Anstoß (install.sh, rotate, check): Der setzt die lokale
+  Adresse wieder ein; bis dahin meldet status ohne --node „weicht ab“.
+
 Automatischer Anstoß (--auto; ebenso nach kephalaion node account rotate und
 check): ändert nur Assistenten, die schon einen Eintrag kephalaion haben.
 Hat noch keiner der gefundenen einen, trägt er bei allen gefundenen ein. So
@@ -98,7 +128,15 @@ Optionen:
   --account <hub>=<account>  wählt den Account eines Hubs mit mehreren
                              Token-Dateien; wiederholbar
   --dry-run                  add: nur melden, was geschähe
-  --auto                     add: automatischer Anstoß (siehe oben)
+  --auto                     add: automatischer Anstoß (siehe oben); nicht
+                             mit --node
+  --node url                 add, status: dieser Node statt dem der config
+                             (siehe oben)
+  --ca-file pfad             add, status: mit --node https://… das
+                             Zertifikat bei der Prüfung gegen diese CA (PEM)
+  --hub alias                add, status: die Wahl der Hubs für eine
+                             entfernte Adresse; headers: nur diese Hubs;
+                             wiederholbar
   --tokens-dir pfad          headers: das Verzeichnis der Token-Dateien;
                              sonst tokens/ neben der config des Users
                              (~/.config/kephalaion/tokens)
@@ -107,9 +145,11 @@ Optionen:
 
 Exit-Codes:
   0   fertig; headers: JSON ausgegeben (auch {} und bei übergangenen Hubs)
-  1   Fehler bei einem Assistenten oder ein übergangener Hub; headers: die
-      Standardausgabe ist ein Terminal
-  2   falscher Aufruf
+  1   Fehler bei einem Assistenten oder ein übergangener Hub; mit --node: der
+      Node antwortet nicht wie erwartet; headers: die Standardausgabe ist
+      ein Terminal
+  2   falscher Aufruf, auch eine Adresse, die --node nicht nimmt, und eine
+      entfernte Adresse ohne eindeutige Wahl der Hubs
 `
 
 // stdoutIsTerminal sagt, ob w ein Terminal ist; Tests ersetzen es.
@@ -153,7 +193,8 @@ func assistantTarget(cfgFlag string) (assistant.Target, error) {
 	}
 	listen := cfg.Listen(config.Node)
 	if listen == "" {
-		return assistant.Target{}, fmt.Errorf("%w %s; zuerst: kephalaion node init", errNoNode, loc.Path)
+		return assistant.Target{}, fmt.Errorf("%w %s; zuerst: kephalaion node init — oder ein Node auf einem anderen "+
+			"Rechner mit --node https://<name>/<präfix>", errNoNode, loc.Path)
 	}
 	exe, err := assistantExecutable()
 	if err != nil {
@@ -167,6 +208,116 @@ func assistantTarget(cfgFlag string) (assistant.Target, error) {
 		return assistant.Target{}, err
 	}
 	return assistant.Target{URL: assistant.NodeURL(listen, mcpnode.Path), Binary: exe, TokensDir: tokens}, nil
+}
+
+// remoteFlags sind --node, --ca-file und --hub von add und status.
+type remoteFlags struct {
+	node, caFile *string
+	hubs         stringList
+}
+
+func newRemoteFlags(c *command) *remoteFlags {
+	f := &remoteFlags{node: c.fs.String("node", "", ""), caFile: c.fs.String("ca-file", "", "")}
+	c.fs.Var(&f.hubs, "hub", "")
+	return f
+}
+
+// remoteTarget ist das Ziel mit --node: die Adresse aus --node, das Binary
+// und tokens/ — ohne config. Für eine entfernte Adresse die Wahl der Hubs:
+// --hub, ohne Angabe der einzige Hub unter tokens/. usage heißt falscher
+// Aufruf (Exit 2).
+type remoteTarget struct {
+	target  assistant.Target
+	addr    nodeAddress
+	rootCAs *x509.CertPool
+}
+
+func (f *remoteFlags) resolve() (rt *remoteTarget, usage bool, err error) {
+	if *f.node == "" {
+		if *f.caFile != "" || len(f.hubs) > 0 {
+			return nil, true, errors.New("--ca-file und --hub nur zusammen mit --node <url>")
+		}
+		return nil, false, nil
+	}
+	addr, err := parseNodeAddress(*f.node)
+	if err != nil {
+		return nil, true, err
+	}
+	rootCAs, err := readNodeCA(addr, *f.caFile)
+	if err != nil {
+		return nil, *f.caFile != "" && !addr.HTTPS, err
+	}
+	exe, err := assistantExecutable()
+	if err != nil {
+		return nil, false, fmt.Errorf("Pfad dieses Binarys nicht ermittelbar: %w", err)
+	}
+	if exe, err = filepath.Abs(exe); err != nil {
+		return nil, false, err
+	}
+	tokens, err := assistant.TokensDir()
+	if err != nil {
+		return nil, false, err
+	}
+	rt = &remoteTarget{target: assistant.Target{URL: addr.Endpoint(), Binary: exe, TokensDir: tokens}, addr: addr,
+		rootCAs: rootCAs}
+	if !addr.Remote() {
+		if len(f.hubs) > 0 {
+			return nil, true, fmt.Errorf("--hub nur mit einer entfernten Adresse (https oder http://%s); an %s gehen "+
+				"wie ohne --node die Paare aller Hubs mit Token-Datei", dockerHost, addr.Base)
+		}
+		return rt, false, nil
+	}
+	if rt.target.Hubs, err = chooseHubs(tokens, f.hubs); err != nil {
+		return nil, true, err
+	}
+	return rt, false, nil
+}
+
+// chooseHubs ist die Wahl der Hubs für eine entfernte Adresse: die aus --hub
+// (geprüft, sortiert, ohne Doppel), ohne Angabe der einzige Hub unter
+// tokens/.
+func chooseHubs(tokensDir string, flags []string) ([]string, error) {
+	if len(flags) > 0 {
+		var hubs []string
+		for _, h := range flags {
+			if err := ident.CheckName("Hub", h); err != nil {
+				return nil, fmt.Errorf("--hub %q: %w", h, err)
+			}
+			if !slices.Contains(hubs, h) {
+				hubs = append(hubs, h)
+			}
+		}
+		sort.Strings(hubs)
+		return hubs, nil
+	}
+	hubs, err := assistant.Hubs(tokensDir)
+	if err != nil {
+		return nil, err
+	}
+	switch len(hubs) {
+	case 1:
+		return hubs, nil
+	case 0:
+		return nil, fmt.Errorf("keine Token-Datei unter %s: für einen Node auf einem anderen Rechner zuerst die "+
+			"Token-Datei des Accounts nach %s (0600) — <hub> ist der Alias des Hub-Eintrags am entfernten Node",
+			tokensDir, assistant.TokenFile(tokensDir, "<hub>", "<account>"))
+	}
+	return nil, fmt.Errorf("mehrere Hubs unter %s (%s): an einen entfernten Node gehen nur die Header-Paare der "+
+		"gewählten — --hub <alias> wählt (wiederholbar); nichts eingetragen", tokensDir, strings.Join(hubs, ", "))
+}
+
+// ownNode nennt die config mit eigenem Node, wenn es sie gibt — für den
+// Hinweis, dass --node dort nur bis zum nächsten automatischen Anstoß gilt.
+func ownNode(cfgFlag string) string {
+	loc, err := config.Locate(cfgFlag)
+	if err != nil {
+		return ""
+	}
+	cfg, _, err := config.Load(loc.Path)
+	if err != nil || cfg.Listen(config.Node) == "" {
+		return ""
+	}
+	return loc.Path
 }
 
 // assistantFlags liest --assistant und prüft die Werte.
@@ -199,6 +350,7 @@ func runNodeMCPAdd(args []string, stdout, stderr io.Writer) int {
 	c.fs.Var(&accounts, "account", "")
 	dryRun := c.fs.Bool("dry-run", false, "")
 	auto := c.fs.Bool("auto", false, "")
+	remote := newRemoteFlags(c)
 	if _, code, ok := c.parse(args); !ok {
 		return code
 	}
@@ -211,15 +363,46 @@ func runNodeMCPAdd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %v\n", c.name, err)
 		return 2
 	}
-	target, err := assistantTarget(*c.cfg)
-	if errors.Is(err, errNoNode) && *auto {
-		return 0
+	if *auto && *remote.node != "" {
+		fmt.Fprintf(stderr, "%s: --auto ist der automatische Anstoß mit der Adresse aus der config, nicht mit --node\n", c.name)
+		return 2
 	}
+	rt, usage, err := remote.resolve()
 	if err != nil {
-		return c.fail(err)
+		fmt.Fprintf(stderr, "%s: %v\n", c.name, err)
+		if usage {
+			return 2
+		}
+		return 1
+	}
+	ctx := context.Background()
+	var target assistant.Target
+	if rt != nil {
+		// Erst prüfen, dann eintragen: ohne Token, vor jedem Schreiben.
+		if _, err := probeNode(ctx, rt.addr, rt.rootCAs, *remote.caFile); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\nNichts eingetragen.\n", c.name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Node erreichbar: %s\n", rt.target.URL)
+		target = rt.target
+	} else {
+		target, err = assistantTarget(*c.cfg)
+		if errors.Is(err, errNoNode) && *auto {
+			return 0
+		}
+		if err != nil {
+			return c.fail(err)
+		}
 	}
 	opts := assistant.AddOptions{Assistants: names, Choice: choice, DryRun: *dryRun, Auto: *auto}
-	return registerAssistants(context.Background(), c.name, target, opts, stdout, stderr)
+	code := registerAssistants(ctx, c.name, target, opts, stdout, stderr)
+	if rt != nil {
+		if own := ownNode(*c.cfg); own != "" {
+			fmt.Fprintf(stdout, "Hinweis: Dieser Rechner hat einen eigenen Node (%s). Der nächste automatische Anstoß "+
+				"(install.sh, kephalaion node account rotate, check) trägt wieder dessen Adresse ein.\n", own)
+		}
+	}
+	return code
 }
 
 // registerAssistants trägt ein und meldet das Ergebnis; der Exit-Code ist 1
@@ -368,6 +551,7 @@ func runNodeMCPStatus(args []string, stdout, stderr io.Writer) int {
 	c := newCommand("node mcp status", nodeMCPUsage, stdout, stderr)
 	var assistants stringList
 	c.fs.Var(&assistants, "assistant", "")
+	remote := newRemoteFlags(c)
 	if _, code, ok := c.parse(args); !ok {
 		return code
 	}
@@ -375,16 +559,35 @@ func runNodeMCPStatus(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 2
 	}
-	target, err := assistantTarget(*c.cfg)
+	rt, usage, err := remote.resolve()
 	if err != nil {
-		return c.fail(err)
+		fmt.Fprintf(stderr, "%s: %v\n", c.name, err)
+		if usage {
+			return 2
+		}
+		return 1
 	}
-	statuses, skipped, err := newAssistantManager().Status(context.Background(), target, names)
-	if err != nil {
-		return c.fail(err)
-	}
-	fmt.Fprintf(stdout, "Node: %s\n", target.URL)
+	ctx := context.Background()
 	code := 0
+	var target assistant.Target
+	nodeLine := ""
+	if rt != nil {
+		target = rt.target
+		nodeLine = " — erreichbar"
+		if _, err := probeNode(ctx, rt.addr, rt.rootCAs, *remote.caFile); err != nil {
+			nodeLine, code = " — "+err.Error(), 1
+		}
+		if len(target.Hubs) > 0 {
+			nodeLine += " (Hubs: " + strings.Join(target.Hubs, ", ") + ")"
+		}
+	} else if target, err = assistantTarget(*c.cfg); err != nil {
+		return c.fail(err)
+	}
+	statuses, skipped, err := newAssistantManager().Status(ctx, target, names)
+	if err != nil {
+		return c.fail(err)
+	}
+	fmt.Fprintf(stdout, "Node: %s%s\n", target.URL, nodeLine)
 	for _, st := range statuses {
 		line := fmt.Sprintf("%s: %s", st.Assistant, st.State)
 		switch st.State {
@@ -416,8 +619,9 @@ func runNodeMCPHeaders(args []string, stdout, stderr io.Writer) int {
 	const name = "node mcp headers"
 	fs := newFlagSet(name, nodeMCPUsage, stderr)
 	tokensDir := fs.String("tokens-dir", "", "")
-	var accounts stringList
+	var accounts, hubFlags stringList
 	fs.Var(&accounts, "account", "")
+	fs.Var(&hubFlags, "hub", "")
 	if _, code, ok := parseFlags(fs, args, nodeMCPUsage, 0, stderr); !ok {
 		return code
 	}
@@ -425,6 +629,15 @@ func runNodeMCPHeaders(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		return 2
+	}
+	// Mit --hub nur diese Hubs: der Helfer eines Eintrags mit entfernter
+	// Adresse.
+	var hubs []string
+	if len(hubFlags) > 0 {
+		if hubs, err = chooseHubs("", hubFlags); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", name, err)
+			return 2
+		}
 	}
 	if stdoutIsTerminal(stdout) {
 		fmt.Fprintf(stderr, "%s: gibt Tokens aus und schreibt deshalb nicht in ein Terminal. Es ist der Helfer, "+
@@ -436,7 +649,7 @@ func runNodeMCPHeaders(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 	} else {
-		logins, skipped, err := assistant.Logins(dir, choice)
+		logins, skipped, err := assistant.SelectedLogins(dir, hubs, choice)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		}

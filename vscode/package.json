@@ -2,7 +2,7 @@
   "name": "kephalaion",
   "displayName": "Kephalaion",
   "description": "Collections von Kephalaion als Ordner in VS Code",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "kascada",
   "license": "SEE LICENSE IN ../LICENSE",
   "repository": "https://github.com/kephalaion/kephalaion",
@@ -28,7 +28,14 @@
         "kephalaion.nodeUrl": {
           "type": "string",
           "default": "",
-          "description": "Adresse des Nodes, z. B. http://127.0.0.1:7433. Leer: aus listen im Abschnitt node der config."
+          "markdownDescription": "Adresse des Nodes ohne `/mcp`, z. B. `http://127.0.0.1:7433`, oder ein Node auf einem anderen Rechner hinter einem Proxy: `https://<name>/kephalaion`. `http` nur zu diesem Rechner und zu `host.docker.internal`. Leer: aus `listen` im Abschnitt `node` der config. An eine entfernte Adresse gehen nur die Header-Paare der Hubs aus `kephalaion.hubs`."
+        },
+        "kephalaion.hubs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "scope": "machine-overridable",
+          "markdownDescription": "Wahl der Hubs für eine entfernte `kephalaion.nodeUrl` (`https://…` oder `http://host.docker.internal…`), etwa `[\"vm\"]`: Nur ihre Header-Paare gehen an den Node — ein Hub, der später unter `~/.config/kephalaion/tokens/` hinzukommt, nicht. Leer: nur, wenn dort genau ein Hub liegt. Der Alias ist der des Hub-Eintrags am entfernten Node. Für die lokale Adresse ohne Belang."
         },
         "kephalaion.accounts": {
           "type": "object",

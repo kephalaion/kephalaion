@@ -6,6 +6,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const rules = require('./rules');
 
 const SCHEME = 'keph';
 const POLL_MS = 30000;
@@ -42,13 +43,38 @@ function nodeListen(file) {
   return undefined;
 }
 
-function nodeUrl() {
+// Die Adresse des Nodes: kephalaion.nodeUrl, geprüft wie node dir --node (rules.parseNodeUrl:
+// http nur zu Loopback und host.docker.internal, sonst https), sonst listen aus der config.
+// Liefert { endpoint, remote } oder { error }.
+function nodeTarget() {
   const set = vscode.workspace.getConfiguration('kephalaion').get('nodeUrl');
-  if (set) return set.replace(/\/+$/, '') + '/mcp';
+  if (set) {
+    try {
+      return rules.parseNodeUrl(set);
+    } catch (e) {
+      return { error: e.message };
+    }
+  }
   let listen = nodeListen(configFile());
-  if (!listen) return undefined;
+  if (!listen) return { error: `keine Adresse des Nodes: listen fehlt in ${configFile()}` };
   if (listen.startsWith(':')) listen = '127.0.0.1' + listen;
-  return `http://${listen}/mcp`;
+  return { endpoint: `http://${listen}/mcp`, remote: false };
+}
+
+function nodeUrl() {
+  return nodeTarget().endpoint;
+}
+
+// Die Wahl der Hubs für eine entfernte nodeUrl (kephalaion.hubs).
+function chosenHubs() {
+  return vscode.workspace.getConfiguration('kephalaion').get('hubs');
+}
+
+// Welche Hubs ihre Header-Paare an den Node schicken: lokal alle unter tokens/, an eine
+// entfernte nodeUrl nur die gewählten (rules.selectHubs). { hubs } oder { hubs: [], error }.
+function hubSelection() {
+  const t = nodeTarget();
+  return rules.selectHubs(Object.keys(tokenAccounts()), chosenHubs(), Boolean(t.remote));
 }
 
 // Token-Dateien: tokens/<hub>/<account>.token; *.pending wird übergangen.
@@ -81,11 +107,15 @@ function chosenAccounts() {
 
 // Welcher Account je Hub benutzt wird und warum: only (einziger), chosen (Einstellung),
 // first (mehrere, keiner oder ein unbekannter gewählt — der erste nach Namen).
+// Nur die Hubs aus hubSelection: An eine entfernte nodeUrl gehen nur die gewählten.
 function readCredentials(log) {
   const base = path.join(configDir(), 'tokens');
   const chosen = chosenAccounts();
   const creds = {};
-  for (const [hub, accounts] of Object.entries(tokenAccounts())) {
+  const all = tokenAccounts();
+  for (const hub of hubSelection().hubs) {
+    const accounts = all[hub];
+    if (!accounts) continue;
     let account = accounts[0];
     let how = accounts.length === 1 ? 'only' : 'first';
     if (chosen[hub] && accounts.includes(chosen[hub])) {
@@ -115,8 +145,6 @@ function readCredentials(log) {
 
 const MCP_PROVIDER_ID = 'kephalaion.node';
 const MCP_LABEL = 'Kephalaion';
-const HUB_ALIAS = /^[a-z0-9][a-z0-9._-]{0,62}$/;
-const TOKEN_FORMAT = /^keph_[A-Za-z0-9_-]{43}$/;
 
 function mcpEnabled() {
   return vscode.workspace.getConfiguration('kephalaion').get('mcpServer.enabled', true) !== false;
@@ -129,26 +157,13 @@ function traceLogging() {
   return vscode.env.logLevel === vscode.LogLevel.Trace;
 }
 
-// Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers: der
-// gewählte (kephalaion.accounts), sonst der einzige. Ein Hub mit mehreren Accounts ohne Wahl
-// oder mit einem gewählten ohne Token-Datei fehlt. Nur Namen, kein Token.
+// Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers, nur für
+// die Hubs aus hubSelection (rules.mcpLogins). Nur Namen, kein Token.
 function mcpLogins() {
-  const chosen = chosenAccounts();
-  const logins = [];
-  const skipped = [];
-  for (const [hub, accounts] of Object.entries(tokenAccounts()).sort(([a], [b]) => (a < b ? -1 : 1))) {
-    if (!HUB_ALIAS.test(hub) || hub.startsWith('system')) {
-      skipped.push(`${hub}: kein gültiger Alias`);
-    } else if (chosen[hub]) {
-      if (accounts.includes(chosen[hub])) logins.push({ hub, account: chosen[hub] });
-      else skipped.push(`${hub}: gewählter Account ${chosen[hub]} hat keine Token-Datei`);
-    } else if (accounts.length === 1) {
-      logins.push({ hub, account: accounts[0] });
-    } else {
-      skipped.push(`${hub}: mehrere Accounts (${accounts.join(', ')}), keiner gewählt — „Kephalaion: Account wählen“`);
-    }
-  }
-  return { logins, skipped };
+  const sel = hubSelection();
+  const out = rules.mcpLogins(tokenAccounts(), chosenAccounts(), sel.hubs);
+  if (sel.error) out.skipped.push(sel.error);
+  return out;
 }
 
 // Die Header-Paare für den Start des Servers, aus den Token-Dateien. Meldungen nennen nie ein
@@ -157,23 +172,8 @@ function mcpHeaders(log) {
   const base = path.join(configDir(), 'tokens');
   const { logins, skipped } = mcpLogins();
   for (const s of skipped) log(`MCP-Server: Hub ${s}`);
-  const headers = {};
-  for (const { hub, account } of logins) {
-    let token;
-    try {
-      token = fs.readFileSync(path.join(base, hub, `${account}.token`), 'utf8').split('\n')[0].trim();
-    } catch (e) {
-      log(`MCP-Server: Hub ${hub}: ${account}.token nicht lesbar (${e.code || 'Fehler'})`);
-      continue;
-    }
-    if (!TOKEN_FORMAT.test(token)) {
-      log(`MCP-Server: Hub ${hub}: ${account}.token hält kein gültiges Token`);
-      continue;
-    }
-    headers[`X-Keph-Account-${hub}`] = account;
-    headers[`X-Keph-Token-${hub}`] = token;
-  }
-  return headers;
+  return rules.mcpHeaders(logins,
+    (hub, account) => fs.readFileSync(path.join(base, hub, `${account}.token`), 'utf8').split('\n')[0].trim(), log);
 }
 
 // Stand, an dem sich zeigt, ob die Definition neu zu melden ist: Adresse, Einstellung, Trace,
@@ -191,7 +191,8 @@ function mcpState() {
       }
     }
   }
-  return JSON.stringify([nodeUrl() || '', mcpEnabled(), traceLogging(), chosenAccounts(), files.sort()]);
+  return JSON.stringify([nodeUrl() || '', mcpEnabled(), traceLogging(), chosenAccounts(), chosenHubs() || [],
+    files.sort()]);
 }
 
 class McpProvider {
@@ -213,8 +214,19 @@ class McpProvider {
   }
 
   provideMcpServerDefinitions() {
-    const url = nodeUrl();
-    if (!mcpEnabled() || !url) return [];
+    const target = nodeTarget();
+    const url = target.endpoint;
+    if (!mcpEnabled()) return [];
+    if (!url) {
+      this.log(`MCP-Server nicht gemeldet: ${target.error}`);
+      return [];
+    }
+    // An eine entfernte nodeUrl ohne eindeutige Wahl der Hubs: kein Server, keine Tokens.
+    const sel = hubSelection();
+    if (sel.error) {
+      this.log(`MCP-Server nicht gemeldet: ${sel.error}`);
+      return [];
+    }
     if (traceLogging()) {
       if (!this._warned) {
         this._warned = true;
@@ -290,8 +302,11 @@ class Node {
   // Fehler trägt toolError, den Text als toolText und, bei den Werkzeugen, die schreiben, den
   // Code aus error.code als toolCode; nach ihm wird entschieden, nicht nach der Meldung.
   async request(tool, args) {
-    const url = nodeUrl();
-    if (!url) throw nodeError(`keine Adresse des Nodes: listen fehlt in ${configFile()}`, 'unreachable');
+    const target = nodeTarget();
+    const url = target.endpoint;
+    if (!url) throw nodeError(target.error, 'unreachable');
+    const sel = hubSelection();
+    if (sel.error) throw nodeError(sel.error, 'unreachable');
     const headers = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
@@ -304,13 +319,19 @@ class Node {
     const body = { jsonrpc: '2.0', id: ++this.id, method: 'tools/call', params: { name: tool, arguments: args || {} } };
     let res;
     try {
-      res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      // Keiner Weiterleitung folgen: Der Node sendet nie eine, und fetch schickte die Header-Paare
+      // mit an das neue Ziel.
+      res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'manual' });
     } catch (e) {
       const code = e.cause && e.cause.code;
       const why = code || (e.cause && e.cause.message) || e.message;
       if (NOT_SENT.has(code)) throw nodeError(`Node ${url} nicht erreichbar (${why})`, 'unreachable');
       throw nodeError(`Verbindung zum Node ${url} abgebrochen (${why})`, 'unclear');
     }
+    // Eine Antwort, die nicht vom Node kommt (Proxy: 401, Weiterleitung, HTML), hat er nie
+    // ausgeführt — außer 5xx, da ist der Ausgang unklar.
+    const why = rules.explainResponse(res.status, res.headers.get('content-type'));
+    if (why) throw nodeError(`${url}: ${why}`, res.status >= 500 ? 'unclear' : 'rejected');
     if (!res.ok) throw nodeError(`${url}: HTTP ${res.status}`, res.status >= 500 ? 'unclear' : 'rejected');
     let msg;
     try {
@@ -342,6 +363,10 @@ function parseResponse(text, type) {
 }
 
 // --- Status ---
+
+// Was whoami mit hidden heißt: über einen Proxy, an keinem Hub gültig angemeldet.
+const HIDDEN_HINT = 'stimmen die Token-Dateien, und heißen die Hubs unter tokens/ (bzw. in kephalaion.hubs) wie die '
+  + 'Hub-Einträge am Node?';
 
 class Status {
   constructor(node, log) {
@@ -401,6 +426,10 @@ class Status {
       lines.push(`nicht erreichbar: ${this.error}`);
       return lines;
     }
+    if (this.who.hidden) {
+      lines.push(`Keine gültige Anmeldung am Node (über den Proxy nennt er dann weder Version noch Hubs): ${HIDDEN_HINT}`);
+      return lines;
+    }
     lines.push(`Version Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}`);
     for (const h of this.hubs()) {
       let l = `Hub ${h.hub} (Node ${h.node}): Anmeldung ${h.login}`;
@@ -421,6 +450,12 @@ class Status {
     if (!this.who) {
       it.text = '$(warning) Keph: Node nicht erreichbar';
       it.tooltip = this.error;
+      it.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      return;
+    }
+    if (this.who.hidden) {
+      it.text = '$(warning) Keph: nicht angemeldet';
+      it.tooltip = `Keine gültige Anmeldung am Node ${nodeUrl()}: ${HIDDEN_HINT}`;
       it.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       return;
     }
@@ -1088,9 +1123,10 @@ function activate(context) {
   // Andere Wahl des Accounts oder andere Adresse — auch von Hand in settings.json.
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration('kephalaion.mcpServer.enabled')) mcp.check();
-    if (!e.affectsConfiguration('kephalaion.accounts') && !e.affectsConfiguration('kephalaion.nodeUrl')) return;
+    if (!e.affectsConfiguration('kephalaion.accounts') && !e.affectsConfiguration('kephalaion.nodeUrl')
+      && !e.affectsConfiguration('kephalaion.hubs')) return;
     node.invalidate();
-    kfs.rebase(Object.keys(tokenAccounts()));
+    kfs.rebase(hubSelection().hubs);
     status.refresh();
     mcp.check();
   }));

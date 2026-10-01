@@ -183,8 +183,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   eigene Kommando des Assistenten, das Token nie im Klartext (`konzept.md`, „Installation und
   Betrieb“; `installation.md`, „Bei den Assistenten anmelden“). Optionen von `add`, `remove` und
   `status`: **--assistant**; von `add` dazu **--account**, `--dry-run` (nur melden, was
-  geschähe) und **--auto**. Exit 0 fertig, 1 Fehler bei einem Assistenten oder ein übergangener
-  Hub, 2 falscher Aufruf.
+  geschähe) und **--auto**; von `add` und `status` dazu `--node <url>` (eine **node address**
+  statt `listen` der config, auch ohne eigene config; zuerst wird der Node ohne Token geprüft,
+  scheitert das, schreibt `add` nichts), `--ca-file` (nur für diese Prüfung) und **--hub**
+  (Task 023). Exit 0 fertig, 1 Fehler bei einem Assistenten, ein übergangener Hub oder ein
+  Node, der nicht wie erwartet antwortet, 2 falscher Aufruf.
 - **assistant** (Assistent) — ein KI-Assistent des Users, bei dem `node mcp` den Node einträgt.
   Die Werte von **--assistant**: `claude` (Claude Code), `opencode` (OpenCode), `codex` (Codex
   CLI), `vscode` (VS Code mit Copilot — dort trägt `node mcp` nichts ein, das macht die
@@ -200,8 +203,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Helfer, fremder Inhalt); bei `vscode` „über die Erweiterung“.
 - **headers helper** (Helfer) — die Kommandozeile, die ein Assistent bei jeder Verbindung
   aufruft, um die Header-Paare zu bekommen: `<absoluter Pfad>/kephalaion node mcp headers
-  --tokens-dir <pfad> [--account <hub>=<account>]…`. `node mcp headers` gibt die Header-Paare
-  aller Hubs mit Token-Datei als ein JSON-Objekt aus (`{"X-Keph-Account-<alias>":"…",
+  --tokens-dir <pfad> [--hub <alias>]… [--account <hub>=<account>]…`. `node mcp headers` gibt
+  die Header-Paare aller Hubs mit Token-Datei (mit **--hub** nur dieser) als ein JSON-Objekt aus (`{"X-Keph-Account-<alias>":"…",
   "X-Keph-Token-<alias>":"…"}`), ohne Token-Datei `{}`. Es ist die einzige Ausgabe mit Token:
   nur, wenn die Standardausgabe kein Terminal ist. Außer im Terminal und bei falschem Aufruf
   endet es mit Exit 0 und gültigem JSON; ein Hub ohne eindeutiges, lesbares Token fehlt im
@@ -215,10 +218,32 @@ Ausführlich: [`konzept.md`](konzept.md).
   jeden Hub ausdrücklich in den Eintrag; ohne Angabe bleibt die Wahl aus dem Eintrag. Ein Hub
   mit mehreren Accounts ohne Wahl wird übergangen und genannt. (Bei `node dir` und `node whoami`
   nennt `--account <name>` nur den Account.)
+- **--hub** (Wahl der Hubs) — bei `node mcp add|status --node <url>`: `--hub <alias>`,
+  wiederholbar, nennt die Hubs, deren Header-Paare an einen Node mit **entfernter** Adresse
+  gehen (Task 023); `<alias>` ist der Hub-Eintrag am entfernten Node, und so heißt auch das
+  Verzeichnis unter `tokens/`. Die Wahl steht fest im **entry** — im **headers helper** als
+  `--hub <alias>`, bei OpenCode als Verweise nur auf ihre Token-Dateien —, nie dynamisch: Ein
+  Hub, der später unter `tokens/` hinzukommt, geht nicht mit. Ohne `--hub` nimmt `add` den Hub
+  nur, wenn unter `tokens/` genau einer liegt; sonst bricht es ab und schreibt nichts (Exit 2),
+  auch mit eigenem Node. Bei einer lokalen Adresse gibt es keine Wahl (alle Hubs mit
+  Token-Datei, Task 022). `node mcp headers --hub <alias>` gibt nur die Paare dieser Hubs aus.
+  Das Gegenstück der Erweiterung für VS Code ist **kephalaion.hubs**. (Bei `node whoami`
+  beschränkt `--hub` nur die Anzeige.)
 - **--auto** (automatischer Anstoß) — `node mcp add --auto`: der Aufruf aus `install.sh`;
   dieselbe Regel gilt nach `node account rotate` und `check`. Er ändert nur Assistenten, die
   schon einen Eintrag `kephalaion` haben; hat noch keiner der gefundenen einen, trägt er wie
   `add` bei allen gefundenen ein. Ohne Node in der config endet er ohne Meldung mit Exit 0.
+- **kephalaion.nodeUrl** — Einstellung der Erweiterung für VS Code: die Adresse des Nodes als
+  **node address** (Basis ohne `/mcp`), leer `listen` der config. Seit 0.0.7 (Task 023)
+  geprüft wie `--node`: `http` nur zu Loopback und `host.docker.internal`, sonst `https`;
+  eine Antwort des Proxys (401, Weiterleitung, HTML) heißt „Präfix falsch oder Anmeldung des
+  Proxys“, einer Weiterleitung folgt sie nicht.
+- **kephalaion.hubs** — Einstellung der Erweiterung für VS Code (Liste von Aliasen, Vorgabe
+  leer): die Wahl der Hubs für eine entfernte **kephalaion.nodeUrl** wie **--hub** — nur ihre
+  Header-Paare gehen an den Node, im Dateisystem wie im MCP-Server für Copilot, fest, auch
+  wenn später ein Hub unter `tokens/` hinzukommt. Leer nur, wenn unter `tokens/` genau ein Hub
+  liegt; sonst schickt die Erweiterung nichts und meldet den MCP-Server nicht. Für die lokale
+  Adresse ohne Belang.
 - **kephalaion.mcpServer.enabled** — Einstellung der Erweiterung für VS Code (Vorgabe `true`):
   Die Erweiterung meldet den Node als MCP-Server „Kephalaion“ für Copilot
   (`vscode.lm.registerMcpServerDefinitionProvider`, Anbieter `kephalaion.node`), mit Adresse

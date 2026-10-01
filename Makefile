@@ -35,7 +35,7 @@ HOST_TARGET = $(shell go env GOOS)-$(shell go env GOARCH)
 # -buildvcs=false, weil der Commit ausdrücklich per -ldflags kommt.
 LDFLAGS = -s -w -X $(BUILDINFO).Version=$(VERSION) -X $(BUILDINFO).Commit=$(COMMIT)
 
-.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-vsix vscode-install clean
+.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-test vscode-vsix vscode-install clean
 
 help: ## Zeigt diese Hilfe an
 	@echo "Targets:"
@@ -87,7 +87,8 @@ test: ## Führt die Tests aus
 	go test ./...
 
 # check und check-quick unterscheiden sich nur in den Flags für go test.
-# install.sh bekommt hier nur die Syntaxprüfung; shellcheck läuft in CI.
+# install.sh bekommt hier nur die Syntaxprüfung; shellcheck läuft in CI. Die
+# Tests der Erweiterung für VS Code laufen mit, wenn Node.js da ist.
 define check_steps
 	sh -n install.sh
 	@set -eu; \
@@ -98,6 +99,11 @@ define check_steps
 	  fi
 	go vet ./...
 	go test $(1) ./...
+	@if command -v node >/dev/null 2>&1; then \
+	  node --test $(VSCODE_DIR)/test/*.test.js; \
+	else \
+	  echo "node fehlt: Tests der Erweiterung für VS Code übergangen (make vscode-test; CI hat Node.js)" >&2; \
+	fi
 endef
 
 check: ## gofmt-Prüfung, go vet, alle Tests und Syntax von install.sh
@@ -207,6 +213,11 @@ dev-install: dist-host ## Baut diese Plattform, ersetzt ~/.local/bin/kephalaion,
 # (braucht Node.js). Die .vsix landet in ./dist/ neben den Binaries.
 VSCODE_DIR := vscode
 VSCODE_VSIX = $(DIST_DIR)/$(BINARY)-$(shell node -p "require('./$(VSCODE_DIR)/package.json').version").vsix
+
+# Die Regeln der Erweiterung (vscode/rules.js: Adresse, Wahl der Hubs, Antworten eines Proxys)
+# prüft node --test ohne VS Code. make check ruft es mit, wenn Node.js da ist.
+vscode-test: ## Tests der Regeln der Erweiterung für VS Code (braucht Node.js)
+	node --test $(VSCODE_DIR)/test/*.test.js
 
 vscode-vsix: ## Baut die VS-Code-Erweiterung nach ./dist/ (braucht Node.js)
 	@mkdir -p "$(DIST_DIR)"
