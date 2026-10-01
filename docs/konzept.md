@@ -1355,8 +1355,8 @@ Datenbanken.
 - **k-playbook** bietet das Update in seiner Oberfläche an, wenn das Binary sich selbst
   ersetzen kann; sonst weist es nur auf die neue Version und den Weg hin.
 
-**Bei den Assistenten angemeldet — entschieden am 2026-09-30 (Task 022).** Der Node wird bei
-jedem KI-Assistenten des Users als MCP-Server eingetragen, auf User-Ebene, ein Eintrag
+**Bei den Assistenten angemeldet — entschieden am 2026-09-30, gebaut in Task 022.** Der Node
+wird bei jedem KI-Assistenten des Users als MCP-Server eingetragen, auf User-Ebene, ein Eintrag
 `kephalaion` für alle Hubs: die Adresse aus `listen` der config, je Hub das Header-Paar aus den
 Token-Dateien `~/.config/kephalaion/tokens/<hub>/<account>.token` — sie liegen zentral je
 User. Das macht Kephalaion selbst (`kephalaion node mcp add`, dazu `remove` und `status`),
@@ -1365,15 +1365,22 @@ steht nie im Klartext in der Konfiguration eines Assistenten:
 
 | Assistent | Eintragen | Token |
 |---|---|---|
-| Claude Code | `claude mcp add-json … --scope user` | `headersHelper` → `kephalaion node mcp headers` |
-| OpenCode | `opencode mcp add … --url … --header …` (globale config) | Verweis auf die Token-Datei (`{file:…}`) |
-| Codex | Tabelle in `~/.codex/config.toml` — `codex mcp add` kann keine eigenen Header | `http_headers_helper` → `kephalaion node mcp headers` |
-| VS Code (Copilot) | über die Erweiterung für VS Code — `code --add-mcp` wirkt im Remote-Terminal (WSL, SSH) nicht; zu prüfen | aus den Token-Dateien, wie die Erweiterung sie schon liest |
+| Claude Code | `claude mcp add-json … --scope user`, `claude mcp remove` | `headersHelper` → `kephalaion node mcp headers` |
+| OpenCode | `opencode mcp add … --url … --header …` (globale config, ab 1.17.0); `remove` nimmt nur den Schlüssel `mcp.kephalaion` heraus (JWCC) | Verweis auf die Token-Datei (`{file:~/…}`) |
+| Codex | die Tabelle `[mcp_servers.kephalaion]` in `~/.codex/config.toml`, am Text — `codex mcp add` kann keine eigenen Header, `codex mcp add|remove` schreiben die ganze Tabelle `mcp_servers` neu und verlieren Kommentare | `http_headers_helper` → `kephalaion node mcp headers` |
+| VS Code (Copilot) | die Erweiterung meldet den Node selbst (`vscode.lm.registerMcpServerDefinitionProvider`) — `code --add-mcp` wirkt im Remote-Terminal (WSL, SSH) nicht | aus den Token-Dateien, erst beim Start des Servers eingesetzt (`vscode.md`, „MCP-Server für Copilot“) |
 
 `node mcp headers` liest bei jeder Verbindung die Token-Dateien und gibt die Header als JSON
-aus; nach `rotate` stimmt der Eintrag ohne Zutun. Eingetragen wird bei der Installation, wenn
-ein Account dazukommt, und jederzeit von Hand, wiederholbar. Global trägt jeder User für sich
-ein — die Tokens liegen bei ihm. Cursor und Gemini CLI vorerst nicht. Befund
+aus — die einzige Ausgabe mit Token, nie in ein Terminal; nach `rotate` stimmt der Eintrag
+ohne Zutun, wirksam mit der nächsten Verbindung bzw. Sitzung. Eingetragen wird bei der
+Installation (`install.sh` ruft `node mcp add --auto`), wenn ein Account dazukommt (`node
+account rotate`, `check`) und jederzeit von Hand, wiederholbar. Die automatischen Anstöße
+ändern nur Assistenten, die schon einen Eintrag haben; hat keiner einen, tragen sie überall
+ein. Global trägt jeder User für sich ein — die Tokens liegen bei ihm. OpenCode fragt beim
+Node nicht nach OAuth (der Node antwortet nie 401); ein `{file:…}`-Verweis auf eine fehlende
+Datei machte aber seine ganze config ungültig, deshalb nimmt `add` nur vorhandene Token-Dateien
+auf und bereinigt tote Verweise. Cursor und Gemini CLI vorerst nicht. Einzelheiten:
+[`installation.md`](installation.md), „Bei den Assistenten anmelden“; Befund
 `material/befunde/mcp-client-registrierung.md`.
 
 **Doku für Menschen, Ansible und KI — entschieden am 2026-09-26, geschrieben in Task 011.**

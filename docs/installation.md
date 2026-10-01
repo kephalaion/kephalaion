@@ -263,7 +263,77 @@ Fehlers an der Datenbank, den Hinweis auf die globale Installation (Exit-Code 0)
 
 Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) an `http://127.0.0.1:7433/mcp`, siehe README,
-„serve und MCP“.
+„serve und MCP“. Bei ihren KI-Assistenten tragen sie den Node selbst ein
+(`kephalaion node mcp add`, „Bei den Assistenten anmelden“ unten).
+
+## Bei den Assistenten anmelden
+
+Damit die KI-Assistenten des Users die Werkzeuge des Nodes sehen, trägt Kephalaion den Node bei
+ihnen als MCP-Server ein — ein Eintrag `kephalaion` je Assistent auf User-Ebene, für alle Hubs,
+ohne das Token im Klartext ([`konzept.md`](konzept.md), „Bei den Assistenten angemeldet“):
+
+```sh
+kephalaion node mcp status       # je Assistent: eingetragen, fehlt, weicht ab
+kephalaion node mcp add          # bei allen gefundenen eintragen (Claude Code, OpenCode, Codex)
+kephalaion node mcp add --assistant codex --dry-run   # nur melden, was geschähe
+kephalaion node mcp remove --assistant opencode       # nur diesen Eintrag entfernen
+```
+
+| Assistent | Eintrag | woher das Token kommt |
+|---|---|---|
+| Claude Code | `mcpServers.kephalaion` in `~/.claude.json` (über `claude mcp add-json --scope user`) | der Helfer `kephalaion node mcp headers` bei jeder Verbindung |
+| OpenCode | `mcp.kephalaion` in `~/.config/opencode/opencode.json(c)` (über `opencode mcp add`) | `{file:~/.config/kephalaion/tokens/<hub>/<account>.token}` |
+| Codex | `[mcp_servers.kephalaion]` in `~/.codex/config.toml` (bzw. `$CODEX_HOME`) | der Helfer, wie bei Claude Code |
+| VS Code (Copilot) | die Erweiterung für VS Code meldet den Node selbst ([`vscode.md`](vscode.md), „MCP-Server für Copilot“) | aus den Token-Dateien, erst beim Start des Servers |
+
+Der Helfer steht mit absolutem Pfad im Eintrag (`/home/<user>/.local/bin/kephalaion node mcp
+headers --tokens-dir … --account <hub>=<account>`): Assistenten aus einer GUI erben kein
+`PATH`, und Codex leert die Umgebung. Alles andere in den Dateien bleibt, auch Kommentare.
+Gefunden werden die Assistenten über `PATH`; ein nicht gefundener wird übergangen und genannt.
+
+**Wann eingetragen wird:**
+
+- **Von Hand** mit `kephalaion node mcp add` — bei allen gefundenen Assistenten (oder den mit
+  `--assistant` genannten), jederzeit wiederholbar; ein richtiger Eintrag bleibt unverändert.
+- **Automatisch** am Ende von `install.sh` (`kephalaion node mcp add --auto`, bei einer
+  Erstinstallation ohne Wirkung) und nach `kephalaion node account rotate` bzw. `check`, wenn
+  die Token-Datei unter `~/.config/kephalaion/tokens/` liegt. Diese Anstöße ändern nur
+  Assistenten, die schon einen Eintrag haben; hat noch keiner einen, tragen sie überall ein —
+  so entsteht der Eintrag mit dem ersten Account von selbst.
+- Ein `remove --assistant <name>` hält gegen die automatischen Anstöße, **nicht** gegen ein
+  `add` von Hand ohne `--assistant`. Nach `remove` bei allen tragen die Anstöße wieder überall
+  ein.
+- **Bekannte Grenzen:** Ein später installierter Assistent bekommt den Eintrag nur über `add`
+  von Hand. Ebenso OpenCode, nachdem `add` seinen Eintrag entfernt hat, weil keine Token-Datei
+  mehr da war — ein `{file:…}`-Verweis auf eine fehlende Datei machte die ganze config von
+  OpenCode ungültig, deshalb nimmt `add` nur vorhandene Token-Dateien auf und bereinigt tote
+  Verweise; `status` warnt.
+
+**Mehrere Accounts an einem Hub:** `add` nimmt je Hub die einzige Token-Datei. Liegen mehrere
+da, wählt `--account <hub>=<account>` (wiederholbar); die Wahl steht danach ausdrücklich im
+Eintrag und bleibt bei jedem weiteren `add`, solange ihre Datei da ist. Ohne Wahl wird der Hub
+übergangen und genannt (Exit 1), die übrigen werden eingetragen.
+
+**Nach `rotate`** stimmt der Eintrag ohne Zutun — der Helfer bzw. der Verweis liest die Datei —,
+wirksam aber erst mit einer neuen Sitzung des Assistenten bzw. einer Neuverbindung (in VS Code:
+den Server „Kephalaion“ neu starten).
+
+**Global** trägt jeder User für sich ein, Ansible trägt nichts ein: Das erste `rotate` des
+Verwalters als Systembenutzer schreibt in eine Datei außerhalb des eigenen `tokens/` und stößt
+nichts an. Nach der Übergabe der Token-Datei (oben, „Hub-Einträge und Accounts, von Hand“) ruft
+der User selbst auf:
+
+```sh
+kephalaion node mcp add
+```
+
+**`node mcp headers` ist für die Assistenten, nicht für Menschen:** Es ist die einzige Ausgabe
+mit Token und schreibt deshalb nicht in ein Terminal. Die Shell eines KI-Agenten ist aber kein
+Terminal — ein Agent ruft es nie gegen echte Token-Dateien so auf, dass die Ausgabe bei ihm
+ankommt; höchstens die Schlüssel: `kephalaion node mcp headers | jq -r 'keys[]'`.
+
+Exit-Codes von `add`, `remove` und `status`: 0 fertig, 1 Fehler bei einem Assistenten oder ein
+übergangener Hub, 2 falscher Aufruf.
 
 ## Hub für Nodes anderer Rechner: hinter einem Reverse-Proxy
 
@@ -664,6 +734,8 @@ Reihenfolge und Regeln:
    starten. Ändert sich die Unit, neu starten.
 5. **Kein Token.** Hub-Einträge des Nodes und das erste `rotate` der Accounts richtet der
    Verwalter von Hand ein (oben); die Tokens der User gehören den Usern bzw. k-playbook.
+   Bei den KI-Assistenten trägt Ansible nichts ein; das macht jeder User selbst
+   (`kephalaion node mcp add`, „Bei den Assistenten anmelden“).
 
 Alle Schritte sind wiederholbar: Ein zweiter Lauf ändert nichts, solange Version und Unit
 gleich bleiben.

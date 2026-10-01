@@ -1,7 +1,8 @@
 # Fortschritt
 
-Stand: 2026-09-30 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
-Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers)
+Stand: 2026-10-01 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022
+Etappen 1–3 und 5 erledigt, Abnahme ohne VS Code durch, VS Code mit Copilot beim Nutzer)
 
 ## So wird diese Datei aktualisiert
 
@@ -281,6 +282,13 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nut
   `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
   unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
+- **Task 022 — bei den Assistenten angemeldet:** `kephalaion node mcp add|remove|status|headers`
+  gebaut (Paket `internal/assistant`) und auf der WSL mit Claude Code, OpenCode und Codex
+  abgenommen; Anstoß aus `install.sh` und `node account rotate|check`. Offen: Etappe 4 und der
+  VS-Code-Teil der Abnahme — die Erweiterung 0.0.6 meldet den Node als MCP-Server für Copilot
+  (mit Sperre bei Log-Level Trace, entschieden am 2026-10-01); der Test mit Copilot und die
+  Suche nach dem Token danach liegen beim Nutzer (Befund
+  `material/befunde/mcp-client-registrierung.md`).
 
 ## Zu tun
 
@@ -295,12 +303,7 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nut
   `vendor-scope-und-dir-push-pull.md`).
 
 - **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
-  - **Task 022 — Kephalaion bei den Assistenten anmelden, lokal:** `kephalaion node mcp
-    add|remove|status|headers` für Claude Code, OpenCode, Codex und VS Code, auf User-Ebene,
-    das Token nie im Klartext; bei der Installation, wenn ein Account dazukommt, und von Hand.
-    Ziel: MCP und Kommandozeile gehen auf dem Rechner selbst sauber — auf der WSL trägt
-    Kephalaion bisher kein KI-Client ein (`konzept.md`, „Installation und Betrieb“, „Bei den
-    Assistenten angemeldet“; Befund `material/befunde/mcp-client-registrierung.md`).
+  - **Task 022 — bei den Assistenten anmelden, lokal:** gebaut, siehe „In Arbeit“.
   - **Task 023 — danach:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
     (`konzept.md`, „Kommunikation“, „Entfernt: MCP über HTTPS“). Dabei: `--node` von `node dir`
     kennt nur `http://`; fail2ban greift nicht, weil der Node bei falscher Anmeldung nie 401
@@ -492,6 +495,10 @@ Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nut
 
 ## Zu besprechen
 
+- **Abfragen der Erweiterung für VS Code:** Jedes Fenster fragt `changes` alle 3 s und `whoami`
+  alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
+  je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
+  So lassen oder nur mit eingebundener Collection bzw. im Fokus fragen (`vscode.md`, „Offen“)?
 - **Verwaltung in der Weboberfläche** (Accounts, Rechte, Nodes): vorerst die Kommandozeile;
   eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (die
   Anmeldung des Proxys kann das Binary nicht prüfen; `konzept.md`, „Offene Punkte“, GUI).

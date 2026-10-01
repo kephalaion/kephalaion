@@ -317,6 +317,14 @@ kephalaion serve 2>> ~/.local/state/kephalaion/serve.log &
 kephalaion status | grep serve     # serve: läuft
 ```
 
+**Bei den KI-Assistenten anmelden:** `kephalaion node mcp add` trägt den Node bei Claude Code,
+OpenCode und Codex als MCP-Server `kephalaion` ein, auf User-Ebene und für alle Hubs, das
+Token nie im Klartext (Claude Code und Codex holen die Header bei jeder Verbindung über
+`kephalaion node mcp headers`, OpenCode verweist auf die Token-Datei); VS Code meldet die
+Erweiterung (unten). `kephalaion node mcp status` zeigt je Assistent, ob er eingetragen ist,
+`remove` entfernt den Eintrag. `install.sh` und `node account rotate` stoßen das von selbst an.
+Einzelheiten: [`docs/installation.md`](docs/installation.md), „Bei den Assistenten anmelden“.
+
 Als Node gleicht `serve` seine Replicas selbst ab: beim Start je Hub-Eintrag, danach im
 Abstand `sync_interval` aus den `settings` des Nodes — Standard 30 s, mindestens `1s`, `0`
 schaltet ab; `config set` wirkt ohne Neustart. Die Hub-Einträge liest jede Runde neu, `node
@@ -692,6 +700,11 @@ dort einen Node erreicht, ist noch nicht gebaut ([`docs/konzept.md`](docs/konzep
   fügt die gewählte als Ordner in den Workspace ein. Verzeichnisse und Dokumente kommen über
   `list` und `read` aus der Replica; Änderungen erscheinen nach dem Abgleich des Nodes von
   selbst (`changes`, alle 3 s), ein Umbenennen als alter Name weg, neuer da.
+- **MCP-Server für Copilot** (0.0.6, VS Code ab 1.101): Die Erweiterung meldet den Node als
+  MCP-Server „Kephalaion“, mit den Header-Paaren aus den Token-Dateien; das Token setzt sie erst
+  beim Start des Servers ein. Solange VS Code auf „Trace“ protokolliert, meldet sie ihn nicht
+  (VS Code schriebe die Header sonst ins Log). Abschalten mit `kephalaion.mcpServer.enabled`;
+  [`docs/vscode.md`](docs/vscode.md), „MCP-Server für Copilot“.
 - **Schreiben** (0.0.5) über die Werkzeuge oben: speichern, neue Datei und neuer Ordner,
   löschen, umbenennen und verschieben im Explorer, auch ganze Ordner und per Drag & Drop.
   Schreibbar ist eine Collection mit `write`; ein fremdes Dokument ohne `supersede` scheitert

@@ -196,6 +196,11 @@ VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (W
   `Authorization` wird verdeckt, ein `X-Keph-Token-…` nicht. Solange das gilt, meldet die
   Erweiterung den Server nicht (Warnung, Eintrag im Log „Kephalaion“) und startet ihn nicht;
   geht das Log-Level zurück, meldet sie ihn wieder.
+  **Entschieden am 2026-10-01 (Nutzer):** so, mit dieser Sperre. Verworfen: das Restrisiko nur
+  dokumentieren (das Token stünde bei Trace in einer Log-Datei des Fensters, unter WSL auf der
+  Windows-Seite) und VS Code aus Task 022 nehmen. Ein Weg ohne die Grenze bräuchte eine
+  Anmeldung über `Authorization`, die VS Code verdeckt — eine Änderung an der Anmeldung des
+  Nodes (Header-Paare je Hub), nicht Teil dieser Task.
 - **Abschalten:** Einstellung `kephalaion.mcpServer.enabled` (Vorgabe `true`, Scope
   `machine-overridable`).
 
