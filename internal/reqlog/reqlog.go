@@ -73,8 +73,13 @@ func (l *Logger) Printf(format string, a ...any) {
 // Middleware schreibt nach next eine Zeile je Anfrage; role steht vorn
 // (hub, node). Trägt die Anfrage X-Forwarded-For, steht die erste Adresse
 // daraus als via dabei: Hinter einem Reverse-Proxy ist der Aufrufer sonst
-// immer Loopback. Der Dienst nimmt nur Verbindungen von Loopback an; ein
-// gefälschter Header eines lokalen Prozesses ist nur eine falsche Logzeile.
+// immer Loopback. Die Zeile hat eine feste Form — Rolle, Methode, Pfad,
+// Status, Dauer, via, dann die Vermerke in ihrer Reihenfolge —, auf die sich
+// ein Filter (fail2ban) stützen kann: Kein Teil vor den Vermerken enthält ein
+// Leerzeichen, Namen gehen durch ident.LogName. via ist nur verlässlich, wenn
+// der Proxy einen mitgeschickten X-Forwarded-For verwirft (Caddy tut es); der
+// Dienst nimmt nur Verbindungen von Loopback an, ein lokaler Prozess kann den
+// Header aber selbst setzen.
 func (l *Logger) Middleware(role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := l.now()

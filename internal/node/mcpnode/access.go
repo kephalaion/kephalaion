@@ -88,25 +88,34 @@ type request struct {
 	entries map[string]store.Hub
 }
 
-// begin meldet die Anfrage über alle Hubs an.
-func (n *Node) begin(ctx context.Context, req *mcp.CallToolRequest) (*request, error) {
-	var header http.Header
+// requestHeader sind die HTTP-Header der Anfrage eines Werkzeugs.
+func requestHeader(req *mcp.CallToolRequest) http.Header {
 	if req != nil && req.Extra != nil {
-		header = req.Extra.Header
+		return req.Extra.Header
 	}
-	return newRequest(ctx, n.nodes, func(ctx context.Context) (Logins, error) { return n.Authenticate(ctx, header) })
+	return nil
 }
 
-func newRequest(ctx context.Context, nodes store.Store, auth func(context.Context) (Logins, error)) (*request, error) {
-	logins, err := auth(ctx)
+// begin meldet die Anfrage über alle Hubs an. Ist die Antwort verdeckt (über
+// einen Proxy, an keinem Hub gültig angemeldet), kennt die Anfrage keinen
+// Hub-Eintrag und keine Anmeldung: Jede Meldung danach klingt, als hätte der
+// Node keinen Hub — eine Adresse ohne Hub-Teil nimmt keinen Eintrag, eine mit
+// Hub-Teil ist nicht lesbar, ob es den Hub gibt oder nicht, und keine Replica
+// wird geöffnet.
+func (n *Node) begin(ctx context.Context, req *mcp.CallToolRequest) (*request, error) {
+	header := requestHeader(req)
+	logins, err := n.Authenticate(ctx, header)
 	if err != nil {
 		return nil, err
 	}
-	hubs, err := nodes.Hubs(ctx)
+	if hides(header, logins) {
+		return &request{nodes: n.nodes, logins: Logins{Unknown: []string{}}, entries: map[string]store.Hub{}}, nil
+	}
+	hubs, err := n.nodes.Hubs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	r := &request{nodes: nodes, logins: logins, entries: make(map[string]store.Hub, len(hubs))}
+	r := &request{nodes: n.nodes, logins: logins, entries: make(map[string]store.Hub, len(hubs))}
 	for _, h := range hubs {
 		r.entries[h.Name] = h
 	}

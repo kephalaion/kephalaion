@@ -16,11 +16,19 @@
 // Anfrage. Kein Token und kein Hash steht je in einer Antwort, auch nicht
 // Adresse, Transport oder hub_id eines Hubs.
 //
+// Über einen Proxy (die Anfrage trägt X-Forwarded-For) ohne gültige
+// Anmeldung an einem Hub ist die Antwort verdeckt (hidden): keine Version,
+// kein update, keine Namen von Node und Hubs — der Node antwortet, als hätte
+// er keinen Hub-Eintrag. Eine Anfrage mit mindestens einem ungültigen
+// Header-Paar vermerkt im Log login=invalid, direkt hinter via; das zählt
+// eine Jail auf dem Rechner des Proxys (docs/konzept.md, „Kommunikation“).
+//
 // Wie jedes Paket unter internal/node kennt es den Hub nicht: Den Weg zu ihm
 // und den Anstoß des Abgleichs bekommt es als HubLink.
 package mcpnode
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -56,13 +64,29 @@ type Node struct {
 }
 
 // NewHandler liefert den Handler des Nodes: /mcp mit Prüfung von Host und
-// Origin, alles andere 404. version steht in der Antwort auf initialize;
-// update liefert für whoami die letzte Antwort auf die Frage nach einer
-// neuen Version — ohne selbst GitHub zu fragen. link ist der Weg zum Hub für
+// Origin, alles andere 404. version steht in der Antwort auf initialize —
+// außer verdeckt (über einen Proxy ohne gültige Anmeldung, guard); update
+// liefert für whoami die letzte Antwort auf die Frage nach einer neuen
+// Version — ohne selbst GitHub zu fragen. link ist der Weg zum Hub für
 // create, write, delete und rename. Der Body einer Anfrage darf
 // MaxRequestBytes groß sein.
 func NewHandler(nodes store.Store, version string, update func() upgrade.Report, link HubLink) http.Handler {
 	n := &Node{nodes: nodes, version: version, update: update, link: link}
+	full, hidden := n.server(version), n.server("")
+	h := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		if isHidden(r.Context()) {
+			return hidden
+		}
+		return full
+	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBytes})
+	mux := http.NewServeMux()
+	mux.Handle(Path, n.guard(h))
+	return mux
+}
+
+// server ist der MCP-Server mit allen Werkzeugen; version steht in
+// serverInfo, verdeckt leer.
+func (n *Node) server(version string) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "kephalaion", Version: version}, nil)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "whoami",
@@ -78,18 +102,39 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report,
 	mcp.AddTool(srv, &mcp.Tool{Name: "write", Description: writeDescription}, n.replace)
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete", Description: deleteDescription}, n.remove)
 	mcp.AddTool(srv, &mcp.Tool{Name: "rename", Description: renameDescription}, n.rename)
-	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBytes})
-	mux := http.NewServeMux()
-	mux.Handle(Path, guard(h))
-	return mux
+	return srv
 }
+
+// hiddenKey markiert im ctx einer Anfrage, dass ihre Antwort verdeckt ist.
+type hiddenKey struct{}
+
+func isHidden(ctx context.Context) bool {
+	v, _ := ctx.Value(hiddenKey{}).(bool)
+	return v
+}
+
+// Proxied sagt, ob eine Anfrage über einen Proxy kam: Sie trägt
+// X-Forwarded-For. Caddy setzt den Header selbst und verwirft einen, den der
+// Client mitschickt; hinter einem Proxy ohne ihn sähe jede Anfrage lokal
+// aus. Ein lokaler Prozess, der ihn selbst setzt, verdeckt nur sich selbst.
+func Proxied(h http.Header) bool {
+	_, ok := h["X-Forwarded-For"]
+	return ok
+}
+
+// hides sagt, ob die Antwort auf eine Anfrage verdeckt ist: über einen Proxy
+// und an keinem Hub gültig angemeldet. Mit gültiger Anmeldung an einem Hub
+// antwortet der Node wie lokal, auch zu den übrigen.
+func hides(h http.Header, l Logins) bool { return Proxied(h) && len(l.Valid()) == 0 }
 
 // guard lässt nur Anfragen durch, deren Host dieser Rechner mit dem eigenen
 // Port ist und deren Origin fehlt oder lokal ist — sonst 403. So erreicht
-// eine Webseite im Browser den Node nicht über DNS-Rebinding. Danach vermerkt
-// es die Accounts der Header im Log (nur Namen).
-func guard(next http.Handler) http.Handler {
+// eine Webseite im Browser den Node nicht über DNS-Rebinding. Danach prüft es
+// die Header-Paare: Ist eines ungültig, vermerkt es zuerst login=invalid im
+// Log (ein Fehlversuch je Anfrage; die Zeile setzt via davor), dann die
+// Accounts (nur Namen). Über einen Proxy ohne gültige Anmeldung markiert es
+// die Anfrage als verdeckt — initialize nennt dann keine Version.
+func (n *Node) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := loopback.CheckHost(r); err != nil {
 			loopback.Forbid(w, err)
@@ -99,8 +144,24 @@ func guard(next http.Handler) http.Handler {
 			loopback.Forbid(w, err)
 			return
 		}
-		for _, p := range HubHeaders(r.Header) {
-			reqlog.Note(r.Context(), "account", p.Account)
+		ctx := r.Context()
+		pairs := HubHeaders(r.Header)
+		valid := false
+		if len(pairs) > 0 {
+			// Ein Fehler von node.db zählt nicht als Fehlversuch; das
+			// Werkzeug meldet ihn selbst.
+			if logins, err := n.Authenticate(ctx, r.Header); err == nil {
+				if logins.Failed() {
+					reqlog.Note(ctx, "login", "invalid")
+				}
+				valid = len(logins.Valid()) > 0
+			}
+		}
+		for _, p := range pairs {
+			reqlog.Note(ctx, "account", p.Account)
+		}
+		if Proxied(r.Header) && !valid {
+			r = r.WithContext(context.WithValue(ctx, hiddenKey{}, true))
 		}
 		next.ServeHTTP(w, r)
 	})

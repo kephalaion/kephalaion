@@ -118,6 +118,18 @@ func (l Logins) Valid() []Login {
 	return out
 }
 
+// Failed sagt, ob mindestens eine Anmeldung ungültig ist (LoginInvalid):
+// ein Header-Paar wurde geprüft und abgewiesen — ein Fehlversuch. Header zu
+// Aliasen ohne Eintrag zählen nicht, dort ist nichts geprüft.
+func (l Logins) Failed() bool {
+	for _, h := range l.Hubs {
+		if h.State == LoginInvalid {
+			return true
+		}
+	}
+	return false
+}
+
 // Authenticate prüft die Header einer Anfrage gegen alle Hub-Einträge — die
 // eine Anmeldung, auf der whoami und jedes Werkzeug aufsetzen, das Inhalte
 // liefert. Je Eintrag mit Header-Paar prüft check es gegen die Replica, ohne

@@ -3,7 +3,6 @@ package mcpnode
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -20,13 +19,18 @@ import (
 // „whoami — festgelegt am 2026-09-26“). Nie darin: Token, Hash, Adresse und
 // Transport eines Hubs, hub_id.
 type WhoamiOutput struct {
-	// Version ist die Version des Nodes.
-	Version string `json:"version"`
+	// Version ist die Version des Nodes; fehlt nur verdeckt.
+	Version string `json:"version,omitempty"`
 	// Update sagt, ob es eine neuere Version gibt, ob sich das Binary selbst
 	// ersetzen kann und wie das Upgrade geht — aus der Sicht von serve, mit
 	// der zwischengespeicherten Antwort von GitHub (höchstens eine Frage am
-	// Tag). Dieselbe Struktur wie kephalaion upgrade --check --json.
-	Update upgrade.Report `json:"update"`
+	// Tag). Dieselbe Struktur wie kephalaion upgrade --check --json; fehlt
+	// nur verdeckt.
+	Update *upgrade.Report `json:"update,omitempty"`
+	// Hidden: Die Anfrage kam über einen Proxy und ist an keinem Hub gültig
+	// angemeldet. Dann fehlen Version und Update, Hubs und UnknownHubs sind
+	// leer (docs/begriffe.md, „hidden“).
+	Hidden bool `json:"hidden,omitempty"`
 	// Hubs nennt alle Hub-Einträge des Nodes, nach Alias.
 	Hubs []HubInfo `json:"hubs"`
 	// UnknownHubs sind die Aliase aus Headern, zu denen der Node keinen
@@ -109,7 +113,7 @@ func Whoami(ctx context.Context, nodes store.Store, version string, update upgra
 	for _, h := range hubs {
 		entries[h.Name] = h
 	}
-	out = WhoamiOutput{Version: version, Update: update, Hubs: make([]HubInfo, 0, len(logins.Hubs)),
+	out = WhoamiOutput{Version: version, Update: &update, Hubs: make([]HubInfo, 0, len(logins.Hubs)),
 		UnknownHubs: logins.Unknown}
 	if out.UnknownHubs == nil {
 		out.UnknownHubs = []string{}
@@ -232,15 +236,22 @@ func DescribeSync(s SyncInfo) string {
 	return text
 }
 
+// HiddenText ist der Textteil von whoami, wenn die Antwort verdeckt ist —
+// ohne Version und ohne Namen, mit dem Weg zur Anmeldung.
+const HiddenText = "Keine gültige Anmeldung an einem Hub dieses Nodes. Über einen Proxy nennt der Node ohne " +
+	"gültige Anmeldung weder Version noch Hubs. Angemeldet wird je Hub mit den Headern X-Keph-Account-<hub> " +
+	"und X-Keph-Token-<hub>; <hub> ist der Alias des Hub-Eintrags an diesem Node."
+
 func (n *Node) whoami(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, WhoamiOutput, error) {
-	var header http.Header
-	if req != nil && req.Extra != nil {
-		header = req.Extra.Header
-	}
+	header := requestHeader(req)
 	logins, err := n.Authenticate(ctx, header)
 	if err != nil {
 		reqlog.NoteError(ctx, err)
 		return nil, WhoamiOutput{}, fmt.Errorf("Datenbank des Nodes nicht lesbar")
+	}
+	if hides(header, logins) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: HiddenText}}},
+			WhoamiOutput{Hidden: true, Hubs: []HubInfo{}, UnknownHubs: []string{}}, nil
 	}
 	out, text, unread, err := Whoami(ctx, n.nodes, n.version, n.update(), logins)
 	if err != nil {

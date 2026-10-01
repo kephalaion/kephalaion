@@ -108,6 +108,28 @@ Ausführlich: [`konzept.md`](konzept.md).
   und lauscht weiter nur auf Loopback; Zertifikat, ACME und Härtung liegen beim Proxy. Im
   Log des Hubs steht die Adresse des Aufrufers als `via` (aus `X-Forwarded-For`). Aufbau in
   [`installation.md`](installation.md).
+- **via proxy** (über den Proxy) — eine Anfrage an `/mcp`, die den Header `X-Forwarded-For`
+  trägt; daran erkennt der Node, dass sie über einen **reverse proxy** kam (Task 023). Kein
+  zweiter Listener, keine Einstellung. Voraussetzung: Der Proxy setzt den Header selbst und
+  verwirft einen mitgeschickten — Caddy tut beides von sich aus; hinter einem Proxy ohne ihn
+  sähe jede Anfrage lokal aus. Ohne gültige Anmeldung an mindestens einem Hub ist die Antwort
+  dann **hidden**; lokal (ohne den Header) bleibt alles, wie es war.
+- **hidden** (verdeckt) — die Antwort des Nodes auf eine Anfrage **via proxy** ohne gültige
+  Anmeldung an einem seiner Hubs: keine Version (`initialize` nennt in `serverInfo` eine leere
+  Version), kein `update`, keine Namen von Node und Hubs — in keinem Werkzeug, keinem
+  Fehlertext und keinem Feld wie `unreadable_hubs`. Der Node antwortet, als hätte er keinen
+  Hub-Eintrag: Eine Adresse ohne Hub-Teil ist „an keinem Hub gültig angemeldet“, eine mit
+  Hub-Teil „nicht lesbar“ — gleich, ob es den Hub gibt. `whoami` trägt dann `hidden: true`, leere
+  `hubs` und `unknown_hubs` und einen Satz zur Anmeldung. Mit gültiger Anmeldung an mindestens
+  einem Hub antwortet der Node wie lokal, auch zu den übrigen Hubs.
+- **login=invalid** (Fehlversuch) — Vermerk in der Logzeile einer Anfrage an `/mcp` mit
+  mindestens einem ungültigen Header-Paar (falsches Token; unbekannter oder gesperrter
+  Account; ein Header des Paars fehlt; der Node hat den Hub noch nie abgeglichen). Er steht
+  direkt hinter `via` bzw. der Dauer, vor allen Namen, und zählt je Anfrage einmal, gleich wie
+  viele Paare ungültig sind. Eine Anfrage ohne Header-Paar (etwa `initialize` ohne Token) und
+  eine mit Paaren nur zu Aliasen, die der Node nicht kennt, tragen ihn nicht. Auf dem Rechner
+  des Proxys zählt eine fail2ban-Jail die Zeilen mit `via` und `login=invalid` im Journal des
+  Dienstes ([`installation.md`](installation.md)); der Node selbst antwortet nie 401.
 - **/hub** (Hub-Pfad) — der Ort des Vertrags am Hub-Listener von `serve`: `POST
   /hub/v1/<vorgang>`. Die Adresse eines **hub entry** endet darauf (`http://localhost:7434/hub`,
   hinter einem Proxy `https://<name>/kephalaion/hub`), der Client hängt `/v1/<vorgang>` an;
@@ -479,7 +501,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Node-Name und Stand des Abgleichs (`sync`), bei `ok` Account, User und Collections mit
   Rechten (`rights`, als Text je Recht) und Verzeichnis-Scopes (`dirs`, immer eine Liste); dazu
   `unknown_hubs`, die Aliase aus Headern ohne Eintrag. Nie Token, Hash, Adresse, Transport
-  oder `hub_id`. Dazu der Eingang der **gui** am Hub-Listener, `POST /gui/api/whoami` — kein
+  oder `hub_id`. Über einen Proxy ohne gültige Anmeldung **hidden**: nur `hidden: true`, leere
+  `hubs` und `unknown_hubs`. Dazu der Eingang der **gui** am Hub-Listener, `POST /gui/api/whoami` — kein
   Vorgang des Vertrags, keine Fassung, ohne Node: Er prüft Account und **account token**
   (`{"account", "token"}` als JSON) und nennt User, Beschreibung und alle Collections des
   Accounts mit ihren Rechten (`write`, `supersede`, `vendor`, `dirs`; beide Listen immer da),

@@ -174,7 +174,9 @@ func printNodeOverview(ctx context.Context, w, stderr io.Writer, s nodestore.Sto
 		return err
 	}
 	fmt.Fprintf(w, "kephalaion %s\n", out.Version)
-	fmt.Fprintln(w, out.Update.Summary())
+	if out.Update != nil {
+		fmt.Fprintln(w, out.Update.Summary())
+	}
 	if len(out.Hubs) == 0 {
 		fmt.Fprintln(w, "Keine Hubs.")
 		return nil

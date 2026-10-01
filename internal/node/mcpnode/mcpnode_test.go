@@ -190,7 +190,7 @@ func TestWhoamiWithoutHeaders(t *testing.T) {
 	e := newEnv(t)
 	out, raw := e.whoami(t, nil)
 	zero := int64(0)
-	want := WhoamiOutput{Version: "test", Update: testUpdate, UnknownHubs: []string{}, Hubs: []HubInfo{
+	want := WhoamiOutput{Version: "test", Update: &testUpdate, UnknownHubs: []string{}, Hubs: []HubInfo{
 		{Hub: "keph", Login: LoginMissing, Node: "laptop", Sync: SyncInfo{Revision: &zero}},
 		{Hub: "team.x_y", Login: LoginMissing, Node: "laptop", Sync: SyncInfo{Revision: &zero}},
 	}}

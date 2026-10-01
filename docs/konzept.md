@@ -305,6 +305,63 @@ derselbe Eingang. Vorgemerkt am 2026-09-30 als nächster Schritt nach der Anmeld
 Assistenten: MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy (Task 023). Für
 Devcontainer ist es nicht der Weg — dort soll die Antwort aus einer lokalen Replica kommen.
 
+**Was der Eingang über einen Proxy zeigt, und Fehlversuche — entschieden am 2026-10-01 (Task
+023).** Hinter dem Proxy steht `/mcp` nach außen ohne dessen Anmeldung offen, wie
+`/kephalaion/hub/`: MCP-Clients können kein Formular, sie weisen sich mit dem Header-Paar aus.
+
+- **Woran der Node den Proxy erkennt: am Header `X-Forwarded-For`.** Trägt eine Anfrage ihn,
+  kam sie über einen Proxy (**via proxy**, [`begriffe.md`](begriffe.md)). Kein zweiter
+  Listener, keine Einstellung in der config. Voraussetzung: Der Proxy setzt den Header selbst
+  und verwirft einen, den der Client mitschickt — Caddy tut beides von sich aus. Hinter einem
+  Proxy ohne diesen Header sähe jede Anfrage lokal aus; Doku und Vorlage für Caddy nennen das.
+  Ein lokaler Prozess, der den Header selbst setzt, verdeckt nur sich selbst.
+- **Ohne gültige Anmeldung verrät der Eingang nichts, was der Proxy sonst hinter seiner
+  Anmeldung hält.** Über den Proxy ohne gültige Anmeldung an mindestens einem Hub antwortet
+  der Node **hidden**: keine Version (`initialize` nennt in `serverInfo` eine leere Version),
+  kein `update` (Weg des Upgrades), keine Namen von Node und Hubs — in keinem Werkzeug, keinem
+  Fehlertext und keinem Feld (`unreadable_hubs`, `unknown_hubs`). Er antwortet, als hätte er
+  keinen Hub-Eintrag: `whoami` nur mit `hidden: true` und einem Satz zur Anmeldung, `list`
+  ohne Collection leer; eine Adresse ohne Hub-Teil ist „an keinem Hub gültig angemeldet“
+  (sonst nähme `resolve` den einzigen Eintrag und nennte ihn), eine mit Hub-Teil „nicht lesbar“
+  — gleich, ob es den Hub gibt, ob er je abgeglichen wurde und ob seine Replica lesbar ist.
+  Die Begrüßung des Hubs liegt aus demselben Grund hinter der Anmeldung des Proxys.
+- **Gültig an einem Hub, nicht am anderen: wie lokal.** Ist die Anfrage an mindestens einem
+  Hub gültig angemeldet, antwortet der Node über den Proxy wie lokal; `whoami` zeigt dann auch
+  Version, `update`, Node-Name und den Stand der übrigen Hubs. Wer ein gültiges Token hat, ist
+  ein Nutzer dieses Nodes.
+- **Lokal bleibt alles.** Ohne `X-Forwarded-For` zeigt `whoami` weiter alle Hubs mit Anmeldung
+  und Stand und `unknown_hubs` — die Hilfe bei falsch eingerichteten Clients.
+- **Fehlversuche: Der Node schreibt sie ins Log, eine Jail auf dem Rechner des Proxys zählt
+  sie.** Der Node antwortet bei falschem Token nie 401, sondern wie bisher mit einer Antwort des
+  Werkzeugs (`isError`) — ein 401 nehmen MCP-Clients als Beginn der Autorisierung per OAuth
+  (MCP-Spezifikation), und lokal verlöre `whoami` seine Hilfe. Stattdessen trägt die Logzeile
+  einer Anfrage mit mindestens einem ungültigen Header-Paar (falsches Token, unbekannter oder
+  gesperrter Account) den Vermerk `login=invalid`, direkt hinter `via` (der ersten Adresse aus
+  `X-Forwarded-For`) und vor allen Namen. Eine fail2ban-Jail liest das Journal des Dienstes
+  und zählt Zeilen mit `via` und `login=invalid` (auf der VM `kephalaion-mcp`). **Ein
+  Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind; eine Anfrage ganz
+  ohne Header-Paar (`initialize` ohne Token) zählt nicht, ebenso eine mit Paaren nur zu
+  Aliasen, die der Node nicht kennt — dort ist nichts geprüft worden. Schwelle und Fenster wie
+  bei der Jail für 401 im Log des Proxys (`caddy-auth`): 10 in 10 min, Sperre 1 h, bei
+  Wiederholung jeweils doppelt so lang, höchstens eine Woche. Die Zeile lässt sich über Header
+  nicht fälschen: Account und Alias stehen nur über `ident.LogName` darin (keine Leerzeichen,
+  kein `=`), `via` und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil
+  der Proxy mitgeschickte Werte von `X-Forwarded-For` verwirft. Grenze: Ein Prozess auf dem
+  Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen —
+  so eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
+  vertrauenswürdig. Die Tokens sind lang und zufällig — die Jail ist eine Absicherung
+  zusätzlich, nicht die einzige Schranke.
+- **Folgen einer Sperre.** fail2ban sperrt die ganze Adresse auf 80 und 443 — auch den Abgleich
+  eines Nodes vom selben Rechner mit dem Hub hinter demselben Proxy und die Weboberfläche
+  hinter dessen Anmeldung. Ausgenommen ist nur, was die Jail ausdrücklich ausnimmt (auf der VM
+  der Jumphost), nicht die eigene Adresse. Ein falsch eingerichteter Assistent zählt schon beim
+  Start einer Sitzung mehrere Fehlversuche (`initialize`, `tools/list`, je eine Anfrage) und
+  danach einen je Werkzeugaufruf: Nach wenigen Sitzungen ist die Adresse gesperrt. Ebenso ein
+  veraltetes Token, etwa eine Kopie nach `rotate` am Original. Eine Adresse ohne Präfix landet
+  im Sammel-`handle` hinter `forward_auth`; dort zählt schon heute jedes 401 in `caddy-auth`.
+  Beide Jails zählen getrennt. Aufgehoben wird eine Sperre per SSH (`fail2ban-client set
+  <jail> unbanip <adresse>`).
+
 **Node ↔ Hub: ein Protokoll, zwei Transportwege** — dazu der Funktionsaufruf im selben
 Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung im Pfad, kein
 MCP; es ist zustandslos, die Revision trägt der Node. Gebaut ist es als `POST /v1/whoami`,
