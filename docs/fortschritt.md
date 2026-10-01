@@ -1,8 +1,8 @@
 # Fortschritt
 
 Stand: 2026-10-01 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
-Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022
-Etappen 1–3 und 5 erledigt, Abnahme ohne VS Code durch, VS Code mit Copilot beim Nutzer)
+Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
+WSL abgenommen)
 
 ## So wird diese Datei aktualisiert
 
@@ -271,6 +271,12 @@ Etappen 1–3 und 5 erledigt, Abnahme ohne VS Code durch, VS Code mit Copilot be
     `grant … --dir` und `node sync`; Stand des letzten Abgleichs, der Hub prüft trotzdem;
   - Durchlauf im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`);
     Abnahme auf der VM: siehe „Zu testen“.
+- **Task 022 — bei den Assistenten angemeldet:** `kephalaion node mcp add|remove|status|headers`
+  (Paket `internal/assistant`) für Claude Code, OpenCode und Codex, auf User-Ebene, das Token nie
+  im Klartext; die Erweiterung 0.0.6 meldet den Node als MCP-Server für Copilot (Sperre bei
+  Log-Level Trace, entschieden am 2026-10-01); Anstoß aus `install.sh` und `node account
+  rotate|check`. Auf der WSL am 2026-10-01 mit allen vier abgenommen, Codex über `codex
+  app-server` (Befund `material/befunde/mcp-client-registrierung.md`).
 
 ## In Arbeit
 
@@ -282,13 +288,6 @@ Etappen 1–3 und 5 erledigt, Abnahme ohne VS Code durch, VS Code mit Copilot be
   `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
   unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
-- **Task 022 — bei den Assistenten angemeldet:** `kephalaion node mcp add|remove|status|headers`
-  gebaut (Paket `internal/assistant`) und auf der WSL mit Claude Code, OpenCode und Codex
-  abgenommen; Anstoß aus `install.sh` und `node account rotate|check`. Offen: Etappe 4 und der
-  VS-Code-Teil der Abnahme — die Erweiterung 0.0.6 meldet den Node als MCP-Server für Copilot
-  (mit Sperre bei Log-Level Trace, entschieden am 2026-10-01); der Test mit Copilot und die
-  Suche nach dem Token danach liegen beim Nutzer (Befund
-  `material/befunde/mcp-client-registrierung.md`).
 
 ## Zu tun
 
@@ -303,7 +302,7 @@ Etappen 1–3 und 5 erledigt, Abnahme ohne VS Code durch, VS Code mit Copilot be
   `vendor-scope-und-dir-push-pull.md`).
 
 - **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
-  - **Task 022 — bei den Assistenten anmelden, lokal:** gebaut, siehe „In Arbeit“.
+  - **Task 022 — bei den Assistenten anmelden, lokal:** erledigt, siehe „Erledigt“.
   - **Task 023 — danach:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
     (`konzept.md`, „Kommunikation“, „Entfernt: MCP über HTTPS“). Dabei: `--node` von `node dir`
     kennt nur `http://`; fail2ban greift nicht, weil der Node bei falscher Anmeldung nie 401

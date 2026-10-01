@@ -203,6 +203,16 @@ VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (W
   Nodes (Header-Paare je Hub), nicht Teil dieser Task.
 - **Abschalten:** Einstellung `kephalaion.mcpServer.enabled` (Vorgabe `true`, Scope
   `machine-overridable`).
+- **Starten:** VS Code führt den Server nach dem Laden unter „MCP: List Servers“, startet ihn
+  aber nicht von selbst — dort „Start Server“ (oder einen Chat mit Werkzeugen beginnen, wenn
+  VS Code Server dabei selbst startet). Beim Start versucht VS Code zuerst `GET /mcp` (der
+  zustandslose Node antwortet 405) und arbeitet dann mit `POST`.
+- **Abgenommen am 2026-10-01** auf der WSL mit VS Code 1.140.0 und Copilot (Agent-Modus):
+  Server gestartet („Starting server from Remote extension host“, 8 Werkzeuge), `whoami` mit
+  Account; im Log des Nodes die Anfragen mit Account. Danach stand das Token weder unter
+  `~/.vscode-server` noch in den Daten von VS Code unter Windows (`AppData/Roaming/Code`,
+  durchsucht mit GNU grep; nicht lesbar nur drei gesperrte `LOCK`-Dateien). Befund
+  `material/befunde/mcp-client-registrierung.md`.
 
 ## Sprachen
 
