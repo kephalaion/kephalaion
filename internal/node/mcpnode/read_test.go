@@ -1,6 +1,7 @@
 package mcpnode
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -21,8 +22,38 @@ func (e *docEnv) read(t *testing.T, h map[string][]string, in ReadInput) (ReadOu
 		if strings.Contains(string(raw), "SYSTEM") {
 			t.Errorf("SYSTEM: in der Antwort: %s", raw)
 		}
+		checkTextIsStructure(t, res)
 	}
 	return out, res, errText
+}
+
+// checkTextIsStructure prüft, dass ein Ergebnis genau einen Textblock hat und
+// er das JSON der Struktur ist — er trägt nichts darüber hinaus, auch nicht
+// den Inhalt neben der Struktur (Task 024).
+func checkTextIsStructure(t *testing.T, res *mcp.CallToolResult) {
+	t.Helper()
+	if len(res.Content) != 1 {
+		t.Errorf("%d Blöcke statt einem: %+v", len(res.Content), res.Content)
+		return
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Errorf("kein Textblock: %+v", res.Content[0])
+		return
+	}
+	var text any
+	if err := json.Unmarshal([]byte(tc.Text), &text); err != nil || !reflect.DeepEqual(text, res.StructuredContent) {
+		t.Errorf("Text ist nicht das JSON der Struktur (%v): %q, Struktur %s", err, tc.Text, rawOf(res))
+	}
+}
+
+// contentOf ist das Feld content der Antwort von read; fehlt es, ein Wert,
+// den kein Dokument der Tests hat.
+func contentOf(out ReadOutput) string {
+	if out.Content == nil {
+		return "<ohne content>"
+	}
+	return *out.Content
 }
 
 func no() *bool { b := false; return &b }
@@ -36,36 +67,54 @@ func TestReadDocument(t *testing.T) {
 		out.Created == nil || out.Updated == nil || out.Writable == nil || !*out.Writable {
 		t.Fatalf("per Name: %+v, %s", out, errText)
 	}
-	if got := textOf(res); got != "Inhalt von dir/c.md" {
+	if got := contentOf(out); got != "Inhalt von dir/c.md" {
 		t.Errorf("Inhalt: %q", got)
+	}
+	// Der Inhalt steht in der Struktur, also auch im Text, ihrem JSON.
+	var text ReadOutput
+	if err := json.Unmarshal([]byte(textOf(res)), &text); err != nil || contentOf(text) != "Inhalt von dir/c.md" {
+		t.Errorf("Text: %q, %v", textOf(res), err)
 	}
 	// Per id, ohne Hub-Teil (otto ist nur an keph angemeldet), ohne Recht
 	// write.
-	out, res, _ = e.read(t, e.otto(), ReadInput{ID: ids["a.md"]})
+	out, _, _ = e.read(t, e.otto(), ReadInput{ID: ids["a.md"]})
 	if out.Kind != KindDocument || out.Name != "a.md" || out.Address != "keph:wissen" || out.Writable == nil ||
-		*out.Writable || textOf(res) != "neu" {
-		t.Errorf("per id: %+v, %q", out, textOf(res))
+		*out.Writable || contentOf(out) != "neu" {
+		t.Errorf("per id: %+v, %q", out, contentOf(out))
 	}
 	// Mit mehreren Hubs braucht id den Hub.
 	if _, _, errText := e.read(t, e.anna(), ReadInput{ID: ids["a.md"]}); !strings.Contains(errText, "angemeldet an keph, team") {
 		t.Errorf("id ohne Hub: %s", errText)
 	}
 	out, _, _ = e.read(t, e.anna(), ReadInput{Collection: "keph:", ID: ids["a.md"]})
-	if out.Kind != KindDocument || out.Name != "a.md" {
+	if out.Kind != KindDocument || out.Name != "a.md" || contentOf(out) != "neu" {
 		t.Errorf("id mit Hub: %+v", out)
 	}
-	// content: false — nur die Angaben, als JSON im Text.
-	out, res, _ = e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "a.md", Content: no()})
-	if out.Kind != KindDocument || out.Size == nil || *out.Size != 3 || strings.Contains(textOf(res), `"neu"`) ||
-		!strings.Contains(textOf(res), `"kind":"document"`) {
-		t.Errorf("ohne Inhalt: %+v, %q", out, textOf(res))
+	// content: false — nur die Angaben, kein Feld content; per Name und per id.
+	for _, in := range []ReadInput{{Collection: "keph:wissen", Name: "a.md", Content: no()}, {Collection: "keph:", ID: ids["a.md"], Content: no()}} {
+		out, res, _ = e.read(t, e.anna(), in)
+		if out.Kind != KindDocument || out.Size == nil || *out.Size != 3 || out.Content != nil ||
+			strings.Contains(rawOf(res), `"content"`) || strings.Contains(textOf(res), `"neu"`) ||
+			!strings.Contains(textOf(res), `"kind":"document"`) {
+			t.Errorf("ohne Inhalt %+v: %+v, %q", in, out, textOf(res))
+		}
 	}
-	// Leerer Inhalt ist ein Dokument mit Größe 0.
-	e.hubs["keph"].put("wissen", "leer.md", "")
+	// Leerer Inhalt ist ein Dokument mit Größe 0 und content "".
+	leer := e.hubs["keph"].put("wissen", "leer.md", "")
+	// Zeichen, die das JSON des Textes maskiert, kommen in content unverändert an.
+	special := "# <b> & \"c\"\n\tZeile\n"
+	e.hubs["keph"].put("wissen", "sonder.md", special)
 	e.sync(t)
-	out, res, _ = e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "leer.md"})
-	if out.Kind != KindDocument || *out.Size != 0 || textOf(res) != "" {
-		t.Errorf("leer: %+v, %q", out, textOf(res))
+	for _, in := range []ReadInput{{Collection: "keph:wissen", Name: "leer.md"}, {ID: leer, Collection: "keph:"}} {
+		out, res, _ = e.read(t, e.anna(), in)
+		if out.Kind != KindDocument || *out.Size != 0 || out.Content == nil || *out.Content != "" ||
+			!strings.Contains(rawOf(res), `"content":""`) {
+			t.Errorf("leer %+v: %+v, %s", in, out, rawOf(res))
+		}
+	}
+	out, _, _ = e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "sonder.md"})
+	if contentOf(out) != special || *out.Size != int64(len(special)) {
+		t.Errorf("Sonderzeichen: %q", contentOf(out))
 	}
 }
 
@@ -93,8 +142,10 @@ func TestReadDirectoryAndNone(t *testing.T) {
 		{ReadInput{Collection: "keph:privat", ID: ids["a.md"]}, KindNone, ""},
 	}
 	for _, c := range cases {
-		out, _, errText := e.read(t, pairOf(e, "keph", "anna"), c.in)
-		if errText != "" || out.Kind != c.kind || out.Name != c.name {
+		// Verzeichnis und none tragen kein Feld content.
+		out, res, errText := e.read(t, pairOf(e, "keph", "anna"), c.in)
+		if errText != "" || out.Kind != c.kind || out.Name != c.name || out.Content != nil ||
+			strings.Contains(rawOf(res), `"content"`) {
 			t.Errorf("%+v: %+v, %s", c.in, out, errText)
 		}
 	}
@@ -336,4 +387,39 @@ func TestWhoamiRightsDirWithComma(t *testing.T) {
 	if !strings.Contains(text, "keph:wissen (read, vendor/k-playbook, dir a, b/, dir docs/)") {
 		t.Errorf("Text:\n%s", text)
 	}
+}
+
+// Das Output-Schema von read nennt content als Text, die Beschreibung sagt,
+// dass der Inhalt dort steht (Task 024).
+func TestReadSchema(t *testing.T) {
+	e := newDocEnv(t)
+	ctx := context.Background()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: e.url + Path,
+		HTTPClient: &http.Client{Transport: headerTransport{e.anna()}}, DisableStandaloneSSE: true, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	defer session.Close()
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name != "read" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.OutputSchema)
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil || !strings.Contains(string(schema.Properties["content"]), `"string"`) {
+			t.Errorf("Output-Schema: %s", raw)
+		}
+		if !strings.Contains(tool.Description, "im Feld content") {
+			t.Errorf("Beschreibung: %s", tool.Description)
+		}
+		return
+	}
+	t.Fatal("kein Werkzeug read")
 }

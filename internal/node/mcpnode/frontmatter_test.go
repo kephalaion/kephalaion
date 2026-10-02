@@ -201,15 +201,15 @@ func TestReadFrontmatter(t *testing.T) {
 			t.Errorf("%+v: %+v, %s", c.in, out, errText)
 			continue
 		}
-		text := textOf(res)
 		switch {
 		case c.in.Content != nil && !*c.in.Content, out.Kind != KindDocument:
-			// Ohne Inhalt steht die Struktur im Text, samt Frontmatter.
-			if (c.fm != "") != strings.Contains(text, "frontmatter") || (c.fm != "" && !strings.Contains(rawOf(res), "frontmatter")) {
-				t.Errorf("%+v: Text %q", c.in, text)
+			// Ohne Inhalt kein Feld content; das Frontmatter steht in der
+			// Struktur und damit auch im Text, ihrem JSON (e.read).
+			if out.Content != nil || (c.fm != "") != strings.Contains(rawOf(res), "frontmatter") {
+				t.Errorf("%+v: roh %s", c.in, rawOf(res))
 			}
-		case text != c.text:
-			t.Errorf("%+v: Inhalt %q", c.in, text)
+		case contentOf(out) != c.text:
+			t.Errorf("%+v: Inhalt %q", c.in, contentOf(out))
 		}
 	}
 	// {} steht in der Antwort.

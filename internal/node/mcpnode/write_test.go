@@ -69,9 +69,9 @@ func TestWriteThenRead(t *testing.T) {
 	if k := e.takeKicks(); !reflect.DeepEqual(k, []string{"keph"}) {
 		t.Errorf("Anstoß nach create: %v", k)
 	}
-	doc, res, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "notiz.md"})
-	if doc.Kind != KindDocument || doc.ID != out.ID || doc.Revision != out.Revision || textOf(res) != "eins" {
-		t.Fatalf("read nach create: %+v, %q", doc, textOf(res))
+	doc, _, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "notiz.md"})
+	if doc.Kind != KindDocument || doc.ID != out.ID || doc.Revision != out.Revision || contentOf(doc) != "eins" {
+		t.Fatalf("read nach create: %+v, %q", doc, contentOf(doc))
 	}
 	// Zweimal hintereinander, je mit der Revision aus read.
 	for _, content := range []string{"zwei", "drei"} {
@@ -80,9 +80,9 @@ func TestWriteThenRead(t *testing.T) {
 		if w.Error != nil || w.ID != out.ID || w.Revision <= doc.Revision || *w.Size != int64(len(content)) {
 			t.Fatalf("write %s: %+v", content, w)
 		}
-		doc, res, _ = e.read(t, e.otto(), ReadInput{Collection: "wissen", Name: "notiz.md"})
-		if doc.Revision != w.Revision || textOf(res) != content {
-			t.Fatalf("read nach write %s: %+v, %q", content, doc, textOf(res))
+		doc, _, _ = e.read(t, e.otto(), ReadInput{Collection: "wissen", Name: "notiz.md"})
+		if doc.Revision != w.Revision || contentOf(doc) != content {
+			t.Fatalf("read nach write %s: %+v, %q", content, doc, contentOf(doc))
 		}
 	}
 	// Unverändert: keine neue Revision, die bestehende in der Antwort.
@@ -314,8 +314,8 @@ func TestWriteTransport(t *testing.T) {
 		t.Errorf("vor dem Abgleich schon da: %+v", doc)
 	}
 	e.sync(t) // der angestoßene Abgleich
-	if doc, res, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "neu.md"}); doc.Kind != KindDocument ||
-		textOf(res) != "neu" {
+	if doc, _, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "neu.md"}); doc.Kind != KindDocument ||
+		contentOf(doc) != "neu" {
 		t.Errorf("nach dem Abgleich: %+v", doc)
 	}
 	f.failWith(nil, false)

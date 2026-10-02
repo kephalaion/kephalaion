@@ -39,8 +39,8 @@ func TestRenameThenRead(t *testing.T) {
 	if old, _, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "notiz.md"}); old.Kind != KindNone {
 		t.Errorf("alter Name: %+v", old)
 	}
-	moved, res, _ := e.read(t, e.otto(), ReadInput{Collection: "keph:wissen", Name: "archiv/notiz.md"})
-	if moved.Kind != KindDocument || moved.ID != doc.ID || moved.Revision != out.Revision || textOf(res) != "notiz.md" {
+	moved, _, _ := e.read(t, e.otto(), ReadInput{Collection: "keph:wissen", Name: "archiv/notiz.md"})
+	if moved.Kind != KindDocument || moved.ID != doc.ID || moved.Revision != out.Revision || contentOf(moved) != "notiz.md" {
 		t.Errorf("neuer Name: %+v", moved)
 	}
 	if byID, _, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:", ID: doc.ID}); byID.Name != "archiv/notiz.md" {

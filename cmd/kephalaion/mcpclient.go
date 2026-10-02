@@ -171,7 +171,9 @@ func (t *mcpTarget) List(ctx context.Context, dir string) ([]dirsync.Entry, erro
 }
 
 // Read liest ein Dokument über read; kind none oder directory ist kein
-// Dokument.
+// Dokument. Den Inhalt trägt das Feld content der Struktur. Fehlt es bei
+// einem Dokument, ist der Node älter (vor Task 024): Dort war der Inhalt der
+// Text des Ergebnisses.
 func (t *mcpTarget) Read(ctx context.Context, name string) (dirsync.Document, bool, error) {
 	var out mcpnode.ReadOutput
 	text, err := t.call(ctx, "read", mcpnode.ReadInput{Collection: t.addr, Name: name}, &out)
@@ -181,7 +183,11 @@ func (t *mcpTarget) Read(ctx context.Context, name string) (dirsync.Document, bo
 	if out.Kind != mcpnode.KindDocument {
 		return dirsync.Document{}, false, nil
 	}
-	return dirsync.Document{Content: text, Revision: out.Revision}, true, nil
+	content := text
+	if out.Content != nil {
+		content = *out.Content
+	}
+	return dirsync.Document{Content: content, Revision: out.Revision}, true, nil
 }
 
 func (t *mcpTarget) Create(ctx context.Context, name, content string) error {
