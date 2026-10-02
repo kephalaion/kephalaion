@@ -859,8 +859,9 @@ Fehlversuch für die Jail.
   Verzeichnis unter `tokens/` den eigenen Alias des Hubs; der entfernte Node erwartet seinen.
   Das geht nur, wenn beide gleich heißen (auf der WSL heißen beide `vm`).
 - **Eigene CA:** `--ca-file` dient nur der Prüfung vor dem Eintragen. Die Assistenten prüfen
-  das Zertifikat mit ihren eigenen Trust-Stores: Mit Let's Encrypt (Weg 1) nehmen alle die
-  Adresse ohne Weiteres an. Für eine eigene CA (Weg 2) kennen die Assistenten je einen Weg —
+  das Zertifikat mit ihren eigenen Trust-Stores: Mit Let's Encrypt (Weg 1) nehmen Claude Code,
+  OpenCode und Codex die Adresse ohne Weiteres an (abgenommen am 2026-10-02 gegen die Dev-VM);
+  die Erweiterung für VS Code prüft der Nutzer. Für eine eigene CA (Weg 2) kennen die Assistenten je einen Weg —
   Codex `CODEX_CA_CERTIFICATE` oder `SSL_CERT_FILE`, OpenCode `NODE_EXTRA_CA_CERTS` (oder die
   System-CA), Claude Code `NODE_EXTRA_CA_CERTS`, die Erweiterung für VS Code die CA des Extension
   Hosts (`NODE_EXTRA_CA_CERTS`) —, gesetzt in der Umgebung, in der der Assistent startet. Geprüft

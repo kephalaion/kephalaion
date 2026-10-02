@@ -2,7 +2,7 @@
 
 Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen; 023 Etappen 1–5 ausgeführt, auf der VM eingespielt, Abnahme in Arbeit)
+WSL abgenommen; 023 auf der VM eingespielt und abgenommen bis auf VS Code, das der Nutzer prüft)
 
 ## So wird diese Datei aktualisiert
 
@@ -288,12 +288,16 @@ WSL abgenommen; 023 Etappen 1–5 ausgeführt, auf der VM eingespielt, Abnahme i
   `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
   unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
-- **Task 023 — MCP und Kommandozeile über `https`, Etappe 6 (Abnahme gegen die VM):** gebaut
-  (Etappe 1–3), auf der VM eingespielt am 2026-10-02 (Etappe 4: Binary dev 493b6bd, Caddy mit
-  `/kephalaion/mcp` und Log ohne Request-Header, Jail `kephalaion-mcp`; `~/dev/vm/kephalaion/README.md`,
-  „Stand 2026-10-02“), dokumentiert (Etappe 5: `installation.md`, „Node für Clients anderer
-  Rechner“). Offen: Abnahme aus der WSL mit eigenem `HOME` und den Assistenten; VS Code prüft der
-  Nutzer.
+- **Task 023 — MCP und Kommandozeile über `https`, Etappe 6:** gebaut (Etappe 1–3), auf der VM
+  eingespielt am 2026-10-02 (Etappe 4: Binary dev 493b6bd, Caddy mit `/kephalaion/mcp` und Log
+  ohne Request-Header, Jail `kephalaion-mcp`; `~/dev/vm/kephalaion/README.md`, „Stand
+  2026-10-02“), dokumentiert (Etappe 5: `installation.md`, „Node für Clients anderer Rechner“),
+  abgenommen am 2026-10-02 aus der WSL: `node dir pull|push` und `node mcp add|status --node`
+  aus einem `HOME` ohne Node, `whoami` über `https` in neuen Sitzungen von Claude Code, OpenCode
+  und Codex (`app-server`), verdeckt ohne Anmeldung, lokal alles wie bisher, kein Token im
+  Journal, lokale Einträge wie vorher (Befund `mcp-von-aussen.md`). Offen: die Erweiterung für
+  VS Code (0.0.7, `kephalaion.nodeUrl` und `kephalaion.hubs`) prüft der Nutzer — siehe „Zu
+  testen“.
 
 ## Zu tun
 
@@ -414,6 +418,13 @@ WSL abgenommen; 023 Etappen 1–5 ausgeführt, auf der VM eingespielt, Abnahme i
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 023 — Erweiterung für VS Code gegen den Node der VM** (Nutzer): 0.0.7 in der WSL
+  installieren (`make vscode-install`), `kephalaion.nodeUrl` auf
+  `https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephalaion`,
+  `kephalaion.hubs` `["vm"]`; Statusleiste `Keph vm` mit Node `vm-node` und Account
+  `kamran-wsl`, MCP-Server „Kephalaion“ mit `whoami` über Copilot; danach beide Einstellungen
+  zurück. Schritte in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 023“ (A10).
 
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM** (Nacharbeit des Nutzers; die KI
   tauscht Binary, Dienst und `node.db` der VM nicht). Keine neue Schemafassung; zuerst der Hub
