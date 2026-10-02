@@ -244,11 +244,17 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
   Token-Dateien stimmen und die Hubs unter `tokens/` (bzw. in `kephalaion.hubs`) wie die
   Hub-Einträge am Node heißen.
 - **Fehlversuche zählen:** Jede Anfrage mit einem ungültigen Paar ist auf dem Rechner des Proxys
-  ein Fehlversuch (fail2ban, 10 in 10 min sperren die Adresse auf 80/443). Die Erweiterung fragt
-  `changes` alle 3 s und `whoami` alle 30 s — mit einem veralteten Token ist der Rechner nach
-  wenigen Minuten gesperrt. Nach `rotate` am Original also zuerst die Token-Datei erneuern.
+  ein Fehlversuch (fail2ban, 10 in 10 min sperren die Adresse auf 80/443). Gemessen schickte die
+  Erweiterung rund 2 Anfragen je Sekunde (381 in 186 s, A10 unten) — mit einem ungültigen Token
+  ist der Rechner nach wenigen Sekunden gesperrt, samt dem Abgleich eines Nodes dort mit dem Hub
+  hinter demselben Proxy. Nach `kephalaion node account rotate` prüft der entfernte Node das neue
+  Token bis zu seinem nächsten Abgleich (Vorgabe 30 s) gegen die alte Zeile: vor `rotate` die
+  entfernte `nodeUrl` leeren oder auf diesen Abgleich warten (Befund `mcp-von-aussen.md`).
 
-Abgenommen wird das vom Nutzer gegen die Dev-VM (Task 023, Etappe 6).
+**Abgenommen am 2026-10-02** (Task 023, A10, durch den Nutzer) gegen die Dev-VM mit 0.0.7:
+Statusleiste gelb (der zweite Hub der VM, `vmhttp`, ohne Anmeldung — erwartet), `whoami` in
+Copilot über den Node der VM (Node `vm-node`, Hub `vm` angemeldet), 0-mal `login=invalid`, kein
+Token im Log des Proxys und in den Daten von VS Code; danach beide Einstellungen wieder entfernt.
 
 ## Sprachen
 

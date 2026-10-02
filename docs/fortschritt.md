@@ -2,7 +2,7 @@
 
 Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen; 023 auf der VM eingespielt und abgenommen bis auf VS Code, das der Nutzer prüft)
+WSL abgenommen; 023 auf der VM eingespielt und abgenommen)
 
 ## So wird diese Datei aktualisiert
 
@@ -295,9 +295,10 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen bis auf VS Code, das d
   abgenommen am 2026-10-02 aus der WSL: `node dir pull|push` und `node mcp add|status --node`
   aus einem `HOME` ohne Node, `whoami` über `https` in neuen Sitzungen von Claude Code, OpenCode
   und Codex (`app-server`), verdeckt ohne Anmeldung, lokal alles wie bisher, kein Token im
-  Journal, lokale Einträge wie vorher (Befund `mcp-von-aussen.md`). Offen: die Erweiterung für
-  VS Code (0.0.7, `kephalaion.nodeUrl` und `kephalaion.hubs`) prüft der Nutzer — siehe „Zu
-  testen“.
+  Journal, lokale Einträge wie vorher; VS Code 0.0.7 mit entfernter `nodeUrl` vom Nutzer
+  abgenommen (A10). Befund `mcp-von-aussen.md`: Die Erweiterung schickt rund 2 Anfragen je
+  Sekunde, ein ungültiges Token sperrt in Sekunden; nach `rotate` ein Fenster bis zum Abgleich
+  des entfernten Nodes (siehe „Zu besprechen“).
 
 ## Zu tun
 
@@ -419,13 +420,6 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen bis auf VS Code, das d
 
 ## Zu testen
 
-- **Task 023 — Erweiterung für VS Code gegen den Node der VM** (Nutzer): 0.0.7 in der WSL
-  installieren (`make vscode-install`), `kephalaion.nodeUrl` auf
-  `https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephalaion`,
-  `kephalaion.hubs` `["vm"]`; Statusleiste `Keph vm` mit Node `vm-node` und Account
-  `kamran-wsl`, MCP-Server „Kephalaion“ mit `whoami` über Copilot; danach beide Einstellungen
-  zurück. Schritte in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 023“ (A10).
-
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM** (Nacharbeit des Nutzers; die KI
   tauscht Binary, Dienst und `node.db` der VM nicht). Keine neue Schemafassung; zuerst der Hub
   (VM), dann die WSL (`make dev-install`). Schritte in `~/dev/vm/kephalaion/README.md`,
@@ -516,6 +510,13 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen bis auf VS Code, das d
 
 ## Zu besprechen
 
+- **Fehlversuche nach `rotate` und durch die Rate der Erweiterung** (Task 023, Befund
+  `mcp-von-aussen.md`): Mit entfernter `nodeUrl` schickt die Erweiterung rund 2 Anfragen je
+  Sekunde; nach `node account rotate` prüft der entfernte Node das neue Token bis zu seinem
+  nächsten Abgleich gegen die alte Zeile — jede Anfrage ein Fehlversuch, Sperre in Sekunden.
+  Heute nur dokumentiert (`vscode.md`). Möglich: den Abgleich bei einem ungültigen Paar
+  anstoßen, eine Gnadenfrist für das alte Token (`konzept.md`, „Token-Rotation (später)“) oder
+  eine geringere Rate der Erweiterung bei entfernter Adresse.
 - **Abfragen der Erweiterung für VS Code:** Jedes Fenster fragt `changes` alle 3 s und `whoami`
   alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
   je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
