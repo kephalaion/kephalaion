@@ -275,6 +275,11 @@ Nach dem Update des Nodes braucht auch Copilot „Developer: Reload Window“: V
 das alte Output-Schema von `read` ([`installation.md`](installation.md), „Bei den Assistenten
 anmelden“).
 
+**Abgenommen am 2026-10-02** (Task 024, durch den Nutzer) auf der WSL mit 0.0.8 nach
+„Developer: Reload Window“: `vendor/test-docs/vscode.md` aus `vm:test` zeigt Markdown samt
+Frontmatter, kein JSON. Eine an `wsl-hallo.md` angehängte Zeile kam beim Speichern als Markdown
+am Hub an (neue Revision). `read` im Copilot-Chat liefert den Inhalt.
+
 ## Sprachen
 
 **Eine VS-Code-Erweiterung ist JavaScript bzw. TypeScript.** Sie läuft im Extension Host, einem
