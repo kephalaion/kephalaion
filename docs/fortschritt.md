@@ -2,7 +2,7 @@
 
 Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 Etappen 1–2 gebaut, Abnahme offen)
+WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 gebaut, ohne VS Code abgenommen)
 
 ## So wird diese Datei aktualisiert
 
@@ -305,9 +305,14 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 Etappen 1–2 geb
   JSON der Struktur. So bekommt auch Claude Code den Inhalt, das nur `structuredContent`
   weiterreicht. `node dir push|pull` (`mcpclient.go`) und die Erweiterung 0.0.8 lesen
   `content`, bei einem älteren Node den Text. Geprüft mit einem Go-Test gegen einen kleinen
-  Server und mit `node --test`. Offen ist Etappe 3, die Abnahme in Claude Code, OpenCode,
-  Codex und VS Code mit Copilot (`konzept.md`, „Allgemein — lesen“; `vscode.md`, „`read` mit
-  `content`“; Befund `mcp-read-inhalt-in-claude-code.md`).
+  Server und mit `node --test`. Am 2026-10-02 nach `make dev-install` in neuen Sitzungen
+  abgenommen: Claude Code 2.1.287 (`claude -p`), OpenCode 1.18.33 (`opencode run`) und Codex
+  0.149.1 (`codex app-server`, Codex ist nicht angemeldet). Geprüft wurden `wsl-hallo.md` mit
+  Text, `content: false` ohne `content`, `vendor/test-docs/vscode.md` mit `frontmatter` und
+  `vendor/test-docs/begriffe.md` (38 KB). Claude Code kürzt `begriffe.md` nicht. Offen ist
+  VS Code mit der Erweiterung 0.0.8 und Copilot, das prüft der Nutzer (`konzept.md`,
+  „Allgemein — lesen“; `vscode.md`, „`read` mit `content`“; Befund
+  `mcp-read-inhalt-in-claude-code.md`).
 
 ## Zu tun
 
