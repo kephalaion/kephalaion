@@ -302,8 +302,17 @@ Client geht.
 
 **Entfernt: MCP über HTTPS** mit Token, später OAuth, für Clients ohne eigenen Node. Es ist
 derselbe Eingang. Vorgemerkt am 2026-09-30 als nächster Schritt nach der Anmeldung bei den
-Assistenten: MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy (Task 023). Für
-Devcontainer ist es nicht der Weg — dort soll die Antwort aus einer lokalen Replica kommen.
+Assistenten, **gebaut in Task 023** (2026-10-02, zuerst auf der Dev-VM): Derselbe Reverse-Proxy
+wie für den Hub reicht genau `/kephalaion/mcp` ohne seine Anmeldung an den Node auf Loopback
+weiter (`uri strip_prefix /kephalaion`, `Host` auf den Upstream); der Node bleibt ohne TLS-Code.
+Die Adresse für Clients ist `https://<name>/kephalaion` (**node address**, die Basis ohne
+`/mcp`): `node dir push|pull --node`, `node mcp add|status --node` mit der Wahl der Hubs
+(`--hub`) und die Erweiterung für VS Code (`kephalaion.nodeUrl`, `kephalaion.hubs`). `http`
+geht nur zu Loopback und zu `host.docker.internal`, sonst nur `https`; das Zertifikat prüft die
+Kommandozeile gegen die System-Roots oder `--ca-file`, und vor dem ersten Token fragt sie den
+Node ohne Token an. Vorlage und Weg eines Clients ohne Node: [`installation.md`](installation.md),
+„Node für Clients anderer Rechner“. Für Devcontainer ist es nicht der Weg — dort soll die
+Antwort aus einer lokalen Replica kommen.
 
 **Was der Eingang über einen Proxy zeigt, und Fehlversuche — entschieden am 2026-10-01 (Task
 023).** Hinter dem Proxy steht `/mcp` nach außen ohne dessen Anmeldung offen, wie
@@ -361,6 +370,12 @@ Devcontainer ist es nicht der Weg — dort soll die Antwort aus einer lokalen Re
   im Sammel-`handle` hinter `forward_auth`; dort zählt schon heute jedes 401 in `caddy-auth`.
   Beide Jails zählen getrennt. Aufgehoben wird eine Sperre per SSH (`fail2ban-client set
   <jail> unbanip <adresse>`).
+- **Kein Token im Log des Proxys** (Task 023, auf der VM geprüft am 2026-10-02). MCP-Clients
+  schicken das Token als `X-Keph-Token-<alias>`; ein Proxy, der Request-Header loggt, schwärzt
+  so einen Header nicht von sich aus (Caddy nur `Authorization` und Cookies). Der Proxy hält
+  deshalb alle Request-Header aus seinen Logs — bei Caddy im Zugriffslog **und** im Logger
+  `default`, in den Fehlerlog und `reverse_proxy` den ganzen Request schreiben. Erst wenn das
+  ausgerollt und mit einem Dummy-Token geprüft ist, geht ein echtes Token durch den Proxy.
 
 **Node ↔ Hub: ein Protokoll, zwei Transportwege** — dazu der Funktionsaufruf im selben
 Prozess (`local`, siehe oben). Das Protokoll ist HTTP mit JSON und der Fassung im Pfad, kein
@@ -400,10 +415,11 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
   nicht und sendet nie eine Umleitung (eine absolute `Location` ginge am Proxy vorbei ins
   Leere); die Weboberfläche nennt deshalb nur relative Pfade (`gui/app.js`,
   `gui/api/whoami`), `X-Forwarded-Prefix` liest das Binary nicht.
-  Nach außen ohne Anmeldung geht nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
-  dem Token aus); wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und
-  Weboberfläche nennen die Version. Der MCP-Eingang des Nodes (`/mcp` auf 7433) ist davon
-  unberührt.
+  Nach außen ohne Anmeldung gehen nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
+  dem Token aus) und seit Task 023 der MCP-Eingang des Nodes (genau `/kephalaion/mcp` an
+  `/mcp` auf 7433, Clients mit Header-Paaren; ohne gültige Anmeldung verdeckt, siehe oben);
+  wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und Weboberfläche nennen die
+  Version.
 - **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020).** Wer im Browser
   `https://<name>/kephalaion/` öffnet, sieht nach Eingabe von Account und Account-Token,
   worauf der Account am Hub Zugriff hat: User, Beschreibung und alle Collections mit read,
@@ -2208,14 +2224,18 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 - **Erreichbarkeit:** entschieden — Verschlüsselung ist Pflicht, der Transport ist wählbar
   (HTTPS, SSH, lokal im selben Prozess). Entschieden am 2026-09-28: `https` zuerst, über
   einen Reverse-Proxy vor dem Hub (gebaut in Task 018); `ssh` später, am selben Anschluss.
-  Offen: die Begrenzung von Fehlversuchen, jetzt wo der Hub nach außen spricht.
+  Der MCP-Eingang des Nodes über denselben Proxy: gebaut in Task 023 („Entfernt: MCP über
+  HTTPS“). Fehlversuche begrenzt bisher nur fail2ban auf dem Rechner des Proxys: am Hub die
+  401 im Log des Proxys, am Node die Zeilen mit `login=invalid` (entschieden am 2026-10-01,
+  „Kommunikation“). Offen bleibt die Begrenzung im Hub selbst.
 - **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, die den Zugriff
   eines Accounts zeigt („Kommunikation“, „Die Weboberfläche am Hub“): die Seite an der Wurzel,
   ihre Teile unter `/gui/`, hinter der Anmeldung des Proxys, nur mit relativen Pfaden — ohne
   `X-Forwarded-Prefix`. Offen bleibt die Verwaltung in der Oberfläche (Accounts, Rechte,
   Nodes; vorerst die Kommandozeile), die Anzeige des Users der Anmeldung (`X-User` kann das
-  Binary nicht prüfen) und ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
-  erscheint; ein Prozess mit beiden Rollen hat weiter zwei Listener.
+  Binary nicht prüfen). Ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
+  erscheint, ist beantwortet (Task 023): ja, als genau `/kephalaion/mcp`, ohne Anmeldung des
+  Proxys; ein Prozess mit beiden Rollen hat weiter zwei Listener.
 - **Node als Dienst:** entschieden — er läuft ständig, pro User als Benutzerdienst oder
   global als Systemdienst; k-playbook prüft beim Briefing zusätzlich. Eingerichtet mit
   systemd, auf macOS (nur pro User) mit launchd (2026-09-26, „Installation und Betrieb“;

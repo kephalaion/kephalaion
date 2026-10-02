@@ -140,7 +140,8 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   Konzept nur vorgemerkt. Nicht doppelt bauen.
 - **Welcher Node:** Es gibt einen je Rechner. Die Erweiterung läuft neben ihm (siehe
   `extensionKind`) und kann die Adresse aus `listen` in `~/.config/kephalaion/config.yaml`
-  lesen; eine Einstellung `kephalaion.nodeUrl` braucht es nur zum Überschreiben.
+  lesen; eine Einstellung `kephalaion.nodeUrl` braucht es nur zum Überschreiben — oder für
+  einen Node auf einem anderen Rechner (unten, „Ein Node auf einem anderen Rechner“).
 - **Account und Token** trägt die Erweiterung als Header ein, wie jeder Client
   (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`). **Sie liest sie aus den Token-Dateien**
   `~/.config/kephalaion/tokens/<hub>/<account>.token` (siehe [`konzept.md`](konzept.md),
@@ -213,6 +214,41 @@ VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (W
   `~/.vscode-server` noch in den Daten von VS Code unter Windows (`AppData/Roaming/Code`,
   durchsucht mit GNU grep; nicht lesbar nur drei gesperrte `LOCK`-Dateien). Befund
   `material/befunde/mcp-client-registrierung.md`.
+
+## Ein Node auf einem anderen Rechner (Task 023, 0.0.7)
+
+Die Erweiterung kann statt des Nodes dieses Rechners einen Node hinter einem Reverse-Proxy
+ansprechen — gedacht für einen Rechner ohne eigenen Node, etwa den der Dev-VM
+([`installation.md`](installation.md), „Node für Clients anderer Rechner“). Für sie gelten
+dieselben Regeln wie für `kephalaion node mcp add --node`:
+
+- **`kephalaion.nodeUrl`** ist die Adresse ohne `/mcp`, über den Proxy
+  `https://<name>/kephalaion`. `http` geht nur zu diesem Rechner (`localhost`, `127.0.0.1`,
+  `[::1]`) und zu `host.docker.internal`, alles andere nur `https` — sonst gingen Tokens im
+  Klartext übers Netz; eine solche Adresse lehnt die Erweiterung ab, mit Meldung, und schickt
+  nichts. Keine Query, kein User, keiner Weiterleitung folgt sie. Antwortet statt des Nodes der
+  Proxy (401, Weiterleitung, HTML), meldet sie „Präfix falsch oder Anmeldung des Proxys“.
+- **`kephalaion.hubs`** ist die Wahl der Hubs (Liste von Aliasen, etwa `["vm"]`; Scope
+  `machine-overridable`): An eine entfernte Adresse (`https`, `http://host.docker.internal`)
+  gehen nur die Header-Paare dieser Hubs — im Dateisystem wie im MCP-Server für Copilot.
+  Der Alias ist der des Hub-Eintrags **am entfernten Node**, so heißt auch das Verzeichnis unter
+  `tokens/`. Die Wahl ist fest: Ein Hub, der später unter `tokens/` hinzukommt, geht nicht mit.
+  Leer gilt nur, wenn unter `tokens/` genau ein Hub liegt; sonst schickt die Erweiterung nichts
+  und meldet den MCP-Server nicht (Hinweis im Log „Kephalaion“). Für die lokale Adresse ist die
+  Einstellung ohne Belang — dort gehen wie bisher alle Hubs mit Token-Datei.
+- **Zertifikat:** Die Erweiterung verbindet mit dem `fetch` von Node.js im Extension Host; ein
+  Zertifikat von Let's Encrypt gilt dort ohne Weiteres. Eine eigene CA bräuchte
+  `NODE_EXTRA_CA_CERTS` in der Umgebung des Extension Hosts — nicht geprüft.
+- **Ohne gültige Anmeldung** antwortet der Node über den Proxy verdeckt (keine Version, keine
+  Hubs); die Statusleiste zeigt dann „Keph: nicht angemeldet“ und fragt im Tooltip, ob die
+  Token-Dateien stimmen und die Hubs unter `tokens/` (bzw. in `kephalaion.hubs`) wie die
+  Hub-Einträge am Node heißen.
+- **Fehlversuche zählen:** Jede Anfrage mit einem ungültigen Paar ist auf dem Rechner des Proxys
+  ein Fehlversuch (fail2ban, 10 in 10 min sperren die Adresse auf 80/443). Die Erweiterung fragt
+  `changes` alle 3 s und `whoami` alle 30 s — mit einem veralteten Token ist der Rechner nach
+  wenigen Minuten gesperrt. Nach `rotate` am Original also zuerst die Token-Datei erneuern.
+
+Abgenommen wird das vom Nutzer gegen die Dev-VM (Task 023, Etappe 6).
 
 ## Sprachen
 

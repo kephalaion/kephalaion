@@ -1,8 +1,8 @@
 # Fortschritt
 
-Stand: 2026-10-01 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen)
+WSL abgenommen; 023 Etappen 1–5 ausgeführt, auf der VM eingespielt, Abnahme in Arbeit)
 
 ## So wird diese Datei aktualisiert
 
@@ -288,6 +288,12 @@ WSL abgenommen)
   `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
   unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
+- **Task 023 — MCP und Kommandozeile über `https`, Etappe 6 (Abnahme gegen die VM):** gebaut
+  (Etappe 1–3), auf der VM eingespielt am 2026-10-02 (Etappe 4: Binary dev 493b6bd, Caddy mit
+  `/kephalaion/mcp` und Log ohne Request-Header, Jail `kephalaion-mcp`; `~/dev/vm/kephalaion/README.md`,
+  „Stand 2026-10-02“), dokumentiert (Etappe 5: `installation.md`, „Node für Clients anderer
+  Rechner“). Offen: Abnahme aus der WSL mit eigenem `HOME` und den Assistenten; VS Code prüft der
+  Nutzer.
 
 ## Zu tun
 
@@ -303,10 +309,13 @@ WSL abgenommen)
 
 - **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
   - **Task 022 — bei den Assistenten anmelden, lokal:** erledigt, siehe „Erledigt“.
-  - **Task 023 — danach:** MCP und Kommandozeile über `https`, zuerst auf der VM hinter Caddy
-    (`konzept.md`, „Kommunikation“, „Entfernt: MCP über HTTPS“). Dabei: `--node` von `node dir`
-    kennt nur `http://`; fail2ban greift nicht, weil der Node bei falscher Anmeldung nie 401
-    antwortet (Befund `material/befunde/mcp-von-aussen.md`).
+  - **Task 023 — MCP und Kommandozeile über `https`:** gebaut und auf der VM eingespielt, siehe
+    „In Arbeit“ (`konzept.md`, „Entfernt: MCP über HTTPS“; Fehlversuche über die Jail
+    `kephalaion-mcp`, Befund `material/befunde/mcp-von-aussen.md`). Grenzen
+    (`installation.md`, „Node für Clients anderer Rechner“, „Grenzen“): entfernte Adresse auf
+    einem Rechner mit eigenem Node nur bis zum nächsten automatischen Anstoß; kein abweichender
+    Alias am entfernten Node; eigene CA bei den Assistenten nur aus den Binaries belegt, nicht
+    geprobt.
   - **Devcontainer:** nur dokumentiert, zwei Wege (`konzept.md`, „Devcontainer“); die
     Einzelheiten entstehen im Projekt mit dem Devcontainer. Unter WSL probiert: Ein Container
     erreicht den Node des Hosts über `host.docker.internal`; mit einem Weiterleiter im
@@ -375,7 +384,9 @@ WSL abgenommen)
   - Markdown-Export des Stores;
   - Begrenzung von Fehlversuchen bei der Anmeldung — dringlicher, seit der Hub hinter dem
     Proxy nach außen spricht (Task 018), und auch am Eingang der Weboberfläche (Task 020);
-    Übergang fail2ban auf das Caddy-Log (`installation.md`, „Bekannte Grenze“).
+    Übergang fail2ban auf das Caddy-Log (`installation.md`, „Bekannte Grenze“). Am
+    MCP-Eingang des Nodes über den Proxy: fail2ban auf `login=invalid` im Log des Nodes
+    (Task 023, `installation.md`, „Node für Clients anderer Rechner“).
 - **Kleinere Punkte aus dem Review von Task 008** (`done/008-…`, „Code-Review“, Vorschläge 3–12):
   - `reset` prüft nur `entry_id`, nicht die alte `hub_id` — doppeltes Verwerfen bei zwei
     parallelen Resets (3);

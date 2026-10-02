@@ -311,6 +311,16 @@ davor setzt `Host` deshalb auf `localhost:7434`, ein SSH-Tunnel zum Hub geht nur
 Port (`ssh -L 7434:localhost:7434 …`). Hinter einem Proxy nennt die Logzeile die Adresse des
 Aufrufers aus `X-Forwarded-For` (`via`).
 
+**Der Node über einen Proxy** (Task 023): Derselbe Reverse-Proxy, der den Hub nach außen
+reicht, kann auch `/mcp` reichen — als `https://<name>/kephalaion/mcp`, für Clients auf einem
+anderen Rechner ohne eigenen Node. Trägt eine Anfrage `X-Forwarded-For`, kam sie über den
+Proxy; ohne gültige Anmeldung an mindestens einem Hub antwortet der Node dann verdeckt: keine
+Version, kein `update`, keine Namen von Node und Hubs. Lokal bleibt alles, wie es ist. Bei einem
+falschen Token antwortet der Node nie 401; die Logzeile trägt stattdessen `login=invalid`
+direkt hinter `via`, und eine fail2ban-Jail auf dem Rechner des Proxys zählt sie. Vorlage für
+Caddy (mit dem Filter, der die Token-Header aus dem Log hält), Jail und der Weg eines Clients
+ohne Node: [`docs/installation.md`](docs/installation.md), „Node für Clients anderer Rechner“.
+
 ```sh
 kephalaion service install         # als Dienst; oder von Hand, etwa zum Testen:
 kephalaion serve 2>> ~/.local/state/kephalaion/serve.log &
@@ -324,6 +334,11 @@ Token nie im Klartext (Claude Code und Codex holen die Header bei jeder Verbindu
 Erweiterung (unten). `kephalaion node mcp status` zeigt je Assistent, ob er eingetragen ist,
 `remove` entfernt den Eintrag. `install.sh` und `node account rotate` stoßen das von selbst an.
 Einzelheiten: [`docs/installation.md`](docs/installation.md), „Bei den Assistenten anmelden“.
+Einen Node auf einem anderen Rechner trägt `kephalaion node mcp add --node
+https://<name>/kephalaion --hub <alias>` ein — auch ohne eigene config; zuerst prüft es den Node
+(Zertifikat, `initialize` ohne Token) und schreibt nur, wenn er antwortet, und an ihn gehen nur
+die Header-Paare der gewählten Hubs (`--hub`, wiederholbar; ohne Wahl nur, wenn unter `tokens/`
+genau ein Hub liegt). `node mcp status --node …` vergleicht mit dieser Adresse.
 
 Als Node gleicht `serve` seine Replicas selbst ab: beim Start je Hub-Eintrag, danach im
 Abstand `sync_interval` aus den `settings` des Nodes — Standard 30 s, mindestens `1s`, `0`
@@ -654,7 +669,9 @@ zu Ende, dann meldet die Kommandozeile, wie weit sie kam — erneut ausführen s
 Konflikte (`stale_revision`, `name_taken`, `path_conflict`, `not_found`) und ein unklarer
 Ausgang werden gemeldet, nicht wiederholt; der Lauf geht weiter und endet unvollständig.
 Exit-Codes: 0 fertig, 1 Fehler, 2 falscher Aufruf, 3 unvollständig. Die Adresse des Nodes
-kommt aus `listen` der config oder `--node <url>`, der Account aus `--account` oder der
+kommt aus `listen` der config oder `--node <url>` — auch ein Node hinter einem Proxy auf einem
+anderen Rechner, `https://<name>/kephalaion` (Zertifikat gegen die System-Roots oder
+`--ca-file`; `http` nur zu diesem Rechner und zu `host.docker.internal`) —, der Account aus `--account` oder der
 einzigen Token-Datei unter `tokens/<hub>/`, das Token aus ihr, `--token-file` oder
 `--token-stdin` — nie als Argument, nie in einer Ausgabe.
 
@@ -705,6 +722,11 @@ dort einen Node erreicht, ist noch nicht gebaut ([`docs/konzept.md`](docs/konzep
   beim Start des Servers ein. Solange VS Code auf „Trace“ protokolliert, meldet sie ihn nicht
   (VS Code schriebe die Header sonst ins Log). Abschalten mit `kephalaion.mcpServer.enabled`;
   [`docs/vscode.md`](docs/vscode.md), „MCP-Server für Copilot“.
+- **Ein Node auf einem anderen Rechner** (0.0.7): `kephalaion.nodeUrl` auf
+  `https://<name>/kephalaion` (hinter einem Proxy; `http` nur zu diesem Rechner und zu
+  `host.docker.internal`), dazu `kephalaion.hubs` mit den Aliasen der Hubs, deren Header-Paare
+  dorthin gehen (etwa `["vm"]`; leer nur bei genau einem Hub unter `tokens/`).
+  [`docs/vscode.md`](docs/vscode.md), „Ein Node auf einem anderen Rechner“.
 - **Schreiben** (0.0.5) über die Werkzeuge oben: speichern, neue Datei und neuer Ordner,
   löschen, umbenennen und verschieben im Explorer, auch ganze Ordner und per Drag & Drop.
   Schreibbar ist eine Collection mit `write`; ein fremdes Dokument ohne `supersede` scheitert

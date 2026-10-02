@@ -50,7 +50,9 @@ Loopback (`127.0.0.1:7433`), das teilen alle User eines Rechners. Devcontainer e
 noch nicht, weder global noch pro User; die beiden vorgesehenen Wege stehen in `konzept.md`,
 „Devcontainer“.
 Der Hub dagegen ist von anderen Rechnern erreichbar — über einen Reverse-Proxy auf seinem
-Rechner, siehe „Hub für Nodes anderer Rechner“.
+Rechner, siehe „Hub für Nodes anderer Rechner“. Über denselben Proxy auch der MCP-Eingang des
+Nodes, für Clients ohne eigenen Node (seit Task 023), siehe „Node für Clients anderer
+Rechner“.
 
 ## Pro User
 
@@ -429,6 +431,9 @@ https://9.141.8.157 {
   keine Grenze für die Antwort des Upstreams). TLS mindestens 1.2 ist Caddys Standard.
 - Das Zugriffslog ist die Grundlage für fail2ban (siehe „Bekannte Grenze“) — als Datei wie
   hier oder, ohne `output`, im Journal von `caddy.service`; der Filter muss zur Quelle passen.
+  Nodes schicken ihr Token als `Authorization: Bearer`, das Caddy von sich aus schwärzt. Kommt
+  der MCP-Eingang des Nodes dazu, gehören alle Request-Header aus dem Log, an zwei Stellen
+  („Node für Clients anderer Rechner“).
 - Prüfen vor dem Einspielen: `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`,
   danach `systemctl reload caddy`.
 - **Proben.** Von außen, ohne Token: `curl https://<name>/kephalaion/hub/` → 200, `Kephalaion
@@ -593,6 +598,8 @@ Weboberfläche (`/kephalaion/gui/api/whoami`), ein falsches Passwort an der Anme
 Proxys und ein `POST` ohne Sitzung — auch der einer Seite, deren Anmeldung abgelaufen ist.
 10 in 10 Minuten sperren dort die Adresse für 80 und 443; 403 zählt nicht, 400 auch nicht.
 Wer ins Log einer Datei schreibt wie im Caddyfile oben, richtet den Filter auf die Datei.
+Fehlversuche am MCP-Eingang des Nodes sind kein 401; sie zählt eine eigene Jail auf dem Log
+des Nodes („Node für Clients anderer Rechner“, „Fehlversuche“).
 
 ### Auf dem Rechner des Hubs zu bestätigen
 
@@ -602,6 +609,288 @@ dass `header_up Host {upstream_hostport}` beim Hub als `Host: localhost:7434` an
 IP über LB/NAT kommt und dort eine eigene Freigabe braucht. Seit Task 019 dazu: dass `uri
 strip_prefix /kephalaion` nur den Präfix wegnimmt und der Hub `/hub/v1/…` sieht (sonst 404
 mit dem Hinweis auf `/hub`, siehe „Proben“).
+
+## Node für Clients anderer Rechner: MCP und Kommandozeile über https
+
+Auch der MCP-Eingang des Nodes (`/mcp`) ist über denselben Reverse-Proxy erreichbar — für
+Clients auf einem anderen Rechner, vor allem solche **ohne eigenen Node**: die Assistenten
+(`node mcp add --node`), die Erweiterung für VS Code (`kephalaion.nodeUrl`) und die
+Kommandozeile (`node dir push|pull --node`). Der Node lauscht weiter nur auf Loopback und
+spricht kein TLS; TLS beendet der Proxy, und der Node prüft `Host` und `Origin` wie lokal.
+Die **Adresse für Clients** ist `https://<name>/kephalaion` — die Basis ohne `/mcp`, die
+Clients hängen `/mcp` an. Entschieden am 2026-10-01, gebaut in Task 023, zuerst auf der
+Dev-VM ([`konzept.md`](konzept.md), „Entfernt: MCP über HTTPS“). Für Devcontainer ist dieser
+Weg nicht gedacht ([`konzept.md`](konzept.md), „Devcontainer“). Auf einem Rechner mit eigenem
+Node bleibt alles lokal wie bisher.
+
+### Caddyfile
+
+Die Vorlage aus „Hub für Nodes anderer Rechner“ mit dem Block für den Node und dem Filter
+für das Log (Weg 1 mit Namen; Weg 2 wie oben mit IP und `tls internal`):
+
+```text
+{
+    # Kein Request-Header im Log: auch Fehlerlog und reverse_proxy (Logger default).
+    log default {
+        format filter {
+            wrap json
+            fields {
+                request>headers delete
+            }
+        }
+    }
+}
+
+https://hub.example.org {
+    # Zugriffslog (Grundlage für fail2ban), ohne Request-Header.
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>headers delete
+            }
+        }
+    }
+    handle /kephalaion/hub/* {
+        uri strip_prefix /kephalaion
+        request_body {
+            max_size 8MiB
+        }
+        reverse_proxy localhost:7434 {
+            header_up Host {upstream_hostport}
+        }
+    }
+    handle /kephalaion/mcp {
+        uri strip_prefix /kephalaion
+        request_body {
+            max_size 8MiB
+        }
+        reverse_proxy localhost:7433 {
+            header_up Host {upstream_hostport}
+        }
+    }
+    handle {
+        respond 404
+    }
+}
+```
+
+- **Kein Token im Log des Proxys.** Caddy schreibt die Request-Header mit ins Log und schwärzt
+  von sich aus nur `Authorization`, `Cookie`, `Proxy-Authorization` und `Set-Cookie`. Ein
+  MCP-Client schickt sein Token aber als `X-Keph-Token-<alias>` — ohne Filter stünde es im
+  Klartext im Log. Der Name hängt am Alias, ein Filter auf einzelne Header-Namen deckt das nicht
+  ab; deshalb fallen alle Request-Header heraus (`request>headers delete`), und zwar an **zwei**
+  Stellen: im `log` der Site (Zugriffslog) und als globale Option `log default`. Dorthin
+  schreiben das Fehlerlog (ab Status 500, etwa 502, während Kephalaion neu startet) und
+  `reverse_proxy` (wenn ein Stream abbricht) — beide mit dem ganzen Request samt Headern. Ein
+  Filter nur auf `log` reicht also nicht. `remote_ip` und `status` bleiben; ein fail2ban-Filter
+  auf 401 greift weiter. Mit `output file …` gilt dasselbe. Erst wenn der Filter ausgerollt und
+  mit einem Dummy-Token geprüft ist, geht ein echtes Token durch den Proxy; steht doch eines im
+  Log, wird es rotiert (`node account rotate`).
+- **`X-Forwarded-For` ist Voraussetzung.** Daran erkennt der Node, dass eine Anfrage über den
+  Proxy kam. Ohne gültige Anmeldung an mindestens einem Hub antwortet er dann **verdeckt**:
+  keine Version (`initialize` nennt eine leere Version), kein `update`, keine Namen von Node und
+  Hubs — er antwortet, als hätte er keinen Hub-Eintrag. Mit gültiger Anmeldung an einem Hub
+  antwortet er wie lokal. Caddys `reverse_proxy` setzt den Header selbst und verwirft einen, den
+  der Client mitschickt (solange `trusted_proxies` nicht gesetzt ist). Ein Proxy ohne diesen
+  Header ließe jede Anfrage lokal aussehen: Der Node nennte dann jedem Version und Hubs, und
+  Fehlversuche stünden ohne Adresse im Log.
+- **Ohne Anmeldung des Proxys.** MCP-Clients können kein Formular; sie weisen sich je Hub mit
+  `X-Keph-Account-<alias>` und `X-Keph-Token-<alias>` aus, wie Nodes am Hub mit ihrem Token.
+  Nach außen ist `/kephalaion/mcp` so offen wie `/kephalaion/hub/`. Steht die Option mit
+  `forward_auth` für den Rest von `/kephalaion/*` darin („Hub für Nodes anderer Rechner“), greift
+  dieser Block zuerst (Caddy sortiert `handle` nach Pfadlänge).
+- **Nur genau `/kephalaion/mcp`**, der Node sieht `/mcp`. Eine andere Adresse
+  (`…/kephalaion/mcp/`, `…/kephalaion/x/mcp`, ohne Präfix) landet in `respond 404` bzw. in der
+  Anmeldung der Option — dort zählt ein 401 für fail2ban. Die Kommandozeile und die Erweiterung
+  erklären das als „Präfix falsch oder Anmeldung des Proxys“.
+- `header_up Host {upstream_hostport}` wie beim Hub (sonst 403 der Host-Prüfung des Nodes);
+  `request_body max_size 8MiB` über den 7 MiB, die `/mcp` annimmt. `Origin` reicht Caddy
+  durch: Eine fremde `Origin` bekommt vom Node 403, wie lokal (MCP für Browser ist nicht
+  vorgesehen).
+
+### Fehlversuche: eine Jail auf dem Log des Nodes
+
+Der Node antwortet bei falschem Token nie 401, sondern wie lokal mit einer Antwort des Werkzeugs
+(`isError`) — ein 401 nähmen MCP-Clients als Beginn einer Anmeldung per OAuth, und lokal verlöre
+`whoami` seine Hilfe bei falsch eingerichteten Clients. Ein fail2ban-Filter auf 401 im Log des
+Proxys sieht davon also nichts. Stattdessen schreibt der Node je Anfrage eine Zeile; trägt die
+Anfrage mindestens ein ungültiges Header-Paar (falsches Token, unbekannter oder gesperrter
+Account), steht `login=invalid` direkt hinter `via`:
+
+```text
+2026-10-02T12:22:48+02:00 node POST /mcp 200 7.854ms via=80.131.88.238 login=invalid account=kamran-wsl
+```
+
+**Ein Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind. Eine Anfrage
+ohne Paar (`initialize` ohne Token) zählt nicht, ebenso eine nur mit Paaren zu Aliasen, die der
+Node nicht kennt, und eine ohne `via` (lokal, nicht über den Proxy). Die Zeile lässt sich über
+Header nicht fälschen: Namen stehen nur nach der Namensregel darin (sonst `(ungültig)`), `via`
+und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil der Proxy einen
+mitgeschickten `X-Forwarded-For` verwirft. Grenze: Ein Prozess auf dem Rechner des Nodes
+erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen — so eine Zeile mit
+fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als vertrauenswürdig.
+
+Filter und Jail für die globale Installation (System-Unit `kephalaion.service`, Log im
+Journal), Schwelle und Fenster wie bei einer Jail für 401 im Log des Proxys:
+
+```ini
+# /etc/fail2ban/filter.d/kephalaion-mcp.conf
+[Definition]
+failregex = (?:^|\s)node [A-Z]+ /mcp \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)
+ignoreregex =
+journalmatch = _SYSTEMD_UNIT=kephalaion.service
+
+# /etc/fail2ban/jail.d/kephalaion.local (Auszug)
+[kephalaion-mcp]
+enabled  = true
+backend  = systemd
+filter   = kephalaion-mcp
+port     = http,https
+findtime = 10m
+maxretry = 10
+bantime  = 1h
+```
+
+Prüfen ohne Sperre: `fail2ban-regex systemd-journal /etc/fail2ban/filter.d/kephalaion-mcp.conf`
+trifft nur Zeilen mit `via` und `login=invalid`; `fail2ban-client status kephalaion-mcp` zählt.
+Der Filter ist nicht an der Zeit verankert: fail2ban liefert die Zeile aus dem Journal mit
+eigenem Präfix (`<host> kephalaion[<pid>]: …`).
+
+**Folgen einer Sperre.** fail2ban sperrt die ganze Adresse auf 80 und 443 — auch den Abgleich
+eines Nodes vom selben Rechner mit dem Hub hinter demselben Proxy und die Weboberfläche. Die
+eigene Adresse ist nicht ausgenommen, nur was die Jail ausdrücklich ausnimmt. Ein falsch
+eingerichteter Assistent zählt schon beim Start einer Sitzung mehrere Fehlversuche
+(`initialize`, `tools/list`, je eine Anfrage) und danach einen je Werkzeugaufruf: Nach wenigen
+Sitzungen ist die Adresse gesperrt — ebenso mit einem veralteten Token, etwa einer Kopie nach
+`rotate` am Original. Erkennbar an `login=invalid` im Log des Nodes; Abhilfe: das Token beim
+Client erneuern, dann `fail2ban-client set kephalaion-mcp unbanip <adresse>` per SSH. Eine
+Jail für 401 im Log des Proxys zählt getrennt.
+
+### Proben
+
+Von außen (ohne Token; nur Dummy-Tokens, solange der Filter nicht geprüft ist):
+
+```sh
+U=https://hub.example.org/kephalaion/mcp
+H='-H Content-Type:application/json -H Accept:application/json,text/event-stream'
+# initialize ohne Anmeldung: 200, "serverInfo":{"name":"kephalaion","version":""}
+curl -sS $H -X POST "$U" --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
+# whoami ohne Paar: "hidden":true, leere hubs, keine Version
+curl -sS $H -X POST "$U" --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whoami","arguments":{}}}'
+# fremde Origin: 403 vom Node (kein 401, zählt nirgends)
+curl -sS -o /dev/null -w '%{http_code}\n' $H -H 'Origin: https://example.com' -X POST "$U" --data '{}'
+```
+
+Auf dem Rechner des Nodes zeigt dasselbe `whoami` an `http://127.0.0.1:7433/mcp` (ohne
+`X-Forwarded-For`) alles wie bisher; `ss -ltn` zeigt den Node nur auf `127.0.0.1:7433`. Im Log
+des Proxys steht kein `X-Keph-Token-…` — je Token gesucht, ohne es auszugeben:
+`journalctl -u caddy | grep -c -F -f <token-datei>` → 0.
+
+### Client-Seite
+
+```sh
+N=https://hub.example.org/kephalaion
+
+# Kommandozeile: Ordner abgleichen über den entfernten Node
+kephalaion node dir pull vm:test vendor/test-docs ./test-docs --node "$N"
+kephalaion node dir push vm:test vendor/meins ./meins --node "$N"     # Ziel wie lokal (vendor/, Scope)
+
+# Assistenten: Eintrag mit dieser Adresse, nur die gewählten Hubs
+kephalaion node mcp add --node "$N" --hub vm
+kephalaion node mcp status --node "$N" --hub vm   # eingetragen / weicht ab / fehlt
+```
+
+- `<hub>` und `--hub` nennen den **Alias des Hub-Eintrags am entfernten Node** (auf der VM
+  `vm`); so heißt auch das Verzeichnis unter `tokens/`. Der Account kommt wie lokal aus
+  `--account` oder der einzigen Token-Datei unter `~/.config/kephalaion/tokens/<alias>/`.
+- `http` geht nur zu diesem Rechner (`localhost`, `127.0.0.1`, `[::1]`) und zu
+  `host.docker.internal`, alles andere nur über `https` — sonst gingen Tokens im Klartext übers
+  Netz. Keine Query, kein User in der Adresse, keiner Weiterleitung wird gefolgt.
+- **Erst prüfen, dann eintragen.** Vor dem ersten Token fragen `node dir`, `node mcp add` und
+  `status` den Node an: das Zertifikat gegen die System-Roots oder `--ca-file`, dann
+  `initialize` ohne Token. Scheitert das, schreibt `add` nichts und sagt warum: Zertifikat
+  nicht vertraut, für einen anderen Namen oder abgelaufen; Gegenseite ohne TLS; „Präfix falsch
+  oder Anmeldung des Proxys“ (401, Weiterleitung, HTML); nicht erreichbar.
+- **Wahl der Hubs** (`--hub <alias>`, wiederholbar): An eine entfernte Adresse gehen nur die
+  Header-Paare der gewählten Hubs — sonst gingen Tokens von Hubs, die der entfernte Node nicht
+  kennt, durch den Proxy. Die Wahl steht fest im Eintrag (beim Helfer als `--hub`, bei OpenCode
+  als Verweise nur auf ihre Token-Dateien); ein Hub, der später unter `tokens/` hinzukommt,
+  geht nicht mit. Ohne `--hub` nimmt `add` den Hub nur, wenn unter `tokens/` genau einer liegt.
+- Die Erweiterung für VS Code folgt denselben Regeln: `kephalaion.nodeUrl` auf die Adresse,
+  `kephalaion.hubs` als Wahl ([`vscode.md`](vscode.md)).
+
+### Ein Client ohne eigenen Node
+
+Ein Rechner, auf dem kein Node läuft, braucht nur das Binary (für `node mcp headers`, den
+Helfer von Claude Code und Codex, und für `node dir`), einen Account am Hub und dessen Token.
+Kein neues Kommando:
+
+1. **Am Hub** ein eigener Account je Rechner (Schema `<user>-<rechner>`), mit Rechten:
+   `hub account add alice-laptop --user alice`, `hub account grant alice-laptop wissen
+   --write`. Das Einrichtungstoken zeigt der Hub genau einmal.
+2. **Das erste `rotate` an einem Node**, der den Hub als Eintrag hat — etwa am Node des
+   Hub-Rechners als Systembenutzer, wie unter „Hub-Einträge und Accounts, von Hand“ (`$K node
+   account rotate team alice-laptop --token-file "$DIR/alice-laptop.token"`).
+3. **Die Token-Datei übergeben**, per SSH und nie als Argument, nach
+   `~/.config/kephalaion/tokens/<alias>/<account>.token` mit `0600` (Verzeichnisse `0700`).
+   `<alias>` ist der Alias des Hub-Eintrags **am entfernten Node** (`team`), denn er steht im
+   Namen des Headers.
+4. **Die Adresse des Clients freigeben**, wo 443 nur für freigegebene Adressen offen ist (in
+   Azure die NSG).
+5. `kephalaion node mcp add --node https://<name>/kephalaion` (mit `--hub`, wenn unter
+   `tokens/` mehr als ein Hub liegt); `node dir … --node https://<name>/kephalaion`.
+
+**Rotation:** `node account rotate` braucht einen Hub-Eintrag am eigenen Node, und die
+automatischen Anstöße (`install.sh`, `rotate`, `check`; „Bei den Assistenten anmelden“) laufen
+auf einem Rechner ohne Node nie. Rotiert wird deshalb wie Schritt 2 an einem Node mit
+Hub-Eintrag (mit der aktuellen Token-Datei als `--token-file`), danach wie Schritt 3 übergeben.
+Der Eintrag bei den Assistenten bleibt richtig (er liest die Datei), wirksam mit einer neuen
+Sitzung. Bis die neue Datei da ist, schickt der Client das alte Token — jede Anfrage ein
+Fehlversuch für die Jail.
+
+### Grenzen
+
+- **Ein Rechner mit eigenem Node:** `--node` überschreibt die Adresse aus der config nur für
+  diesen Aufruf. Die automatischen Anstöße setzen wieder die lokale Adresse ein, und `node mcp
+  status` ohne `--node` meldet bis dahin „weicht ab“. Gedacht ist die entfernte Adresse für
+  Rechner ohne eigenen Node.
+- **Ein abweichender Alias geht nicht.** Auf einem Rechner mit eigenem Node trägt das
+  Verzeichnis unter `tokens/` den eigenen Alias des Hubs; der entfernte Node erwartet seinen.
+  Das geht nur, wenn beide gleich heißen (auf der WSL heißen beide `vm`).
+- **Eigene CA:** `--ca-file` dient nur der Prüfung vor dem Eintragen. Die Assistenten prüfen
+  das Zertifikat mit ihren eigenen Trust-Stores: Mit Let's Encrypt (Weg 1) nehmen alle die
+  Adresse ohne Weiteres an. Für eine eigene CA (Weg 2) kennen die Assistenten je einen Weg —
+  Codex `CODEX_CA_CERTIFICATE` oder `SSL_CERT_FILE`, OpenCode `NODE_EXTRA_CA_CERTS` (oder die
+  System-CA), Claude Code `NODE_EXTRA_CA_CERTS`, die Erweiterung für VS Code die CA des Extension
+  Hosts (`NODE_EXTRA_CA_CERTS`) —, gesetzt in der Umgebung, in der der Assistent startet. Geprüft
+  ist das nicht; nur die Zeichenketten stehen in den Binaries (Befund
+  `mcp-client-registrierung.md`).
+- **Devcontainer:** nicht dieser Weg ([`konzept.md`](konzept.md), „Devcontainer“).
+
+### Ansible
+
+Wie „Hub für Nodes anderer Rechner“, „Ansible“: `Caddyfile.j2` ist die Vorlage oben (mit
+beiden Filtern und dem Block für `/kephalaion/mcp`), dazu Filter und Jail für fail2ban als
+Dateien:
+
+```yaml
+- name: fail2ban für den MCP-Eingang des Nodes
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: fail2ban/kephalaion-mcp.conf, dest: /etc/fail2ban/filter.d/kephalaion-mcp.conf }
+    - { src: fail2ban/kephalaion.local, dest: /etc/fail2ban/jail.d/kephalaion.local }
+  notify: fail2ban neu laden    # Handler: fail2ban-client -t, dann fail2ban-client reload
+```
+
+**Reihenfolge:** erst das Binary mit Task 023 (ein älterer Node nennt über den Block seine
+Version), dann das Caddyfile, dann die Jail; Tokens der Clients erst danach. Wie es auf der
+Dev-VM aussieht: `~/dev/vm/kephalaion/README.md`, „Stand 2026-10-02“.
 
 ## Neue Schemafassung: node.db neu anlegen
 
