@@ -235,3 +235,47 @@ func TestParseNodeAddress(t *testing.T) {
 		}
 	}
 }
+
+// probeNode mit einer Antwort auf initialize als SSE (text/event-stream): Es
+// zählt der letzte data-Block. Ohne data oder mit kaputtem JSON gilt die
+// Gegenseite nicht als Kephalaion-Node.
+func TestProbeNodeSSE(t *testing.T) {
+	const node = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},` +
+		`"serverInfo":{"name":"kephalaion","version":"1.2.3"}}}`
+	const other = `{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"anderer","version":"9"}}}`
+	cases := []struct {
+		name, body, version, err string
+	}{
+		{"gültig", "event: message\ndata: " + node + "\n\n", "1.2.3", ""},
+		{"ohne Leerzeichen, CRLF", "event: message\r\ndata:" + node + "\r\n\r\n", "1.2.3", ""},
+		{"verdeckt", "event: message\ndata: " + strings.Replace(node, `"1.2.3"`, `""`, 1) + "\n\n", "", ""},
+		{"der letzte Block zählt", "data: " + other + "\n\ndata: " + node + "\n\n", "1.2.3", ""},
+		{"der letzte Block ist nicht der Node", "data: " + node + "\n\ndata: " + other + "\n\n", "",
+			`nicht als Kephalaion-Node (serverInfo "anderer")`},
+		{"ohne data", "event: message\nid: 1\n\n", "", `nicht als Kephalaion-Node (serverInfo "")`},
+		{"leer", "", "", `nicht als Kephalaion-Node (serverInfo "")`},
+		{"kaputtes JSON", "event: message\ndata: {\"jsonrpc\":\"2.0\",\"result\":{\"serverInfo\":\n\n", "",
+			`nicht als Kephalaion-Node (serverInfo "")`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+				_, _ = io.WriteString(w, c.body)
+			}))
+			defer srv.Close()
+			addr, err := parseNodeAddress(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := probeNode(context.Background(), addr, nil, "")
+			switch {
+			case c.err == "" && (err != nil || info.Version != c.version):
+				t.Errorf("Version %q, Fehler %v; erwartet %q", info.Version, err, c.version)
+			case c.err != "" && (err == nil || !strings.Contains(err.Error(), c.err) ||
+				!strings.Contains(err.Error(), "Präfix falsch oder Anmeldung des Proxys")):
+				t.Errorf("Fehler %v, erwartet %q", err, c.err)
+			}
+		})
+	}
+}

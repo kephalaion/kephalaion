@@ -230,3 +230,100 @@ test('readFile: Inhalt aus content, bei einem älteren Node aus dem Text', async
   assert.strictEqual(await readWith({ content: [{ type: 'text', text: '# Alt\n' }], structuredContent: doc }), '# Alt\n',
     'älterer Node');
 });
+
+// --- Die Zusagen des MCP-Servers für Copilot (docs/vscode.md, „MCP-Server für Copilot“) ---
+
+// Die Token-Dateien von vorn, damit die Tests darunter nicht von den früheren abhängen.
+function resetTokens() {
+  fs.rmSync(tokens, { recursive: true, force: true });
+}
+
+// Die gemeldete Definition speichert VS Code zwischen: Sie trägt weder Header noch Token, auch nicht
+// in version. Die Header-Paare setzt erst resolveMcpServerDefinition ein; kein Log nennt ein Token.
+test('MCP-Server: gemeldete Definition ohne Header, die Paare erst beim Start', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putToken('eigen', 'kp', TOKEN_B);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  logs.length = 0;
+  start();
+  await settle();
+  const defs = provider.provideMcpServerDefinitions();
+  assert.strictEqual(defs.length, 1);
+  const [def] = defs;
+  assert.deepStrictEqual(def.headers, {}, 'die gemeldete Definition trägt keine Header');
+  assert.strictEqual(def.version, 'eigen=kp,vm=kamran');
+  for (const t of [TOKEN_A, TOKEN_B]) assert.ok(!JSON.stringify(defs).includes(t), 'Token in der Definition');
+  const started = provider.resolveMcpServerDefinition(def);
+  assert.deepStrictEqual(started.headers, {
+    'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B,
+    'X-Keph-Account-vm': 'kamran', 'X-Keph-Token-vm': TOKEN_A,
+  });
+  // Eine neue Meldung trägt wieder keine Header.
+  assert.deepStrictEqual(provider.provideMcpServerDefinitions()[0].headers, {});
+  for (const t of [TOKEN_A, TOKEN_B]) assert.ok(!logs.join('\n').includes(t), 'Token im Log');
+});
+
+// Protokolliert der Extension Host auf Trace, schriebe VS Code die Header ins Log: kein Server, kein
+// Start einer schon gemeldeten Definition, eine Warnung — einmal, nicht bei jeder Abfrage. Danach
+// wieder wie gewohnt.
+test('MCP-Server: bei Trace nicht gemeldet und nicht gestartet', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  const warnings = [];
+  const { showWarningMessage } = vscode.window;
+  const { logLevel } = vscode.env;
+  vscode.window.showWarningMessage = (m) => warnings.push(m);
+  logs.length = 0;
+  try {
+    start();
+    await settle();
+    const [def] = provider.provideMcpServerDefinitions();
+    assert.ok(def, 'ohne Trace gemeldet');
+    vscode.env.logLevel = vscode.LogLevel.Trace;
+    assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
+    assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
+    assert.strictEqual(provider.resolveMcpServerDefinition(def), undefined);
+    assert.deepStrictEqual(def.headers, {}, 'bei Trace keine Header eingesetzt');
+    assert.strictEqual(warnings.length, 1, warnings.join('\n'));
+    assert.match(warnings[0], /Trace/);
+    assert.ok(logs.some((l) => l.includes('nicht gemeldet: Der Extension Host protokolliert auf Trace')), logs.join('\n'));
+    assert.ok(!logs.join('\n').includes(TOKEN_A), 'Token im Log');
+    vscode.env.logLevel = logLevel;
+    const [again] = provider.provideMcpServerDefinitions();
+    assert.deepStrictEqual(hubsOf(provider.resolveMcpServerDefinition(again).headers), ['vm']);
+  } finally {
+    vscode.window.showWarningMessage = showWarningMessage;
+    vscode.env.logLevel = logLevel;
+  }
+});
+
+// Ein Hub mit mehreren Accounts ohne Wahl (kephalaion.accounts) fehlt im Server, mit Hinweis im
+// Log; die anderen bleiben. Mit Wahl kommt der gewählte Account.
+test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => {
+  resetTokens();
+  putToken('vm', 'alice', TOKEN_A);
+  putToken('vm', 'bob', TOKEN_B);
+  putToken('eigen', 'kp', TOKEN_B);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  logs.length = 0;
+  try {
+    start();
+    await settle();
+    const [def] = provider.provideMcpServerDefinitions();
+    assert.strictEqual(def.version, 'eigen=kp');
+    const { headers } = provider.resolveMcpServerDefinition(def);
+    assert.deepStrictEqual(headers, { 'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B });
+    assert.ok(logs.some((l) => l.includes('Hub vm: mehrere Accounts (alice, bob), keiner gewählt')), logs.join('\n'));
+    settings.accounts = { vm: 'bob' };
+    const [chosen] = provider.provideMcpServerDefinitions();
+    assert.strictEqual(chosen.version, 'eigen=kp,vm=bob');
+    assert.deepStrictEqual(provider.resolveMcpServerDefinition(chosen).headers, {
+      'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B,
+      'X-Keph-Account-vm': 'bob', 'X-Keph-Token-vm': TOKEN_B,
+    });
+  } finally {
+    settings.accounts = {};
+  }
+});

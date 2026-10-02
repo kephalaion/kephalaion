@@ -45,13 +45,42 @@ func CheckName(name string) error {
 // ihn: Kein Test ruft einen echten Assistenten auf.
 type Runner func(ctx context.Context, name string, args ...string) (stdout string, err error)
 
+// execWaitDelay ist, wie lange ExecRunner nach dem Ende eines Programms
+// höchstens noch auf dessen Ausgabe wartet. Ein Kindprozess, den das
+// Programm zurücklässt, erbt Standard- und Fehlerausgabe; ohne diese Grenze
+// wartete Run — auch nach dem Kill an der Frist —, bis auch er endet.
+const execWaitDelay = time.Second
+
 // ExecRunner führt Programme wirklich aus, mit geschlossener Standardeingabe:
-// Nichts wartet auf eine Rückfrage.
+// Nichts wartet auf eine Rückfrage. Er kehrt spätestens an der Frist von ctx
+// zurück, auch wenn das Programm Kindprozesse zurücklässt, die seine Ausgabe
+// offen halten.
 func ExecRunner(ctx context.Context, name string, args ...string) (string, error) {
+	return execRun(ctx, execWaitDelay, name, args...)
+}
+
+// execRun ist ExecRunner mit wählbarer Wartezeit auf die Ausgabe (für Tests).
+// Mit Frist wird das Programm um wait vor ihr beendet: Die Zeit, die Ausgabe
+// danach noch zu lesen, liegt in der Frist, die damit die Obergrenze bleibt.
+// Endet das Programm mit 0 und hält nur ein zurückgelassener Kindprozess die
+// Ausgabe offen, gilt es nach wait als erfolgreich, mit dem bis dahin
+// Gelesenen.
+func execRun(ctx context.Context, wait time.Duration, name string, args ...string) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline.Add(-wait))
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = wait
 	var out, errOut bytes.Buffer
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, &out, &errOut
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// Das meldet os/exec nur, wenn das Programm von selbst mit 0 endete.
+		err = nil
+	}
+	if err != nil {
 		call := filepath.Base(name) + " " + strings.Join(args[:min(len(args), 3)], " ")
 		if ctx.Err() != nil {
 			return out.String(), fmt.Errorf("%s: keine Antwort in der Frist", call)

@@ -450,10 +450,69 @@ func TestProxyForeignOrigin(t *testing.T) {
 	}
 }
 
-// failLine ist der Filter der Jail für Fehlversuche, wie er auf dem Rechner
-// des Proxys steht: Zeile des Node-Listeners an /mcp, via an fester Stelle
-// hinter der Dauer und direkt danach login=invalid.
-var failLine = regexp.MustCompile(`^\S+ node \S+ /mcp \d{3} \S+ via=(\S+) login=invalid(?: |$)`)
+// jailFailregex ist failregex des Filters der Jail für Fehlversuche, Zeichen
+// für Zeichen wie in der Vorlage (docs/installation.md, „Fehlversuche: eine
+// Jail auf dem Log des Nodes“, filter.d/kephalaion-mcp.conf), nach der der
+// Filter auf dem Rechner des Proxys steht: nicht verankert, Zeile des
+// Node-Listeners an /mcp, via an fester Stelle hinter der Dauer und direkt
+// danach login=invalid. TestJailFilterIsTemplate hält beide gleich.
+const jailFailregex = `(?:^|\s)node [A-Z]+ /mcp \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)`
+
+// jailAddr steht für <ADDR>, das fail2ban durch eine IPv4- oder
+// IPv6-Adresse ersetzt, und fängt sie. Vereinfacht: fail2bans Ausdruck für
+// IPv6 braucht Lookbehind, den regexp nicht kennt.
+const jailAddr = `\[?(?:::f{4,6}:)?((?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]*:[0-9A-Fa-f:.]*)\]?`
+
+// jailFilter ist der Filter der Vorlage als regexp.
+var jailFilter = regexp.MustCompile(strings.Replace(jailFailregex, "<ADDR>", jailAddr, 1))
+
+// jailHits sind die Adressen, für die der Filter in einer Zeile des Logs
+// trifft, je Treffer eine — auch in einem späteren Vermerk derselben Zeile.
+// Geprüft in jeder Form, in der fail2ban die Zeile bekommen kann: aus dem
+// Journal mit dessen Präfix, als Zeile einer Datei und ohne die Zeit vorn
+// (die fail2ban aus einer Datei herausnimmt); alle Formen ergeben dasselbe.
+func jailHits(t *testing.T, line string) []string {
+	t.Helper()
+	_, msg, _ := strings.Cut(line, " ")
+	var first []string
+	for i, form := range []string{"vm kephalaion[4711]: " + line, line, msg} {
+		hits := []string{}
+		for _, m := range jailFilter.FindAllStringSubmatch(form, -1) {
+			hits = append(hits, m[1])
+		}
+		if i == 0 {
+			first = hits
+		} else if !slices.Equal(hits, first) {
+			t.Errorf("Filter: %v in %q, aber %v im Journal", hits, form, first)
+		}
+	}
+	return first
+}
+
+// Der Filter im Test ist der der Vorlage: failregex im Block von
+// filter.d/kephalaion-mcp.conf in docs/installation.md. Fehlt docs/ (eine
+// Kopie nur mit dem Code, etwa make mutate), entfällt der Vergleich.
+func TestJailFilterIsTemplate(t *testing.T) {
+	docs := filepath.Join("..", "..", "..", "docs")
+	if _, err := os.Stat(docs); os.IsNotExist(err) {
+		t.Skip("ohne docs/")
+	}
+	text, err := os.ReadFile(filepath.Join(docs, "installation.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, block, ok := strings.Cut(string(text), "# /etc/fail2ban/filter.d/kephalaion-mcp.conf\n")
+	block, _, _ = strings.Cut(block, "```")
+	var found []string
+	for _, line := range strings.Split(block, "\n") {
+		if v, ok := strings.CutPrefix(line, "failregex = "); ok {
+			found = append(found, v)
+		}
+	}
+	if !ok || len(found) != 1 || found[0] != jailFailregex {
+		t.Errorf("failregex in docs/installation.md: %q, im Test: %q", found, jailFailregex)
+	}
+}
 
 // Fehlversuche im Log: Jede Anfrage mit mindestens einem ungültigen
 // Header-Paar trägt login=invalid, einmal, direkt hinter via; ohne
@@ -485,16 +544,14 @@ func TestFailedLoginLog(t *testing.T) {
 			t.Fatalf("%s: %d Zeilen: %q", c.name, len(lines), lines)
 		}
 		line := lines[0]
-		// Ohne die Zeit vorn, wie fail2ban sie bekommt.
-		_, msg, _ := strings.Cut(line, " ")
-		m := failLine.FindStringSubmatch("- " + msg)
+		hits := jailHits(t, line)
 		switch {
 		case strings.Count(line, "login=invalid") != map[bool]int{false: 0, true: 1}[c.failed]:
 			t.Errorf("%s: %s", c.name, line)
-		case c.failed && c.base == e.proxy && (m == nil || m[1] != "127.0.0.1"):
-			t.Errorf("%s: der Filter trifft nicht: %s", c.name, line)
-		case (!c.failed || c.base == e.direct) && m != nil:
-			t.Errorf("%s: der Filter trifft: %s", c.name, line)
+		case c.failed && c.base == e.proxy && !slices.Equal(hits, []string{"127.0.0.1"}):
+			t.Errorf("%s: der Filter trifft %v: %s", c.name, hits, line)
+		case (!c.failed || c.base == e.direct) && len(hits) != 0:
+			t.Errorf("%s: der Filter trifft %v: %s", c.name, hits, line)
 		}
 	}
 }
@@ -516,9 +573,28 @@ func TestFailedLoginLogNotForgeable(t *testing.T) {
 		!strings.Contains(line, "via=127.0.0.1 login=invalid account=(ungültig)") {
 		t.Errorf("Zeile: %s", line)
 	}
-	_, msg, _ := strings.Cut(line, " ")
-	if m := failLine.FindStringSubmatch("- " + msg); m == nil || m[1] != "127.0.0.1" {
-		t.Errorf("Filter: %v in %s", m, line)
+	if hits := jailHits(t, line); !slices.Equal(hits, []string{"127.0.0.1"}) {
+		t.Errorf("Filter: %v in %s", hits, line)
+	}
+	// Der Filter ist nicht verankert und träfe auch einen späteren Vermerk
+	// derselben Zeile, der seinen Ausdruck trägt. Ein Name bringt ihn nicht
+	// hinein, auch nicht neben einer gültigen Anmeldung: Namen stehen nur
+	// nach der Namensregel in der Zeile, ohne Leerzeichen.
+	inject := "x node POST /mcp 200 1ms via=6.6.6.6 login=invalid y"
+	for _, c := range []struct {
+		header http.Header
+		hits   []string
+	}{
+		{http.Header{"X-Keph-Account-Zentrale": {inject}, "X-Keph-Token-Zentrale": {token(t)}}, []string{"127.0.0.1"}},
+		{merge(e.valid("zentrale"), http.Header{"X-Keph-Account-Nirgends": {inject},
+			"X-Keph-Token-Nirgends": {token(t)}}), []string{}},
+	} {
+		before = len(e.log.String())
+		post(t, e.proxy, c.header, initializeBody)
+		line = strings.TrimSpace(e.log.String()[before:])
+		if hits := jailHits(t, line); strings.Contains(line, "6.6.6.6") || !slices.Equal(hits, c.hits) {
+			t.Errorf("Filter: %v in %s", hits, line)
+		}
 	}
 	// Ohne Proxy gilt das X-Forwarded-For eines lokalen Prozesses: Er
 	// verdeckt nur sich selbst, kann aber eine Zeile mit fremdem via
