@@ -95,8 +95,8 @@ func TestMCPWriteThroughServe(t *testing.T) {
 	read := func(addr, name string) (mcpnode.ReadOutput, string) {
 		t.Helper()
 		var out mcpnode.ReadOutput
-		_, text := mcpTool(t, endpoint, bob, "read", mcpnode.ReadInput{Collection: addr, Name: name}, &out)
-		return out, text
+		mcpTool(t, endpoint, bob, "read", mcpnode.ReadInput{Collection: addr, Name: name}, &out)
+		return out, contentOfRead(out)
 	}
 	var now mcpnode.ChangesOutput
 	mcpTool(t, endpoint, bob, "changes", mcpnode.ChangesInput{Collection: "eigen:team-x"}, &now)
@@ -284,8 +284,8 @@ func TestMCPWriteTwoNodes(t *testing.T) {
 	read := func(c client, name string) (mcpnode.ReadOutput, string) {
 		t.Helper()
 		var out mcpnode.ReadOutput
-		_, text := mcpTool(t, c.endpoint, c.pairs, "read", mcpnode.ReadInput{Collection: c.addr, Name: name}, &out)
-		return out, text
+		mcpTool(t, c.endpoint, c.pairs, "read", mcpnode.ReadInput{Collection: c.addr, Name: name}, &out)
+		return out, contentOfRead(out)
 	}
 	hubHas := func(name, content string) {
 		t.Helper()

@@ -2,7 +2,7 @@
 
 Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen; 023 auf der VM eingespielt und abgenommen)
+WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 Etappen 1–2 gebaut, Abnahme offen)
 
 ## So wird diese Datei aktualisiert
 
@@ -87,7 +87,8 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen)
     aufgesetzt; eine Meldung „nicht lesbar“, „noch nie abgeglichen“, unlesbare Replica nur für
     ihren Hub;
   - `list` mit Verzeichnissen, `sort`/`order`, `mask`, `limit` (100, höchstens 1000), Cursor;
-    `read` per Name oder `id`, `content: false`, `writable`; `changes` mit Cursor je Hub
+    `read` per Name oder `id`, `content: false`, `writable` (den Inhalt seit Task 024 im Feld
+    `content`); `changes` mit Cursor je Hub
     (`generation`) und Collection, `reset`, `dropped`, `since`;
   - `generation` in `db_info` der Replica (Replica-Schema 4); Durchlauf über `serve`
     (`konzept.md`, „Allgemein — lesen“).
@@ -299,6 +300,14 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen)
   abgenommen (A10). Befund `mcp-von-aussen.md`: Die Erweiterung schickt rund 2 Anfragen je
   Sekunde, ein ungültiges Token sperrt in Sekunden; nach `rotate` ein Fenster bis zum Abgleich
   des entfernten Nodes (siehe „Zu besprechen“).
+- **Task 024 — `read` liefert den Inhalt in der Struktur:** Etappen 1–2 gebaut am 2026-10-02:
+  Der Inhalt steht im Feld `content` von `ReadOutput`, der Text des Ergebnisses ist nur das
+  JSON der Struktur. So bekommt auch Claude Code den Inhalt, das nur `structuredContent`
+  weiterreicht. `node dir push|pull` (`mcpclient.go`) und die Erweiterung 0.0.8 lesen
+  `content`, bei einem älteren Node den Text. Geprüft mit einem Go-Test gegen einen kleinen
+  Server und mit `node --test`. Offen ist Etappe 3, die Abnahme in Claude Code, OpenCode,
+  Codex und VS Code mit Copilot (`konzept.md`, „Allgemein — lesen“; `vscode.md`, „`read` mit
+  `content`“; Befund `mcp-read-inhalt-in-claude-code.md`).
 
 ## Zu tun
 

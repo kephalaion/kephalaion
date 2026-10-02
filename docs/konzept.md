@@ -1945,8 +1945,18 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
   Doppel bei unveränderter Replica; ändert sie sich dazwischen, deckt das `changes`. Die Liste
   der Collections blättert ebenso, nach Adresse. Tragen zwei lebende Zeilen denselben Namen
   (Umbenennungen, die in beliebiger Reihenfolge ankommen), gilt die jüngste.
-- **`read`:** Der Inhalt ist der Text des Ergebnisses, die Angaben die Struktur daneben; mit
-  `content: false` steht die Struktur auch im Text. Größe in Bytes. `writable` folgt je Name
+- **`read`:** Die Struktur ist vollständig: Angaben, Frontmatter und der Inhalt im Feld
+  `content` (Task 024). Der Text des Ergebnisses ist nur ihr JSON, wie es die
+  MCP-Spezifikation vorsieht, und trägt nichts darüber hinaus — so kommt der Inhalt bei jedem
+  Client an, ob er den Text oder `structuredContent` an das Modell gibt; Claude Code reicht
+  nur `structuredContent` weiter. `content` ist bei einem leeren Dokument `""` und fehlt mit
+  `content: false`, bei einem Verzeichnis und bei `none`. Kosten: Der Inhalt steht zweimal in
+  der Antwort, und ein Client, der nur den Text zeigt, sieht JSON (Zeilenumbrüche als `\n`,
+  `<`, `>` und `&` als `\u003c`, `\u003e` und `\u0026`). Verworfen: den Inhalt zusätzlich
+  in die Struktur legen und den rohen Textblock behalten (dann trüge der Text etwas anderes als
+  die Struktur) und `read` ohne Output-Schema (Erweiterung und Kommandozeile brauchen die
+  Angaben strukturiert). Das Output-Schema ist streng (`additionalProperties: false`): Nach
+  einem Update, das es ändert, verbindet jeder Assistent neu. Größe in Bytes. `writable` folgt je Name
   der Regel des Hubs (`contract.Rights.Writable`, Task 016): `write` auf der Collection, unter
   `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie, unter einem
   Verzeichnis-Scope immer (Task 021); bei Verzeichnissen und

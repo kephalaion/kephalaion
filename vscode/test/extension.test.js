@@ -27,6 +27,7 @@ function putToken(hub, account, token) {
 const settings = {};
 const logs = [];
 let provider;
+let fsProvider;
 const disposables = [];
 
 class Disposable {
@@ -43,7 +44,10 @@ const noop = () => new Disposable();
 const vscode = {
   workspace: {
     getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d), update: async () => {} }),
-    registerFileSystemProvider: noop,
+    registerFileSystemProvider: (scheme, p) => {
+      fsProvider = p;
+      return new Disposable();
+    },
     onDidChangeConfiguration: noop,
     workspaceFolders: [],
     updateWorkspaceFolders: () => {},
@@ -98,12 +102,15 @@ Module._load = function (request, ...rest) {
   return load.call(this, request, ...rest);
 };
 
-// fetch: merkt sich Adresse, Header und redirect; antwortet wie ein Node über einen Proxy ohne
-// gültige Anmeldung.
+// fetch: merkt sich Adresse, Header und redirect; antwortet mit reply, wenn das ein Ergebnis für
+// den Aufruf liefert, sonst wie ein Node über einen Proxy ohne gültige Anmeldung.
 const calls = [];
+let reply = null;
 globalThis.fetch = async (url, opts) => {
   calls.push({ url, headers: opts.headers, redirect: opts.redirect });
-  const result = { content: [{ type: 'text', text: '' }], structuredContent: { hidden: true, hubs: [], unknown_hubs: [] } };
+  const { params } = JSON.parse(opts.body);
+  const result = (reply && reply(params)) ||
+    { content: [{ type: 'text', text: '' }], structuredContent: { hidden: true, hubs: [], unknown_hubs: [] } };
   return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }),
     { status: 200, headers: { 'content-type': 'application/json' } });
 };
@@ -199,4 +206,27 @@ test('lokale nodeUrl: alle Hubs wie bisher', async () => {
   await settle();
   assert.ok(calls.length > 0);
   for (const c of calls) assert.deepStrictEqual(hubsOf(c.headers), ['eigen', 'neu', 'vm']);
+});
+
+// Task 024: Der Inhalt steht im Feld content der Struktur, der Text ist nur ihr JSON. Bei einem
+// älteren Node fehlt content, dort ist der Text der Inhalt.
+test('readFile: Inhalt aus content, bei einem älteren Node aus dem Text', async () => {
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [] });
+  start();
+  await settle();
+  const doc = { kind: 'document', address: 'vm:test', name: 'a.md', id: '01ABC', revision: 3, size: 6, writable: true };
+  const readWith = async (result) => {
+    reply = (p) => (p.name === 'read' ? result : null);
+    try {
+      return new TextDecoder().decode(await fsProvider.readFile({ authority: 'vm', path: '/test/a.md' }));
+    } finally {
+      reply = null;
+    }
+  };
+  const asNew = (d) => ({ content: [{ type: 'text', text: JSON.stringify(d) }], structuredContent: d });
+  assert.strictEqual(await readWith(asNew({ ...doc, content: '# Neu <&>\n' })), '# Neu <&>\n');
+  assert.strictEqual(await readWith(asNew({ ...doc, size: 0, content: '' })), '', 'leeres Dokument');
+  assert.strictEqual(await readWith({ content: [{ type: 'text', text: '# Alt\n' }], structuredContent: doc }), '# Alt\n',
+    'älterer Node');
 });

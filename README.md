@@ -419,11 +419,13 @@ Node einen Hub noch nie abgeglichen, sagt die Meldung das.
   als JSON-Objekt `frontmatter`, Verzeichnisse und Collections das ihrer `README.md`; lässt es
   sich nicht lesen, steht der Grund in `frontmatter_error`. So bekommt die KI alle Skills mit
   Beschreibung in einem Aufruf: `recursive`, `mask: "SKILL.md"`, `frontmatter: true`.
-- **`read`** — ein Dokument per `collection` und `name` oder per `id`; der Inhalt ist der Text
-  des Ergebnisses. `kind` ist `document`, `directory` oder `none`; mit `content: false` nur
-  die Angaben samt `writable`. Mit `frontmatter` dazu das Frontmatter des `.md`-Dokuments, bei
-  einem Verzeichnis oder der Wurzel der Collection das seiner `README.md`; der Inhalt bleibt der
-  volle Text.
+- **`read`** — ein Dokument per `collection` und `name` oder per `id`; der Inhalt steht im
+  Feld `content` der Antwort (ein leeres Dokument hat `""`). `kind` ist `document`, `directory`
+  oder `none`; mit `content: false` nur die Angaben samt `writable`, ohne `content`. Mit
+  `frontmatter` dazu das Frontmatter des `.md`-Dokuments, bei einem Verzeichnis oder der Wurzel
+  der Collection das seiner `README.md`; `content` bleibt der volle Text. Der Text des
+  Ergebnisses ist nur das JSON dieser Struktur — so kommt der Inhalt auch bei einem Client an,
+  der nur die Struktur weiterreicht (Claude Code).
 - **`changes`** — was sich geändert hat: ohne Argumente nur ein `cursor` für „ab jetzt“, mit
   dem `cursor` der letzten Antwort lückenlos alles danach — je Dokument einmal, Löschmarken
   eingeschlossen. `reset` nennt Hubs, deren Replica neu angelegt wurde (neu mit `list` lesen),

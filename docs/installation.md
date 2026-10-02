@@ -320,6 +320,13 @@ Eintrag und bleibt bei jedem weiteren `add`, solange ihre Datei da ist. Ohne Wah
 wirksam aber erst mit einer neuen Sitzung des Assistenten bzw. einer Neuverbindung (in VS Code:
 den Server „Kephalaion“ neu starten).
 
+**Nach einem Update** des Binarys (`upgrade`, `make dev-install`) jeden Assistenten neu
+verbinden: eine neue Sitzung in Claude Code, OpenCode und Codex (bzw. dort den MCP-Server neu
+starten), in VS Code „Developer: Reload Window“. Ein Assistent liest die Werkzeuge samt
+Output-Schema beim Verbinden. Ändert ein Update ein Schema, kann eine laufende Sitzung die
+Antworten gegen das alte prüfen und ablehnen: Die Schemas sind streng
+(`additionalProperties: false`), seit Task 024 trägt etwa `read` das Feld `content`.
+
 **Global** trägt jeder User für sich ein, Ansible trägt nichts ein: Das erste `rotate` des
 Verwalters als Systembenutzer schreibt in eine Datei außerhalb des eigenen `tokens/` und stößt
 nichts an. Nach der Übergabe der Token-Datei (oben, „Hub-Einträge und Accounts, von Hand“) ruft

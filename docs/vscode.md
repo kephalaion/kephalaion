@@ -72,7 +72,7 @@ Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS 
 |---|---|
 | `stat(uri)` | `read` mit `content: false`: Dokument, Verzeichnis oder nichts; `updated` als `mtime`, Größe als `size`; ohne `writable` (`write` der Collection; unter `vendor/<name>/` der Scope `vendor/<name>`, seit Task 016 je Name; unter einem Verzeichnis-Scope immer, seit Task 021) `FilePermission.Readonly` |
 | `readDirectory(uri)` | `list` mit `path`, ohne Unterverzeichnisse, Verzeichnisse als eigene Einträge, mit Cursor bis zum Ende |
-| `readFile(uri)` | `read` — aus der Replica, lokal und schnell, auch offline |
+| `readFile(uri)` | `read` — aus der Replica, lokal und schnell, auch offline; der Inhalt aus dem Feld `content`, seit 0.0.8 (Task 024) |
 | `writeFile(uri, …)` | gibt es das Dokument noch nicht (`read` mit `content: false`), `create` (ohne `options.create`: `FileNotFound`); sonst `write` mit der Revision aus diesem `read` (ohne `options.overwrite`: `FileExists`); ein Verzeichnis ist `FileIsADirectory`. Was die Replica schon kennt, fängt VS Code über `mtime` selbst ab („Datei ist neuer“); was noch nicht abgeglichen ist, lehnt der Hub an der Revision ab |
 | `rename(alt, neu)` | `rename`, `id` bleibt; ein Verzeichnis als Ganzes, ohne `base_revision`. Nur innerhalb einer Collection, sonst eine Meldung; ein belegtes Ziel `FileExists`, mit `overwrite` eine Meldung — überschrieben wird nie |
 | `delete(uri)` | `delete` (Löschmarke) — Eigenes mit `write`, Fremdes nur mit `supersede`; ein Verzeichnis als Ganzes, `recursive` aus den Optionen; ohne `base_revision` |
@@ -256,6 +256,25 @@ Statusleiste gelb (der zweite Hub der VM, `vmhttp`, ohne Anmeldung — erwartet)
 Copilot über den Node der VM (Node `vm-node`, Hub `vm` angemeldet), 0-mal `login=invalid`, kein
 Token im Log des Proxys und in den Daten von VS Code; danach beide Einstellungen wieder entfernt.
 
+## `read` mit `content` (Task 024, 0.0.8)
+
+Der Node liefert den Inhalt eines Dokuments seit Task 024 im Feld `content` der Struktur; der
+Text des Ergebnisses ist nur noch ihr JSON ([`konzept.md`](konzept.md), „Allgemein — lesen“).
+`readFile` nimmt seit 0.0.8 `content`, wenn es ein String ist, sonst den Text — so liest die
+Erweiterung auch an einem älteren Node richtig. Geprüft mit `node --test`
+(`vscode/test/extension.test.js`): neuer Node, leeres Dokument, älterer Node.
+
+**Eine ältere Erweiterung (bis 0.0.7) an einem neuen Node** zeigt in einer geöffneten Datei
+statt des Textes das JSON der Struktur (`{"address":…,"content":"…",…}`). **Nicht
+speichern:** Speichern schickte dieses JSON als Inhalt an den Hub und überschriebe das
+Dokument. Erst die Erweiterung aktualisieren (`make vscode-install` bzw. die `.vsix` des
+Releases), dann „Developer: Reload Window“. Eine eigene Prüfung dagegen gibt es nicht: Binary
+und Erweiterung erscheinen zusammen, und der Fehler ist vor dem Speichern sichtbar.
+
+Nach dem Update des Nodes braucht auch Copilot „Developer: Reload Window“: VS Code kennt sonst
+das alte Output-Schema von `read` ([`installation.md`](installation.md), „Bei den Assistenten
+anmelden“).
+
 ## Sprachen
 
 **Eine VS-Code-Erweiterung ist JavaScript bzw. TypeScript.** Sie läuft im Extension Host, einem
@@ -403,7 +422,8 @@ ohne Sitzung — das SDK braucht es dafür nicht.
   Menü; „Collection einbinden“. Im echten VS Code geprüft.
 - **0.0.3 — Inhalte:** `stat` über `read` mit `content: false`, `readDirectory` über `list`
   (Namen kommen als voller Pfad ab der Collection, die Erweiterung nimmt das letzte Segment;
-  blättert mit `cursor`), `readFile` über `read` — der Inhalt ist der Text des Ergebnisses.
+  blättert mit `cursor`), `readFile` über `read` — der Inhalt ist der Text des Ergebnisses
+  (*überholt mit 0.0.8:* der Inhalt steht im Feld `content`, siehe „`read` mit `content`“).
   `changes` alle 3 s mit dem Cursor der letzten Antwort; je Eintrag `Changed` bzw. `Deleted`
   für das Dokument und `Changed` für jedes Verzeichnis darüber bis zur Collection, damit der
   Explorer neue und leer gewordene Verzeichnisse sieht. Ein Umbenennen kam so als

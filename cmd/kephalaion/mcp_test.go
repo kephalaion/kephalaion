@@ -167,9 +167,9 @@ func TestMCPWhoamiWithBackgroundSync(t *testing.T) {
 }
 
 // mcpCall ruft ein Werkzeug am MCP-Eingang unter endpoint mit einem
-// Header-Paar und liest die strukturierte Antwort nach out; es liefert den
-// Text des Ergebnisses.
-func mcpCall(t *testing.T, endpoint, alias, account, tok, tool string, args, out any) string {
+// Header-Paar und liest die strukturierte Antwort nach out — bei read samt
+// dem Inhalt im Feld content; der Text des Ergebnisses ist nur ihr JSON.
+func mcpCall(t *testing.T, endpoint, alias, account, tok, tool string, args, out any) {
 	t.Helper()
 	h := http.Header{}
 	h.Set("X-Keph-Account-"+alias, account)
@@ -190,13 +190,15 @@ func mcpCall(t *testing.T, endpoint, alias, account, tok, tool string, args, out
 	if err := json.Unmarshal(b, out); err != nil {
 		t.Fatal(err)
 	}
-	text := ""
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			text += tc.Text
-		}
+}
+
+// contentOfRead ist das Feld content der Antwort von read; fehlt es, ein Wert,
+// den kein Dokument der Tests hat.
+func contentOfRead(out mcpnode.ReadOutput) string {
+	if out.Content == nil {
+		return "<ohne content>"
 	}
-	return text
+	return *out.Content
 }
 
 // Der Durchlauf über serve mit Hub und Node: Ein Dokument am Hub kommt mit
@@ -232,9 +234,9 @@ func TestMCPReadThroughServe(t *testing.T) {
 		t.Fatalf("changes: %+v", got)
 	}
 	var doc mcpnode.ReadOutput
-	text := mcpCall(t, endpoint, "eigen", "bob", bob, "read", mcpnode.ReadInput{ID: c.ID}, &doc)
-	if text != "# Notiz\n" || doc.Kind != mcpnode.KindDocument || doc.Name != "2026/notiz.md" || doc.Revision != c.Revision ||
-		doc.Writable == nil || !*doc.Writable || doc.Size == nil || *doc.Size != int64(len("# Notiz\n")) {
+	mcpCall(t, endpoint, "eigen", "bob", bob, "read", mcpnode.ReadInput{ID: c.ID}, &doc)
+	if text := contentOfRead(doc); text != "# Notiz\n" || doc.Kind != mcpnode.KindDocument || doc.Name != "2026/notiz.md" ||
+		doc.Revision != c.Revision || doc.Writable == nil || !*doc.Writable || doc.Size == nil || *doc.Size != int64(len("# Notiz\n")) {
 		t.Errorf("read: %+v, %q", doc, text)
 	}
 	var list mcpnode.ListOutput

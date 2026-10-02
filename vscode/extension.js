@@ -277,7 +277,9 @@ class Node {
     return (await this.request(tool, args)).structuredContent;
   }
 
-  // Wie call, dazu der Text des Ergebnisses — bei read der Inhalt des Dokuments.
+  // Wie call, dazu der Text des Ergebnisses. Bei read ist er nur das JSON der Struktur, der
+  // Inhalt steht in data.content (Task 024); den Text braucht readFile nur für einen älteren
+  // Node, bei dem er der Inhalt war.
   async callWithText(tool, args) {
     const r = await this.request(tool, args);
     return { data: r.structuredContent, text: (r.content || []).map((c) => c.text || '').join('') };
@@ -802,7 +804,9 @@ class KephFs {
       throw vscode.FileSystemError.FileIsADirectory(uri);
     }
     if (r.data.kind !== 'document') throw vscode.FileSystemError.FileNotFound(uri);
-    return new TextEncoder().encode(r.text);
+    // Den Inhalt trägt das Feld content. Fehlt es, ist der Node älter (vor Task 024): Dort war
+    // der Inhalt der Text des Ergebnisses.
+    return new TextEncoder().encode(typeof r.data.content === 'string' ? r.data.content : r.text);
   }
 
   // --- schreiben: über den Node am Hub, nie wiederholt; nach Erfolg die Ereignisse selbst ---
