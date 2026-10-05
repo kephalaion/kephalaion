@@ -22,7 +22,12 @@ import (
 // temporären Verzeichnis und hat die Version installed.
 func fakeReleases(t *testing.T, installed string) (exe string, srv *httptest.Server) {
 	t.Helper()
-	bin := []byte("zwei")
+	return fakeReleasesWith(t, installed, []byte("zwei"))
+}
+
+// fakeReleasesWith ist fakeReleases mit bin als neuem Binary.
+func fakeReleasesWith(t *testing.T, installed string, bin []byte) (exe string, srv *httptest.Server) {
+	t.Helper()
 	sum := sha256.Sum256(bin)
 	name := upgrade.AssetName("linux", "amd64")
 	mux := http.NewServeMux()

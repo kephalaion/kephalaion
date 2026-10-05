@@ -33,6 +33,12 @@ Nach dem Ersetzen startet upgrade einen laufenden Dienst pro User neu
 (systemd --user bzw. LaunchAgent), damit er das neue Binary benutzt; läuft
 der Dienst global, nennt es sudo systemctl restart kephalaion.
 
+Danach installiert das neue Binary seine Erweiterung für VS Code neu, in
+jedem Editor, in dem sie installiert ist (kephalaion vscode install --code
+<cli>, je CLI einmal). Scheitert das, bleibt es bei einer Warnung mit dem
+Befehl von Hand; der Exit-Code ändert sich dadurch nie. Bei der globalen
+Installation und unter sudo nur der Hinweis, das als eigener User zu tun.
+
 Optionen:
   --check            nur melden: installierte und neueste Version, ob sich
                      dieses Binary selbst ersetzen kann und wie das Upgrade
@@ -106,7 +112,9 @@ func runUpgrade(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if res.Replaced {
-		return restartAfterUpgrade(ctx, stdout, stderr)
+		code := restartAfterUpgrade(ctx, stdout, stderr)
+		upgradeExtension(ctx, res.Exe, stdout, stderr)
+		return code
 	}
 	return 0
 }
