@@ -488,26 +488,28 @@ Admins am Hub, ohne Node.
 
 ### Weboberfläche
 
-Der Hub-Listener zeigt einem Browser an seiner Wurzel eine Seite — lokal
-`http://localhost:7434/`, hinter einem Reverse-Proxy unter dessen Präfix, etwa
-`https://<name>/kephalaion/`. Sie fragt nach dem **Kephalaion-Account** und seinem
-**Account-Token** und zeigt dann, worauf der Account am Hub Zugriff hat: User, Beschreibung
-und je Collection lesen, schreiben (`write`: Neues und Eigenes), Fremdes ändern (`supersede`)
-und die Scopes `vendor/<name>` und `dir <pfad>/`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie
-nichts; Accounts, Rechte und Nodes bleiben in der Kommandozeile (`hub account …`).
+Der Hub-Listener zeigt einem Browser an seiner Wurzel eine Seite — hinter einem
+Reverse-Proxy unter dessen Präfix, etwa `https://<name>/kephalaion/`, hinter dessen
+Anmeldung. Sie zeigt dem dort angemeldeten User alle seine Accounts am Hub: je Account Name,
+Beschreibung, Status (gesperrt: die Rechte ruhen) und je Collection lesen, schreiben (`write`:
+Neues und Eigenes), Fremdes ändern (`supersede`) und die Scopes `vendor/<name>` und `dir
+<pfad>/`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie nichts; Accounts, Rechte
+und Nodes bleiben in der Kommandozeile (`hub account …`).
 
-- **Welches Token:** das des Accounts — das, was ein Client als `X-Keph-Token-<hub>` schickt,
-  meist in `~/.config/kephalaion/tokens/<hub>/<account>.token`, beginnt mit `keph_`. Nicht das
-  Passwort einer Anmeldung vor der Seite (des Proxys) und nicht das Token eines Nodes. Was
-  nicht wie ein Token aussieht, schickt die Seite nicht ab.
-- **Was mit dem Token geschieht:** Es geht nur für die eine Prüfung an den Hub (`POST
-  gui/api/whoami`, im Body), wird nirgends gespeichert und steht nie in der Adresse oder im
-  Log — dort steht nur der Account. Nach einem Neuladen fragt die Seite erneut. Unbekannter
-  Account, falsches Token und gesperrt ergeben dieselbe Antwort.
+- **Kein Token:** Die Seite fragt kein Token ab, zeigt und überträgt keins. Wen sie zeigt,
+  sagt die Anmeldung des Proxys im Header `X-User` (seit Task 026; vorher fragte sie Account
+  und Account-Token ab). Wo das Token eines Accounts meist liegt, nennt sie nur:
+  `~/.config/kephalaion/tokens/<hub>/<account>.token`.
+- **Ohne Proxy** (lokal `http://localhost:7434/`) setzt niemand `X-User`: Die Seite zeigt nur
+  „keine Anmeldung des Proxys“. Lokal nennt `kephalaion hub account list --user <user>` die
+  Accounts; der Eingang der Seite antwortet auf `curl -H 'X-User: <user>'
+  http://localhost:7434/gui/api/user` mit den Accounts, ohne `X-User` mit 403.
+- **Grenze:** Der Hub glaubt jedem `X-User`, der ihn auf Loopback erreicht — ein Prozess auf
+  seinem Rechner sieht so Accounts und Rechte eines beliebigen Users (keine Tokens).
 - **`curl`** bekommt an der Wurzel weiter die Begrüßung (`text/plain`); die Seite kommt nur,
   wenn `Accept` `text/html` nennt: `curl -H 'Accept: text/html' http://localhost:7434/`.
-- **Nach außen** gehört die Seite hinter die Anmeldung eines Proxys, und ein falsches Token
-  kann dort als Fehlversuch zählen (fail2ban) — siehe
+- **Nach außen** gehört die Seite hinter die Anmeldung eines Proxys, der `X-User` des Browsers
+  verwirft und den geprüften setzt; Seite und Eingang antworten nie 401 — siehe
   [`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“.
 
 ### Dokumente einspielen und abgleichen

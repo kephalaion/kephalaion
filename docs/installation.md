@@ -395,42 +395,85 @@ https://9.141.8.157 {
   Binary.
 - **Option — der Rest von `/kephalaion/*` nach außen: die Weboberfläche.** Unter
   `https://<name>/kephalaion/` liegt dann die Weboberfläche des Hubs (seit Task 020; `curl`
-  bekommt an derselben Stelle die Begrüßung), ihre Teile unter `/kephalaion/gui/…`. Wer sie
-  zeigen will, stellt eine Anmeldung davor (`forward_auth` auf einen
-  Auth-Dienst): ein zweiter Block `handle /kephalaion/*` mit `forward_auth`, ebenfalls `uri
-  strip_prefix /kephalaion` und demselben `reverse_proxy`, dazu `redir /kephalaion
-  /kephalaion/ 308` vor beiden — die Seite nennt ihre Teile relativ (`gui/app.js`,
-  `gui/api/whoami`) und braucht den Schrägstrich am Ende. Der eine Block deckt Seite und
-  Teile; mehr braucht der Proxy nicht. Der Hub-Block bleibt ohne Anmeldung (Nodes sind Maschinen
-  und weisen sich per Token aus) und greift zuerst — Caddy sortiert gleiche Direktiven nach
-  Pfadlänge, deshalb `handle` statt `handle_path` in beiden Blöcken. Die Anmeldung davor ist
-  Pflicht: Begrüßung und Seite nennen die Version, und der Eingang der Seite prüft
-  Account-Token, ohne Fehlversuche zu begrenzen. Ohne Sitzung antwortet dann dort der
-  Auth-Dienst (302 oder 401), nie das Binary — Proben gegen die Wurzel gehen nur auf dem
-  Rechner des Hubs (unten).
-  - **Zwei Anmeldungen.** Die des Proxys lässt zur Seite; die Seite fragt danach den
-    Kephalaion-Account und sein Account-Token ab (das aus
-    `~/.config/kephalaion/tokens/<hub>/<account>.token`, beginnt mit `keph_`) — nicht das
-    Passwort der Anmeldung davor und nicht das Token eines Nodes — und zeigt, worauf der
-    Account Zugriff hat. Das Token geht nur im Body eines `POST` an `gui/api/whoami`, wird
-    nicht gespeichert und steht nie im Log; was nicht wie ein Token aussieht, schickt die
-    Seite nicht ab.
-  - **Ein falsches Token ist eine 401 des Hubs** (JSON mit `code` `unauthenticated`,
-    „Account oder Token stimmt nicht“ — dieselbe Antwort für unbekannt, falsch und gesperrt).
-    Zählt der Proxy 401 (fail2ban, „Bekannte Grenze“), zählt sie mit; die Seite warnt davor.
-  - **Läuft die Sitzung des Proxys ab**, während die Seite offen ist, antwortet auf den
-    `POST` der Auth-Dienst statt des Hubs (authproxy: 401 `text/plain`; Caddy reicht sie
-    durch). Die Seite erkennt das am fehlenden JSON mit `code` und sagt „Deine Anmeldung an
-    dieser Seite ist abgelaufen — Seite neu laden und neu anmelden“, ohne zum Wiederholen
-    einzuladen: Auch diese 401 zählt für fail2ban, obwohl das Token stimmt.
-  - **Proben.** Im Browser mit Sitzung `https://<name>/kephalaion/` → die Seite; ein
-    Account-Token → die Übersicht. Auf dem Rechner des Hubs: `curl -H 'Accept: text/html'
+  bekommt an derselben Stelle die Begrüßung), ihre Teile unter `/kephalaion/gui/…`. Seit Task
+  026 zeigt sie dem am Proxy angemeldeten User alle seine Accounts mit ihren Rechten, ohne
+  Token: Wen, sagt die Anmeldung davor (`forward_auth` auf einen Auth-Dienst, auf der VM
+  authproxy) im Header `X-User`. Vorlage wie auf der VM, zusätzlich zum Block oben:
+
+  ```text
+  https://<name> {
+      # X-User und X-User-Email setzt nur der Auth-Dienst: aus jeder Anfrage des Browsers
+      # weg, für die ganze Site, auch die Varianten mit _ (WSGI macht aus beiden HTTP_X_USER).
+      request_header -X-User
+      request_header -X_User
+      request_header -X-User-Email
+      request_header -X_User_Email
+
+      redir /kephalaion /kephalaion/ 308
+
+      handle /kephalaion/hub/* {
+          # … wie oben, ohne Anmeldung
+      }
+
+      handle /kephalaion/* {
+          route {
+              forward_auth 127.0.0.1:9091 {
+                  uri /auth/check
+                  copy_headers X-User X-User-Email
+              }
+              uri strip_prefix /kephalaion
+              reverse_proxy localhost:7434 {
+                  header_up Host {upstream_hostport}
+              }
+          }
+      }
+      # … handle { respond 404 }, log wie oben
+  }
+  ```
+
+  Die Seite nennt ihre Teile relativ (`gui/app.js`, `gui/api/user`) und braucht den
+  Schrägstrich am Ende (`redir`). Der eine Block deckt Seite und Teile; mehr braucht der Proxy
+  nicht. `route` hält `forward_auth` vor `uri strip_prefix`: Sonst fragte Caddy den
+  Auth-Dienst schon mit dem gekürzten Pfad. Der Hub-Block bleibt ohne Anmeldung (Nodes sind
+  Maschinen und weisen sich per Token aus) und greift zuerst — Caddy sortiert gleiche
+  Direktiven nach Pfadlänge, deshalb `handle` statt `handle_path` in allen Blöcken. Die
+  Anmeldung davor ist Pflicht: Begrüßung und Seite nennen die Version, und der Eingang der
+  Seite glaubt `X-User`. Ohne Sitzung antwortet dort der Auth-Dienst (authproxy: `GET` und
+  `HEAD` 302 zur Anmeldung, sonst 401), nie das Binary — Proben gegen die Wurzel gehen nur auf
+  dem Rechner des Hubs (unten).
+  - **Falle der Reihenfolge.** `request_header` gehört auf die Ebene der Site, wie oben: Dort
+    führt Caddy es vor jedem `handle` aus, und auch die Blöcke ohne Anmeldung (Hub, MCP) reichen
+    nie einen mitgeschickten `X-User` weiter. In einem `handle` ohne `route` sortiert Caddy
+    `request_header` hinter `forward_auth` — es löscht dann den geprüften Namen wieder, und die
+    Seite zeigt „keine Anmeldung des Proxys“.
+  - **Eine Anmeldung.** Die des Proxys ist die einzige; die Seite fragt kein Token ab, zeigt
+    und überträgt keins. Der Benutzer im Auth-Dienst und der User am Hub sind über den gleichen
+    Namen verbunden — Konvention, keine Verknüpfung. Wer im Auth-Dienst fehlt, sieht die Seite
+    nicht; ein Name, der am Hub kein gültiger User ist (etwa `admin` oder mit Großbuchstaben),
+    bekommt „Dieser Name ist am Hub kein gültiger User“.
+  - **Die 401 der Weboberfläche entfällt.** Seite und Eingang antworten nie 401; fehlt die
+    Anmeldung, ist es 403. Läuft die Sitzung des Proxys ab, während die Seite offen ist,
+    antwortet auf das `GET` des Eingangs authproxy mit 302; die Seite folgt nicht und sagt
+    „Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden“. Die 401
+    des Vertrags (`/kephalaion/hub/v1/`, falsches Token eines Nodes) bleibt und zählt für
+    fail2ban („Bekannte Grenze“).
+  - **Grenze lokaler Prozesse.** Der Hub glaubt jedem `X-User`, der ihn auf Loopback erreicht:
+    Ein Prozess auf dem Rechner des Hubs kann den Header selbst setzen und Accounts und Rechte
+    eines beliebigen Users sehen — keine Tokens, keine Hashes. Wer dort arbeitet, gilt als
+    vertrauenswürdig; ein geheimer Header, den nur der Proxy setzt, schließt das (eigene Task).
+  - **Ohne Proxy** (Browser auf `http://localhost:7434/`) setzt niemand `X-User`: Die Seite
+    zeigt nur „keine Anmeldung des Proxys“. Lokal nennt `kephalaion hub account list --user
+    <user>` die Accounts.
+  - **Proben.** Im Browser mit Sitzung `https://<name>/kephalaion/` → „angemeldet als <user>“
+    und die Accounts dieses Users. Auf dem Rechner des Hubs: `curl -H 'Accept: text/html'
     http://localhost:7434/` → die Seite (HTML), `curl http://localhost:7434/` → weiter die
-    Begrüßung, `curl -X POST -H 'Content-Type: application/json' -d '{}'
-    http://localhost:7434/gui/api/whoami` → 400 `invalid` („account fehlt“; keine 401). Von
-    außen ohne Sitzung: `curl https://<name>/kephalaion/` → 302 des Auth-Dienstes. Im Log des
-    Hubs (`journalctl -u kephalaion`) steht je Prüfung `hub POST /gui/api/whoami 200 …
-    via=<adresse> account=<name>` — nie das Token.
+    Begrüßung, `curl -H 'X-User: <user>' http://localhost:7434/gui/api/user` → 200 mit den
+    Accounts, ohne `X-User` → 403 `unauthenticated` (keine 401). Von außen ohne Sitzung:
+    `curl https://<name>/kephalaion/` und `…/kephalaion/gui/api/user` → 302 des Auth-Dienstes;
+    `curl -H 'X-User: <user>' https://<name>/kephalaion/hub/gui/api/user` → 404 in
+    Vertragsform (der Hub-Block erreicht den Eingang nicht). Im Log des Hubs (`journalctl -u
+    kephalaion`) steht je Aufruf `hub GET /gui/api/user 200 … via=<adresse> viewer=<user>
+    user=<user>` — nie ein Token.
 - `header_up Host {upstream_hostport}` schickt `Host: localhost:7434`; genau das verlangt der
   Hub (`vertrag.md`, „Host“). Ohne die Zeile antwortet er 403, und `node hub check` sagt es.
 - `request_body max_size 8MiB` liegt über den 7 MiB, die der Hub für einen Schreibvorgang
@@ -592,17 +635,18 @@ Handarbeit (`hub node add`, Übergabe per SSH).
 
 ### Bekannte Grenze
 
-Der Hub begrenzt Fehlversuche nicht ([`vertrag.md`](vertrag.md), „Bekannte Grenzen“) — weder
-am Vertrag noch am Eingang der Weboberfläche; nach außen wird das dringlicher. Caddy hat ohne
+Der Hub begrenzt Fehlversuche am Vertrag nicht ([`vertrag.md`](vertrag.md), „Bekannte
+Grenzen“); nach außen wird das dringlicher. Die Weboberfläche fragt seit Task 026 kein Token
+mehr ab und antwortet nie 401. Caddy hat ohne
 Plugin keine Ratenbegrenzung. Übergang: fail2ban auf Caddys Zugriffslog, die Allowlist in der
 NSG, und die Begrenzung am Hub als eigene Aufgabe.
 
 So wie auf der Dev-VM eingerichtet, zählt fail2ban **jede 401 auf 80/443**, ohne Bindung an
 einen Pfad: Der Filter liest das Journal von `caddy.service` (dort loggt Caddy ohne `output`;
 ein eigenes Log gibt es nicht) und greift auf `"status":401`. Es zählen also gleich: das
-abgewiesene Token eines Nodes am Hub (`/kephalaion/hub/v1/`), ein falsches Account-Token an der
-Weboberfläche (`/kephalaion/gui/api/whoami`), ein falsches Passwort an der Anmeldung des
-Proxys und ein `POST` ohne Sitzung — auch der einer Seite, deren Anmeldung abgelaufen ist.
+abgewiesene Token eines Nodes am Hub (`/kephalaion/hub/v1/`), ein falsches Passwort an der
+Anmeldung des Proxys und ein `POST` ohne Sitzung. Die Weboberfläche trägt nichts dazu bei: Ihr
+Eingang ist ein `GET` (ohne Sitzung 302 der Anmeldung) und antwortet selbst nie 401.
 10 in 10 Minuten sperren dort die Adresse für 80 und 443; 403 zählt nicht, 400 auch nicht.
 Wer ins Log einer Datei schreibt wie im Caddyfile oben, richtet den Filter auf die Datei.
 Fehlversuche am MCP-Eingang des Nodes sind kein 401; sie zählt eine eigene Jail auf dem Log
@@ -1017,7 +1061,7 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`), `kephalaion:kephalaion`, `0700` |
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
-| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
+| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth` mit `copy_headers X-User X-User-Email` in `route`, dazu für die ganze Site `request_header -X-User`, `-X_User`, `-X-User-Email`, `-X_User_Email`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
 
 Reihenfolge und Regeln:
 

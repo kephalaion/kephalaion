@@ -1,8 +1,10 @@
 # Fortschritt
 
-Stand: 2026-10-02 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-10-05 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
-WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
+WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
+ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — die
+Abnahme auf der VM ersetzt die von 020 und ist Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -255,7 +257,7 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   - Tests: `internal/hub/gui` (Eingang, Seite, Header, Entscheidungen im Skript),
     `TestCheckAccount`, `TestServeHubListener` (Seite nach `Accept`, `/gui/…`, Eingang über
     `serve`), `TestGUIBehindPrefix` (Präfix `/kephalaion`, Anmeldung vor dem Rest).
-    Abnahme auf der VM: siehe „Zu testen“.
+    Abfrage des Account-Tokens und `POST /gui/api/whoami` sind seit Task 026 abgelöst.
 - **Task 021 — Verzeichnisse für push freigeben** (2026-09-30, Etappen 1–4):
   - Verzeichnis-Scope `rights.dirs` je Account und Collection (Liste, ohne neue Fassung des
     Vertrags): unter `<pfad>/` schreiben ohne `write` und unabhängig vom Urheber, Grenze ein
@@ -287,14 +289,44 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   und speichert Markdown, Copilot liest mit `read` (`konzept.md`, „Allgemein — lesen“;
   `vscode.md`, „`read` mit `content`“; Befund `mcp-read-inhalt-in-claude-code.md`).
 
+- **Task 026 — Weboberfläche: Zugriff je User aus der Anmeldung des Proxys** (2026-10-05,
+  Etappen 1–4; Entscheidung des Nutzers vom 2026-10-05: Umbau komplett, `konzept.md`,
+  „Die Weboberfläche am Hub“):
+  - Eingang `GET /gui/api/user` (Paket `internal/hub/gui`, `NewUser`): der angemeldete User
+    (`viewer`) allein aus genau einem `X-User`, über `gui.Viewer` — gebaut an einer Stelle
+    (`hubViewer` in `serve.go`), vorerst `gui.HeaderViewer`; ohne Anmeldung 403
+    `unauthenticated`, kein gültiger User-Name 403 `invalid_user`, höchstens ein `name` (sonst
+    400), ein anderer — auch leer — 403 `forbidden`; nie 401; Antwort `viewer`, `user` und die
+    Accounts nach Name mit `locked` und Collections samt Rechten (`AccountsOfUser`, gesperrt
+    die gemerkten), ohne Token und Hash; Log `viewer=` und `user=`;
+  - `POST /gui/api/whoami` und `NewWhoami` entfallen; `store.CheckAccount` bleibt für `whoami`
+    und `rotate` des Vertrags;
+  - die Seite: Kopf „angemeldet als <viewer>“, je Account ein Block mit Status (gesperrt: die
+    Rechte ruhen), Tabelle der Collections und dem Ort seines Tokens; Überschrift nach `user`
+    gegenüber `viewer`; Meldungen für keine Anmeldung des Proxys, ungültigen User, abgelaufene
+    Anmeldung, Hub nicht erreichbar, keinen Account; kein Formular, nur `GET`;
+  - Durchlauf im Browser (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter für
+    Caddy mit authproxy): alle Proben bestanden, ohne Korrektur — Befund
+    `material/befunde/gui.md`;
+  - Doku: `begriffe.md` (`viewer`, `gui/api/user`, `gui`), `konzept.md` („Die Weboberfläche am
+    Hub“, „Die Identität ist das Token — mit einer Ausnahme“, „Authentifizierung“, „Offene
+    Punkte“), `installation.md` (Vorlage mit `request_header` für die ganze Site und
+    `copy_headers X-User X-User-Email` in `route`, Falle der Reihenfolge, „Bekannte Grenze“),
+    README („Weboberfläche“), Hilfe von `serve`;
+  - Tests: `internal/hub/gui` (alle Codes, gesperrter Account, User ohne Account, kein Hash,
+    eigener Viewer), `TestServeHubListener`, `TestGUIBehindPrefix` (Stellvertreter, der
+    `X-User` setzt; über den Hub-Block erreicht `X-User` den Eingang nicht).
+    Abnahme auf der VM: siehe „Zu testen“.
+
 ## In Arbeit
 
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
   `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“ (mit `/kephalaion/hub` und
   `uri strip_prefix /kephalaion`); siehe „Zu testen“.
-- **Task 020 — Abnahme der Weboberfläche auf der VM:** Nacharbeit des Nutzers (Deployment mit
-  `deploy-vm.sh` nur durch ihn), Schritte unter „Zu testen“ und in
-  `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“ (G1–G8).
+- **Task 026 — Abnahme der Weboberfläche auf der VM:** Nacharbeit des Nutzers (das Binary
+  kommt nur nach Rückfrage auf die VM), Schritte unter „Zu testen“. Sie ersetzt die offenen
+  Schritte der Abnahme von Task 020 (G2–G5, G7 in `~/dev/vm/kephalaion/README.md`, „Abnahme der
+  Weboberflaeche“): Die Abfrage des Account-Tokens gibt es nicht mehr.
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
   unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Abnahme von Task 021“.
 - **Task 023 — MCP und Kommandozeile über `https`, Etappe 6:** gebaut (Etappe 1–3), auf der VM
@@ -310,6 +342,14 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   des entfernten Nodes (siehe „Zu besprechen“).
 
 ## Zu tun
+
+- **Geheimer Header des Proxys** (Folge-Task von Task 026, direkt danach): Der Hub glaubt
+  vorerst jedem `X-User`, der ihn auf Loopback erreicht — jeder Prozess auf seinem Rechner sieht
+  so Accounts und Rechte eines beliebigen Users (keine Tokens). Ein Header mit einem Geheimnis,
+  das nur Caddy setzt (aus der config des Hubs), schließt das. Die Task ändert nur den Viewer
+  (`gui.HeaderViewer`) und die Stelle, an der er entsteht (`hubViewer` in `serve.go`), nicht
+  Eingang und Seite (`konzept.md`, „Die Weboberfläche am Hub“; `installation.md`, Option
+  Weboberfläche, „Grenze lokaler Prozesse“).
 
 - **Nach Task 016 und 021:** Die Sperre von `push` bleibt (entschieden am 2026-09-30); weitere
   Ziele nur als einzeln freigegebene Verzeichnisse — gebaut in Task 021 (`konzept.md`,
@@ -397,8 +437,8 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;
   - Markdown-Export des Stores;
   - Begrenzung von Fehlversuchen bei der Anmeldung — dringlicher, seit der Hub hinter dem
-    Proxy nach außen spricht (Task 018), und auch am Eingang der Weboberfläche (Task 020);
-    Übergang fail2ban auf das Caddy-Log (`installation.md`, „Bekannte Grenze“). Am
+    Proxy nach außen spricht (Task 018); die Weboberfläche fragt seit Task 026 kein Token mehr
+    ab. Übergang fail2ban auf das Caddy-Log (`installation.md`, „Bekannte Grenze“). Am
     MCP-Eingang des Nodes über den Proxy: fail2ban auf `login=invalid` im Log des Nodes
     (Task 023, `installation.md`, „Node für Clients anderer Rechner“).
 - **Kleinere Punkte aus dem Review von Task 008** (`done/008-…`, „Code-Review“, Vorschläge 3–12):
@@ -435,34 +475,31 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   „Abnahme von Task 021“: `grant kamran-wsl test --write --vendor test-docs --dir test-docs`,
   `node sync vm`, `node dir push vm:test test-docs ./docs`, `push` an die Wurzel abgelehnt.
   Lokal belegt im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`).
-- **Task 020 — Abnahme der Weboberfläche auf der VM** (Nacharbeit des Nutzers; die KI führt
-  `deploy-vm.sh` nicht aus). fail2ban zählt dort jede 401 auf 80/443 (10 in 10 min sperren die
-  Adresse), deshalb die Schritte 4 und 5 je genau einmal:
-  1. Deployment des Binarys durch den Nutzer (`~/dev/vm/kephalaion/deploy-vm.sh`). Task 020
-     bringt keine neue Schemafassung: Binary ersetzen und Dienst neu starten genügt; das
-     Skript ist für 018/019 geschrieben und legt dabei `node.db` neu an. Caddy braucht nichts
-     Neues (`handle /kephalaion/*` mit `forward_auth` deckt `/kephalaion/` und
-     `/kephalaion/gui/…`).
-  2. Im Browser mit Sitzung `https://<name>/kephalaion/` → die Seite mit der Abfrage
-     (Kephalaion-Account, Account-Token), Version im Kopf.
-  3. Account `kamran-wsl` und sein Token (`~/.config/kephalaion/tokens/<hub>/kamran-wsl.token`)
-     → Übersicht: Collection `test` mit write (und was ihm sonst freigegeben ist).
-  4. Ein falsches, der Form nach gültiges Token **einmal** → „Account oder Token stimmt nicht.
-     Wiederholte Fehlversuche können deinen Rechner für eine Weile sperren.“ (401 des Hubs,
-     zählt für fail2ban).
-  5. Am Proxy abmelden (anderer Tab), dann auf der noch offenen Seite ein Token prüfen →
-     „Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.“, ohne
-     Hinweis auf die Sperre. Das ist eine weitere 401 im Caddy-Log (von authproxy), bewusst
-     nur einmal.
-  6. `curl` von außen ohne Sitzung: `curl -si https://<name>/kephalaion/` → 302 des
-     Auth-Proxys wie bisher; auf der VM `curl http://localhost:7434/` → weiter die Begrüßung,
-     mit `-H 'Accept: text/html'` die Seite.
-  7. `journalctl -u kephalaion` → `hub POST /gui/api/whoami 200 … via=<adresse>
-     account=kamran-wsl`, für Schritt 4 dieselbe Zeile mit 401 — nirgends ein Token.
+- **Task 026 — Abnahme der Weboberfläche auf der VM** (Nacharbeit des Nutzers; das Binary
+  kommt nur nach Rückfrage auf die VM). Keine neue Schemafassung: Binary ersetzen und Dienst
+  neu starten genügt. Caddy steht schon wie die Vorlage in `installation.md` (`request_header
+  -X-User` u. a. für die ganze Site seit 2026-10-05, `copy_headers X-User X-User-Email` im
+  `route` von `handle /kephalaion/*`). Keine der Proben erzeugt eine 401:
+  1. Im Browser mit Sitzung als `kamran` `https://<name>/kephalaion/` → „angemeldet als
+     kamran“, „Deine Accounts“ mit `kamran-vm` und `kamran-wsl`, ihren Collections und Rechten;
+     ebenso als `gabriel` mit `gabriel-vm`.
+  2. `curl -si https://<name>/kephalaion/gui/api/user` ohne Sitzung → 302 des Auth-Proxys
+     (keine 401), auch mit `-H 'X-User: kamran'`; `curl -si -H 'X-User: kamran'
+     https://<name>/kephalaion/hub/gui/api/user` → 404 in Vertragsform.
+  3. Auf der VM: `curl -s -H 'X-User: kamran' http://localhost:7434/gui/api/user` → 200 mit den
+     Accounts (die dokumentierte Grenze lokaler Prozesse), ohne `X-User` → 403
+     `unauthenticated`; `curl -s -X POST http://localhost:7434/gui/api/whoami` → 404.
+  4. `journalctl -u kephalaion` → `hub GET /gui/api/user 200 … via=<adresse> viewer=kamran
+     user=kamran`, nirgends ein Token; im Journal von Caddy keine 401 auf `/kephalaion/gui/…`.
+  5. `sebastian` hat keinen Benutzer im authproxy und sieht die Seite nicht — Sache der VM,
+     nicht des Binarys.
 
-  Lokal belegt (Playwright gegen einen Wegwerf-Hub, abgelaufene Anmeldung mit einem
-  Stellvertreter-Proxy): `material/befunde/gui.md`. Auf der VM offen: Schritt 5 gegen Caddy
-  mit authproxy.
+  Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter für Caddy mit
+  authproxy): `material/befunde/gui.md`, Abschnitt vom 2026-10-05.
+- **Task 020 — Abnahme der Weboberfläche auf der VM: abgelöst durch Task 026.** Ausgeführt
+  waren G1 und G6 (Befund `material/befunde/gui.md`); die Schritte mit Account-Token (G2–G5,
+  G7 in `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“) gelten nicht mehr — die
+  Seite fragt kein Token mehr ab.
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM: abgenommen 2026-09-30.** Binary dev
   fa5d6a6 auf VM (global, `node.db` neu in Schema 5, Import) und WSL (pro User, frisch);
   Caddyfile mit `handle /kephalaion/hub/*` (ohne `forward_auth`, `uri strip_prefix
@@ -530,9 +567,13 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen)
   alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
   je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
   So lassen oder nur mit eingebundener Collection bzw. im Fokus fragen (`vscode.md`, „Offen“)?
+- **Admins in der Weboberfläche** (Task 026): Der Eingang `gui/api/user` nimmt einen User als
+  Parameter, vorerst nur den eigenen; die Seite ist für eine Auswahl gebaut. Offen, woher der
+  Hub erfährt, wer Admin ist und die Accounts anderer User sehen darf — ein Header von
+  authproxy oder eine eigene Liste am Hub (`konzept.md`, „Offene Punkte“, GUI).
 - **Verwaltung in der Weboberfläche** (Accounts, Rechte, Nodes): vorerst die Kommandozeile;
-  eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (die
-  Anmeldung des Proxys kann das Binary nicht prüfen; `konzept.md`, „Offene Punkte“, GUI).
+  eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (siehe
+  „Admins in der Weboberfläche“; `konzept.md`, „Offene Punkte“, GUI).
 - **Anmeldung eines Accounts und Antwortzeit:** Der Hash wird immer in konstanter Zeit
   verglichen, aber ein bekannter Account kostet eine Abfrage mehr als ein unbekannter
   (`store.CheckAccount` liest die Rechte mit). Nicht gemessen; ob das zu ändern ist, zusammen

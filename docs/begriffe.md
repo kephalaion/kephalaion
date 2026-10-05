@@ -161,15 +161,37 @@ Ausführlich: [`konzept.md`](konzept.md).
   `..`, den `ServeMux` sonst umleitete.
 - **gui** (Weboberfläche) — die Seite des Hub-Listeners für Browser: an seiner Wurzel (`GET
   /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`,
-  `gui/icon.svg`, der Eingang `gui/api/whoami`). Sie fragt Account und **account token** ab,
-  prüft beides am Hub und zeigt, worauf der Account Zugriff hat: User, Beschreibung,
-  Collections, Rechte, Scopes `vendor/<name>` und Verzeichnis-Scopes (`dir <pfad>/`). Kein Teil
-  des Vertrags, keine Verwaltung
-  (die bleibt in der CLI).
+  `gui/icon.svg`, der Eingang **gui/api/user**). Sie zeigt dem **viewer** — dem User, mit
+  dem der Browser am Proxy angemeldet ist — alle Accounts seines Users: Name, Beschreibung,
+  Status (gesperrt: die Rechte ruhen) und je Collection Rechte, Scopes `vendor/<name>` und
+  Verzeichnis-Scopes (`dir <pfad>/`). Ein Token fragt sie nicht ab, zeigt und überträgt keins
+  (Task 026; bis dahin fragte sie Account und **account token** ab). Kein Teil des Vertrags,
+  nur lesen, keine Verwaltung (die bleibt in der CLI).
   Nur relative Pfade, nie eine Umleitung: Hinter einem Proxy liegt sie unter dessen Präfix
-  (`https://<name>/kephalaion/`) und hinter dessen Anmeldung — die ist nicht das Token, nach
-  dem die Seite fragt. `/gui` und `/gui/` selbst und alles andere darunter sind 404
-  `text/plain`. Nur am Hub-Listener; der Node-Listener (`/mcp`) hat keine.
+  (`https://<name>/kephalaion/`) und hinter dessen Anmeldung, aus der sie den **viewer**
+  kennt. Ohne Proxy (Browser auf `http://localhost:7434/`) setzt niemand `X-User`: Die Seite
+  zeigt dann nur „keine Anmeldung des Proxys“. `/gui` und `/gui/` selbst und alles andere
+  darunter sind 404 `text/plain`. Nur am Hub-Listener; der Node-Listener (`/mcp`) hat keine.
+- **viewer** (angemeldeter User) — der User, mit dem ein Browser an der Anmeldung des Proxys
+  angemeldet ist, für die **gui**: der Wert von genau einem Header `X-User`, den Caddy aus der
+  Antwort von authproxy in die Anfrage an den Hub kopiert (`forward_auth … copy_headers`;
+  einen `X-User` des Browsers entfernt Caddy vorher). Benutzer im authproxy und **user** am Hub
+  sind über den gleichen Namen verbunden — Konvention, keine Verknüpfung. Fehlt der Header,
+  ist er leer oder steht er mehrfach da, ist niemand angemeldet; ist der Wert am Hub kein
+  gültiger User-Name (etwa `admin`), auch nicht. Wem der Hub `X-User` glaubt, entscheidet eine
+  Stelle (`gui.Viewer`, gebaut in `hubViewer`), vorerst jedem: Ein Prozess auf dem Rechner des
+  Hubs kann ihn auf Loopback selbst setzen und Accounts und Rechte eines beliebigen Users
+  sehen, keine Tokens. Der **viewer** ist keine Anmeldung im Vertrag und gibt kein Recht außer
+  dieser Leseansicht.
+- **gui/api/user** — der Eingang der **gui**, `GET /gui/api/user` (auch `HEAD`) am
+  Hub-Listener: kein Vorgang des Vertrags, keine Fassung, ohne Token. Nennt `viewer`, `user`
+  und `accounts` nach Name, je Account `name`, `description`, `locked` und `collections` nach
+  Name mit `description` und `rights` (`write`, `supersede`, `vendor`, `dirs`; Listen immer
+  da); ein User ohne Account ist eine leere Liste. Query höchstens ein `name` (sonst 400
+  `invalid`): ohne ihn der **viewer**, ein anderer — auch ein leeres `name=` — 403
+  `forbidden`; vorerst sieht jeder nur sich selbst. Ohne **viewer** 403 `unauthenticated`,
+  mit einem Namen, der am Hub kein User sein kann, 403 `invalid_user`; nie 401. Ins Log
+  `viewer` und `user`, nie Token oder Hash.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
 - **devcontainer** — ein Container für die Entwicklung (VS Code Dev Containers). Zwei Wege:
@@ -428,7 +450,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   ohne Rechte, ohne Anmeldung. Setzt nur der Admin (`hub account add|set … --user`); ohne Angabe
   der Name des Accounts. Steht in `accounts` (mit Index, `hub account list --user`), in den
   `SYSTEM:A:`-Zeilen und in `created_by`/`updated_by` der Dokumente; `whoami` nennt ihn. Ein
-  User hat meist mehrere Accounts. Namensregel wie bei Accounts, nicht `admin`; er gehört nicht
+  User hat meist mehrere Accounts; die **gui** zeigt sie dem **viewer** gleichen Namens. Namensregel wie bei Accounts, nicht `admin`; er gehört nicht
   zu den gemeinsamen Namen von Nodes und Accounts (`principal_names`) und darf wie ein Node
   heißen.
 - **setup token** (Einrichtungstoken) — das Token, das `hub account add` und `hub account
@@ -437,8 +459,8 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **token** — Geheimnis eines Accounts, Format `keph_<geheimnis>`. Jede Anfrage trägt
   Account-Name und Token. Gespeichert wird nur der Hash. Unabhängig vom Transport.
 - **account token** (Account-Token) — das **token** eines Accounts, wenn es von anderen zu
-  unterscheiden ist: das, was ein Client als `X-Keph-Token-<hub>` schickt und die **gui**
-  abfragt; es liegt meist in der Datei **--token-file**
+  unterscheiden ist: das, was ein Client als `X-Keph-Token-<hub>` schickt; es liegt meist in
+  der Datei **--token-file**
   (`~/.config/kephalaion/tokens/<hub>/<account>.token`). Nicht das Token eines Nodes (**node
   entry**: damit meldet sich der Node selbst am Hub an, `Authorization: Bearer`) und nicht das
   Passwort einer Anmeldung vor dem Hub (Reverse-Proxy). Das **setup token** ist das erste
@@ -540,13 +562,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   Rechten (`rights`, als Text je Recht) und Verzeichnis-Scopes (`dirs`, immer eine Liste); dazu
   `unknown_hubs`, die Aliase aus Headern ohne Eintrag. Nie Token, Hash, Adresse, Transport
   oder `hub_id`. Über einen Proxy ohne gültige Anmeldung **hidden**: nur `hidden: true`, leere
-  `hubs` und `unknown_hubs`. Dazu der Eingang der **gui** am Hub-Listener, `POST /gui/api/whoami` — kein
-  Vorgang des Vertrags, keine Fassung, ohne Node: Er prüft Account und **account token**
-  (`{"account", "token"}` als JSON) und nennt User, Beschreibung und alle Collections des
-  Accounts mit ihren Rechten (`write`, `supersede`, `vendor`, `dirs`; beide Listen immer da),
-  nicht nur die eines Nodes.
-  Unbekannter Account, falsches Token und gesperrt sind dieselbe 401; hinter einem Proxy liegt
-  er hinter dessen Anmeldung.
+  `hubs` und `unknown_hubs`. Den Eingang der **gui** mit Account und Token, `POST
+  /gui/api/whoami` (Task 020), gibt es seit Task 026 nicht mehr; die **gui** fragt
+  **gui/api/user**.
 - **node whoami** — `kephalaion node whoami [<account>] [--hub <alias>] [--json]`: ohne
   Account Version, je Hub Node-Name und Stand und die Accounts, die der Node aus seinen
   Replicas kennt; mit Account die Antwort des Werkzeugs `whoami` für ihn (`login: ok`, wo er

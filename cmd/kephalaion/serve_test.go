@@ -219,13 +219,16 @@ func TestServeLoopbackOnly(t *testing.T) {
 	}
 }
 
-// Die Hilfe nennt die Weboberfläche an der Wurzel, die Pfade des Vertrags
-// unter /hub und die Werkzeuge, auch die, die schreiben.
+// Die Hilfe nennt die Weboberfläche an der Wurzel — ohne Token, ohne Proxy
+// nur „keine Anmeldung“, die Grenze lokaler Prozesse —, die Pfade des
+// Vertrags unter /hub und die Werkzeuge, auch die, die schreiben.
 func TestServeHelp(t *testing.T) {
 	runT(t, "serve", "--help").want(t, 0, "für einen Browser (Accept mit text/html) die\n         Weboberfläche",
-		"ihre Teile liegen unter /gui/", "(curl) dort eine kurze Begrüßung mit der Version",
+		"am Proxy angemeldeten User (Header\n         X-User) alle seine Accounts", "ohne Token; ihre Teile\n         liegen unter /gui/",
+		"„keine Anmeldung des Proxys“", "hub account list --user <user>", "Der Hub glaubt jedem X-User auf\n         Loopback",
+		"(curl) dort\n         eine kurze Begrüßung mit der Version",
 		"/hub/v1/sync und", "/hub/v1/create, /hub/v1/write,",
-		"http://localhost:7434/hub", "/v1/… an der\n         Wurzel antwortet 404",
+		"http://localhost:7434/hub", "/v1/… an der Wurzel antwortet 404",
 		"create, write, delete und rename über den Hub", "nie ein Inhalt", "Reverse-Proxy", "X-Forwarded-For")
 }
 

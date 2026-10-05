@@ -36,8 +36,8 @@ Version gibt und wie das Upgrade geht; ein CI-Job für macOS ist gebaut, derzeit
 abgeschaltet. Seit Task 018 erreicht ein Node einen Hub auf einem anderen Rechner über
 `https`: TLS beendet ein Reverse-Proxy auf dem Rechner des Hubs, der Hub bleibt auf Loopback
 („Kommunikation“). Seit Task 020 zeigt der Hub-Listener einem Browser an seiner Wurzel eine
-Weboberfläche: Nach Account und Account-Token nennt sie, worauf der Account Zugriff hat;
-verwaltet wird weiter über die Kommandozeile. Noch nicht gebaut: `ssh`, Suche, die übrigen
+Weboberfläche; seit Task 026 zeigt sie dem am Proxy angemeldeten User alle seine Accounts mit
+ihren Rechten, ohne Token; verwaltet wird weiter über die Kommandozeile. Noch nicht gebaut: `ssh`, Suche, die übrigen
 Werkzeuge zum Schreiben (`create_numbered`, Stufe 3) und der Zugang aus Devcontainern
 („Devcontainer“).
 Die Überlegungen entstanden in k-playbook und sind am 2026-09-25 hierher umgezogen.
@@ -414,57 +414,81 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
   dem Hinweis auf `/hub`, den `node hub check` weitergibt. Das Binary kennt seinen Präfix
   nicht und sendet nie eine Umleitung (eine absolute `Location` ginge am Proxy vorbei ins
   Leere); die Weboberfläche nennt deshalb nur relative Pfade (`gui/app.js`,
-  `gui/api/whoami`), `X-Forwarded-Prefix` liest das Binary nicht.
+  `gui/api/user`), `X-Forwarded-Prefix` liest das Binary nicht.
   Nach außen ohne Anmeldung gehen nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
   dem Token aus) und seit Task 023 der MCP-Eingang des Nodes (genau `/kephalaion/mcp` an
   `/mcp` auf 7433, Clients mit Header-Paaren; ohne gültige Anmeldung verdeckt, siehe oben);
   wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und Weboberfläche nennen die
   Version.
-- **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020).** Wer im Browser
-  `https://<name>/kephalaion/` öffnet, sieht nach Eingabe von Account und Account-Token,
-  worauf der Account am Hub Zugriff hat: User, Beschreibung und alle Collections mit read,
-  write, supersede, den Scopes `vendor/<name>` und den Verzeichnis-Scopes (`dir <pfad>/`, seit
-  Task 021; in der Antwort von `POST gui/api/whoami` je Collection `rights` mit `write`,
-  `supersede`, `vendor` und `dirs`, beide Listen immer da), in Worten erklärt. Verwalten kann die Seite
+- **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020; umgebaut nach der
+  Entscheidung des Nutzers vom 2026-10-05, Task 026).** Wer im Browser
+  `https://<name>/kephalaion/` öffnet und am Proxy angemeldet ist, sieht ohne weitere Eingabe
+  alle Accounts seines Users: Name, Beschreibung, Status (gesperrt: die Rechte ruhen) und je
+  Collection Beschreibung, read, write, supersede, die Scopes `vendor/<name>` und die
+  Verzeichnis-Scopes (`dir <pfad>/`), in Worten erklärt. Ein Token wird weder abgefragt noch
+  angezeigt noch übertragen; Hash und Token stehen in keiner Antwort. Verwalten kann die Seite
   nichts; das bleibt vorerst in der Kommandozeile.
+  - **Entscheidung des Nutzers (2026-10-05): Umbau komplett.** Bis Task 026 fragte die Seite
+    Account und Account-Token ab und prüfte sie am Eingang `POST gui/api/whoami`; Abfrage und
+    Eingang entfallen. Die Anmeldung des Proxys reicht, um zu sehen, worauf der eigene User
+    Zugriff hat. Rotieren in der Oberfläche ist nicht gewollt. `store.CheckAccount` bleibt für
+    `whoami` und `rotate` des Vertrags.
   - **Wo.** Die Seite liegt an der Wurzel des Hub-Listeners (`GET /` mit `text/html` in
     `Accept`), ihre Teile unter `/gui/`: `gui/app.js`, `gui/style.css`, `gui/icon.svg` und der
-    Eingang `POST gui/api/whoami`. `/gui` und `/gui/` selbst und alles andere darunter sind 404.
+    Eingang `GET gui/api/user`. `/gui` und `/gui/` selbst und alles andere darunter sind 404.
     Der Node-Listener (`/mcp`) bekommt nichts davon.
-  - **Was sie abfragt** ist die Anmeldung, die ein Client am Node schickt
-    (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`): Account und Account-Token, beide. Nur mit
-    dem Token müsste der Hub per Hash suchen; dafür fehlt der Index auf `accounts.token_hash`,
-    und der hieße eine neue Schemafassung. Die Seite sagt ausdrücklich, dass nicht das
-    Passwort der Anmeldung an der Seite (des Proxys) gemeint ist und nicht das Token eines
-    Nodes, und schickt nur ab, was wie ein Token aussieht (`keph_` und 43 Zeichen) — ein
-    versehentlich eingefügtes Passwort geht so nie an den Hub.
+  - **Wen sie zeigt.** Caddy entfernt für die ganze Site jedes `X-User` und `X-User-Email` des
+    Browsers (auch mit `_`), fragt unter `/kephalaion/*` authproxy per `forward_auth` und kopiert
+    dessen Header in die Anfrage an den Hub ([`installation.md`](installation.md)). Der Hub
+    nimmt den angemeldeten User (**viewer**) allein aus genau einem `X-User`. Fehlt er, ist er
+    leer oder steht er mehrfach da, liefert der Eingang keine Accounts (403
+    `unauthenticated`, „keine Anmeldung des Proxys“); ist er am Hub kein gültiger User-Name
+    (etwa `admin` — authproxy erlaubt Namen, die der Hub ablehnt), 403 `invalid_user`. Der
+    Benutzer im authproxy und der User am Hub sind über den gleichen Namen verbunden —
+    Konvention, keine Verknüpfung; wer im authproxy fehlt, sieht die Seite nicht.
   - **Ein eigener Eingang**, kein Vorgang des Vertrags ([`vertrag.md`](vertrag.md) bleibt
-    unberührt) und ohne Fassung, denn Seite und Eingang kommen aus demselben Binary: `whoami`
-    des Vertrags verlangt immer einen Node und nennt nur dessen Collections, ein Browser hat
-    nur Account und Token. Geprüft wird wie dort — Hash in konstanter Zeit, Vergleichshash
-    für unbekannte Accounts, gesperrt gilt nicht; unbekannter Account, falsches Token und
-    gesperrt sind dieselbe 401. Die Rechte kommen aus den lebenden `SYSTEM:A:`-Zeilen.
-  - **Das Token bleibt nicht liegen.** Es verlässt den Browser nur im Body dieser einen
-    Anfrage (`POST`, JSON), wird nirgends gespeichert (kein Web Storage, kein Cookie), steht
-    nie in einer Adresse und nie im Log (dort nur der Name des Accounts); nach der Antwort ist
-    das Feld leer, nach einem Neuladen fragt die Seite erneut.
+    unberührt) und ohne Fassung, denn Seite und Eingang kommen aus demselben Binary: `GET
+    gui/api/user` (auch `HEAD`) nennt `viewer`, `user` und `accounts`. Er nimmt einen User als
+    Parameter (`name`, höchstens einmal); vorerst ist nur der eigene erlaubt, jeder andere —
+    auch ein leeres `name=`, das nicht als „ohne `name`“ gilt — ergibt 403 `forbidden`. Die
+    Seite setzt nicht voraus, dass der gezeigte User der angemeldete ist; eine Auswahl für
+    Admins kommt später ohne Umbau dazu (woher der Hub erfährt, wer Admin ist, ist offen,
+    „Offene Punkte“). Die Rechte kommen aus `AccountsOfUser`: ohne Sperre die lebenden
+    `SYSTEM:A:`-Zeilen, gesperrt die gemerkten. Ins Log kommen angemeldeter und angefragter
+    User, nie Token oder Hash.
+  - **Wem der Hub `X-User` glaubt**, entscheidet genau eine Stelle: ein Wert, den der Eingang
+    bekommt (`gui.Viewer`), gebaut an einer Stelle in `cmd/kephalaion` (`hubViewer`). Vorerst
+    glaubt der Hub jedem `X-User`. **Grenze:** Der Hub-Listener nimmt nur Anfragen an diesen
+    Rechner an, prüft aber nicht, dass `X-User` vom Proxy kommt — jeder Prozess auf dem Rechner
+    des Hubs kann ihn auf Loopback selbst setzen und Accounts und Rechte eines beliebigen Users
+    sehen (keine Tokens, keine Hashes). Ein geheimer Header, den nur der Proxy setzt, schließt
+    das; eigene Task direkt danach. Sie ändert den Viewer und den Ort, an dem er entsteht
+    (Konfiguration), nicht Eingang und Seite.
+  - **Ohne Proxy** (Hub lokal, Browser auf `http://localhost:7434/`) setzt niemand `X-User`:
+    Die Seite zeigt nur „keine Anmeldung des Proxys“. Bisher ging das mit Account-Token; der
+    Wegfall ist gewollte Folge der Entscheidung oben. Lokal nennt `kephalaion hub account list
+    --user <user>` die Accounts.
   - **Härtung.** Eine strenge Content-Security-Policy (nur Eigenes, kein Inline-Script, kein
     Inline-Style, `form-action 'none'`, `frame-ancestors 'none'`), `no-store`, keine fremden
-    Quellen; der Eingang nimmt nur `POST` mit `Content-Type: application/json` und höchstens
-    4 KiB. Daten des Hubs setzt die Seite als Text, nie als HTML.
-  - **Zwei Anmeldungen, zwei 401.** Hinter dem Proxy liegt die Seite hinter dessen Anmeldung.
-    Eine 401 des Hubs trägt JSON mit `code` `unauthenticated` („Account oder Token stimmt
-    nicht“); eine 401 oder 403 ohne diese Form, eine Umleitung oder eine HTML-Seite kommt von
-    der Anmeldung davor und heißt „Anmeldung an dieser Seite abgelaufen — neu laden“. Einer
-    Umleitung folgt die Seite nicht. Fehlversuche begrenzt der Hub selbst nicht; zählt der
-    Proxy 401 (fail2ban), zählen beide Arten mit, und die Seite warnt nach einer 401 des Hubs
-    davor.
+    Quellen, nur relative Pfade; der Eingang nimmt nur `GET` und `HEAD`. Daten des Hubs setzt
+    die Seite als Text, nie als HTML.
+  - **Eine Anmeldung, keine 401.** Vor der Seite steht nur noch eine Anmeldung, die des Proxys.
+    Seite und Eingang antworten nie 401 — fail2ban zählt jede 401 im Log von Caddy —, eine
+    fehlende Anmeldung ist 403. Ohne Sitzung antwortet authproxy auf das `GET` des Eingangs
+    mit 302 zur Anmeldung; die Seite folgt keiner Umleitung (`redirect: "manual"`) und sagt
+    „Anmeldung an dieser Seite abgelaufen — Seite neu laden“, ebenso bei 401 oder 403 ohne
+    JSON mit `code` und bei einer HTML-Seite statt JSON; 502/503 heißen „Hub nicht
+    erreichbar“. Der Vertrag unter `/hub/` antwortet auf ein falsches Token weiter 401
+    `unauthenticated`; die zählt fail2ban.
 - **Über SSH (geparkt).** Der Node hält eine stehende SSH-Verbindung (Go-Bibliothek, kein
   externes `ssh`), mit Keepalive und Neuaufbau, und tunnelt dasselbe HTTP zum Hub auf
   Loopback. Derselbe Anschluss wie `https` (`connector` in `cmd/kephalaion`); Entwurf in
   k-playbook-local.
-- **Die Identität ist immer das Token.** Der Transport verschlüsselt und bringt durch die
-  Firewall, mehr nicht. Ein SSH-Schlüssel ist kein zweites Rechtemodell, eine CA auch nicht.
+- **Die Identität ist das Token — mit einer Ausnahme.** Der Transport verschlüsselt und bringt
+  durch die Firewall, mehr nicht. Ein SSH-Schlüssel ist kein zweites Rechtemodell, eine CA auch
+  nicht. Die Ausnahme ist die Leseansicht der Weboberfläche (Entscheidung des Nutzers vom
+  2026-10-05, Task 026): Sie glaubt dem User, den die Anmeldung des Proxys nennt, ohne Token
+  und nur zum Lesen; im Vertrag und beim Schreiben zählt weiter allein das Token.
 
 **k-playbook ↔ Kephalaion.** Zusammenlegen ist nicht sinnvoll: k-playbook wird je Projekt
 installiert, Kephalaion je Rechner, und Kephalaion ist auch ohne k-playbook nützlich.
@@ -1021,7 +1045,9 @@ ein einfacher SHA-256 genügt, langsame Verfahren braucht es nur für Passwörte
 
 Der Name bringt kryptographisch nichts dazu, praktisch aber: Fehlversuche lassen sich einem
 Account zuordnen und begrenzen, ein vertauschtes Token fällt auf, und Logs nennen Namen statt
-Geheimnisse. Unbekannter Name und falsches Token bekommen dieselbe Antwort.
+Geheimnisse. Unbekannter Name und falsches Token bekommen dieselbe Antwort. Ohne Token kommt
+allein die Leseansicht der Weboberfläche aus: Sie glaubt dem User der Anmeldung des Proxys
+(„Kommunikation“, „Die Weboberfläche am Hub“).
 
 **Wo das Token unterwegs ist:**
 
@@ -2238,12 +2264,14 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   HTTPS“). Fehlversuche begrenzt bisher nur fail2ban auf dem Rechner des Proxys: am Hub die
   401 im Log des Proxys, am Node die Zeilen mit `login=invalid` (entschieden am 2026-10-01,
   „Kommunikation“). Offen bleibt die Begrenzung im Hub selbst.
-- **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, die den Zugriff
-  eines Accounts zeigt („Kommunikation“, „Die Weboberfläche am Hub“): die Seite an der Wurzel,
-  ihre Teile unter `/gui/`, hinter der Anmeldung des Proxys, nur mit relativen Pfaden — ohne
-  `X-Forwarded-Prefix`. Offen bleibt die Verwaltung in der Oberfläche (Accounts, Rechte,
-  Nodes; vorerst die Kommandozeile), die Anzeige des Users der Anmeldung (`X-User` kann das
-  Binary nicht prüfen). Ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
+- **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, seit Task 026
+  mit allen Accounts des Users der Anmeldung des Proxys (`X-User`), ohne Token („Kommunikation“,
+  „Die Weboberfläche am Hub“): die Seite an der Wurzel, ihre Teile unter `/gui/`, hinter der
+  Anmeldung des Proxys, nur mit relativen Pfaden — ohne `X-Forwarded-Prefix`. Offen bleibt die
+  Verwaltung in der Oberfläche (Accounts, Rechte, Nodes; vorerst die Kommandozeile); dass der
+  Hub `X-User` nur vom Proxy annimmt (geheimer Header, eigene Task); woher der Hub erfährt, wer
+  Admin ist und die Accounts anderer User sehen darf (Header von authproxy oder eigene Liste).
+  Ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
   erscheint, ist beantwortet (Task 023): ja, als genau `/kephalaion/mcp`, ohne Anmeldung des
   Proxys; ein Prozess mit beiden Rollen hat weiter zwei Listener.
 - **Node als Dienst:** entschieden — er läuft ständig, pro User als Benutzerdienst oder
