@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -195,7 +194,7 @@ func proxyHub(t *testing.T, e *commEnv, cert *tls.Certificate, host string) *htt
 // geht.
 func proxyHubAt(t *testing.T, e *commEnv, cert *tls.Certificate, host, prefix string, rest int) *httptest.Server {
 	t.Helper()
-	var hub http.Handler = loopback.Guard(newHubHandler(hubStore(t, e.cfg)))
+	var hub http.Handler = loopback.Guard(newHubHandler(hubStore(t, e.cfg), hubViewer()))
 	if prefix != "" {
 		inner := hub
 		hub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -443,14 +442,66 @@ func TestServeHTTPS(t *testing.T) {
 	}
 }
 
+// sessionCookie ist die Sitzung am Stellvertreter für authproxy
+// (proxyLoginAt): ihr Wert ist der Name des angemeldeten Users.
+const sessionCookie = "sitzung"
+
+// proxyLoginAt ist der Stellvertreter für Caddy mit authproxy wie auf der VM,
+// vor dem Hub-Listener von serve, unter prefix: Für die ganze Site entfernt
+// er X-User und X-User-Email des Browsers, auch mit _ (request_header);
+// unter <präfix>/hub/ reicht er ohne Anmeldung weiter; alles andere unter dem
+// Präfix nur mit Sitzung (forward_auth) — ohne Sitzung antwortet er wie
+// authproxy (GET und HEAD 302 zur Anmeldung, sonst 401 text/plain), mit
+// Sitzung setzt er X-User auf ihren User. Den Präfix nimmt er weg (uri
+// strip_prefix), Host setzt er auf den Upstream.
+func proxyLoginAt(t *testing.T, e *commEnv, prefix string) *httptest.Server {
+	t.Helper()
+	hub := loopback.Guard(newHubHandler(hubStore(t, e.cfg), hubViewer()))
+	srv := httptest.NewUnstartedServer(nil)
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{"X-User", "X_User", "X-User-Email", "X_User_Email"} {
+			r.Header.Del(h)
+		}
+		p := r.URL.Path
+		if p != prefix && !strings.HasPrefix(p, prefix+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		if p != prefix+hubPath && !strings.HasPrefix(p, prefix+hubPath+"/") {
+			c, err := r.Cookie(sessionCookie)
+			if err != nil || c.Value == "" {
+				if r.Method == http.MethodGet || r.Method == http.MethodHead {
+					w.Header().Set("Location", "/login?next="+url.QueryEscape(p))
+					w.WriteHeader(http.StatusFound)
+					return
+				}
+				http.Error(w, "Nicht angemeldet", http.StatusUnauthorized)
+				return
+			}
+			r.Header.Set("X-User", c.Value)
+			r.Header.Set("X-User-Email", c.Value+"@example.org")
+		}
+		r.Host = "localhost:" + port
+		http.StripPrefix(prefix, hub).ServeHTTP(w, r)
+	})
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // Die Weboberfläche hinter einem Proxy mit Präfix (wie Caddys handle
 // /kephalaion/* mit uri strip_prefix /kephalaion): Die Seite liegt unter
 // <präfix>/, und was sie relativ nennt — gui/style.css, gui/app.js,
-// gui/icon.svg, der Eingang gui/api/whoami —, landet unter dem Präfix beim
+// gui/icon.svg, der Eingang gui/api/user —, landet unter dem Präfix beim
 // Binary, das ihn nicht kennt. Der Hub-Weg <präfix>/hub/v1/… bleibt, wie er
-// war. Steht vor dem Rest eine Anmeldung (die VM), ist deren 401 keine
-// Antwort des Hubs: kein JSON mit code — daran erkennt die Seite die
-// abgelaufene Anmeldung.
+// war. Hinter der Anmeldung des Proxys (die VM, proxyLoginAt) nennt der
+// Eingang die Accounts des Users, den der Proxy als X-User setzt — nicht den,
+// den der Browser schickt; ohne Sitzung antwortet die Anmeldung, nicht der
+// Hub (302 bzw. 401 ohne JSON mit code), daran erkennt die Seite die
+// abgelaufene Anmeldung. Über den Hub-Block <präfix>/hub/… erreicht ein
+// X-User den Eingang nicht, auch nicht an einem Proxy, der ihn durchreicht.
 func TestGUIBehindPrefix(t *testing.T) {
 	e := newCommEnv(t)
 	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -519,25 +570,31 @@ func TestGUIBehindPrefix(t *testing.T) {
 			t.Errorf("%s: HTTP %d, Content-Type %q", rel(ref), resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
 	}
-	// Der Eingang, relativ wie in app.js.
-	_, script := do(http.MethodGet, rel("gui/app.js"), "*/*", "", "", nil)
-	if !strings.Contains(script, `"gui/api/whoami"`) {
-		t.Fatal("app.js nennt gui/api/whoami nicht")
+	// Der Eingang, relativ wie die Seite ihn nennt. Dieser Proxy reicht
+	// X-User durch, wie ihn der Aufrufer schickt.
+	if want := open.URL + "/kephalaion/gui/api/user"; rel("gui/api/user") != want {
+		t.Errorf("gui/api/user löst sich zu %s auf, erwartet %s", rel("gui/api/user"), want)
 	}
-	payload := func(account, token string) string {
-		b, _ := json.Marshal(map[string]string{"account": account, "token": token})
-		return string(b)
+	kleist := map[string]string{"X-User": "kleist"}
+	const kleistAccounts = `{"viewer":"kleist","user":"kleist","accounts":[{"name":"bob","description":"","locked":false,"collections":[` +
+		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}},` +
+		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[],"dirs":[]}}]}]}`
+	resp, body := do(http.MethodGet, rel("gui/api/user"), "application/json", "", "", kleist)
+	if resp.StatusCode != 200 || strings.TrimSpace(body) != kleistAccounts {
+		t.Errorf("Eingang der Seite unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
 	}
-	resp, body := do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["bob"]), nil)
-	if resp.StatusCode != 200 || strings.TrimSpace(body) != `{"account":"bob","user":"kleist","description":"","collections":[`+
-		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}},`+
-		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[],"dirs":[]}}]}` {
-		t.Errorf("whoami der Seite unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
-	}
-	resp, body = do(http.MethodPost, rel("gui/api/whoami"), "application/json", "application/json", payload("bob", e.tokens["alice"]), nil)
-	if resp.StatusCode != 401 || !strings.Contains(body, `"code":"unauthenticated"`) ||
+	resp, body = do(http.MethodGet, rel("gui/api/user"), "application/json", "", "", nil)
+	if resp.StatusCode != 403 || !strings.Contains(body, `"code":"unauthenticated"`) ||
 		resp.Header.Get("Content-Type") != "application/json; charset=utf-8" {
-		t.Errorf("falsches Token unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
+		t.Errorf("ohne X-User unter dem Präfix: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Über den Hub-Block nie: Der Hub-Listener sieht dort nur /hub/…, und
+	// das ist der Vertrag.
+	for _, path := range []string{"/kephalaion/hub/gui/api/user", "/kephalaion/hub/../gui/api/user", "/kephalaion/hub/%2e%2e/gui/api/user"} {
+		if resp, body := do(http.MethodGet, open.URL+path, "application/json", "", "", kleist); resp.StatusCode != 404 ||
+			strings.Contains(body, "accounts") {
+			t.Errorf("%s mit X-User: HTTP %d %s", path, resp.StatusCode, body)
+		}
 	}
 	// Ohne den Präfix kennt der Proxy nichts davon.
 	if resp, _ := do(http.MethodGet, open.URL+"/gui/app.js", "*/*", "", "", nil); resp.StatusCode != 404 {
@@ -562,20 +619,74 @@ func TestGUIBehindPrefix(t *testing.T) {
 		t.Errorf("/kephalaion/hub mit Accept text/html: HTTP %d %q — dort gibt es keine Seite", resp.StatusCode, body)
 	}
 
-	// Die VM: vor dem Rest steht eine Anmeldung. Ohne Sitzung antwortet sie,
-	// nicht der Hub — auf die Seite wie auf ihren Eingang, ohne JSON und ohne
-	// code; der Hub-Weg geht weiter ohne sie.
-	authed := proxyHubAt(t, e, nil, "", "/kephalaion", http.StatusUnauthorized)
-	if resp, _ := do(http.MethodGet, authed.URL+"/kephalaion/", browser, "", "", nil); resp.StatusCode != 401 {
-		t.Errorf("Seite hinter der Anmeldung ohne Sitzung: HTTP %d", resp.StatusCode)
+	// Die VM: vor dem Rest steht die Anmeldung des Proxys. Mit Sitzung setzt
+	// er X-User — ein X-User des Browsers, auch mit _, kommt nicht durch.
+	login := proxyLoginAt(t, e, "/kephalaion")
+	send := func(method, path, session, body string, header map[string]string) (*http.Response, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, login.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "application/json")
+		if session != "" {
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: session})
+		}
+		for k, v := range header {
+			req.Header[k] = []string{v}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp, string(raw)
 	}
-	resp, body = do(http.MethodPost, authed.URL+"/kephalaion/gui/api/whoami", "application/json", "application/json",
-		payload("bob", e.tokens["bob"]), nil)
-	if resp.StatusCode != 401 || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || strings.Contains(body, `"code"`) {
-		t.Errorf("Eingang hinter der Anmeldung ohne Sitzung: HTTP %d, Content-Type %q, %q", resp.StatusCode,
-			resp.Header.Get("Content-Type"), body)
+	forged := map[string]string{"X-User": "alice", "X_User": "alice", "X-User-Email": "alice@example.org"}
+	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user", "kleist", "", forged); resp.StatusCode != 200 ||
+		strings.TrimSpace(body) != kleistAccounts {
+		t.Errorf("Eingang hinter der Anmeldung: HTTP %d %s", resp.StatusCode, body)
 	}
-	if resp, _ := do(http.MethodPost, authed.URL+"/kephalaion/hub/v1/whoami", "", "application/json", "{}", node); resp.StatusCode != 200 {
-		t.Errorf("Hub-Weg neben der Anmeldung: HTTP %d", resp.StatusCode)
+	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user?name=alice", "kleist", "", forged); resp.StatusCode != 403 ||
+		!strings.Contains(body, `"code":"forbidden"`) {
+		t.Errorf("fremder User hinter der Anmeldung: HTTP %d %s", resp.StatusCode, body)
+	}
+	if resp, page := send(http.MethodGet, "/kephalaion/", "kleist", "", map[string]string{"Accept": browser}); resp.StatusCode != 200 ||
+		!strings.Contains(page, "<html") {
+		t.Errorf("Seite hinter der Anmeldung: HTTP %d", resp.StatusCode)
+	}
+	// Ohne Sitzung antwortet die Anmeldung, nicht der Hub: GET 302 zur
+	// Anmeldung, alles andere 401 — ohne JSON und ohne code.
+	for _, c := range []struct {
+		method, path string
+		status       int
+	}{
+		{http.MethodGet, "/kephalaion/", http.StatusFound},
+		{http.MethodGet, "/kephalaion/gui/api/user", http.StatusFound},
+		{http.MethodHead, "/kephalaion/gui/api/user", http.StatusFound},
+		{http.MethodPost, "/kephalaion/gui/api/user", http.StatusUnauthorized},
+	} {
+		resp, body := send(c.method, c.path, "", "", forged)
+		if resp.StatusCode != c.status || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+			strings.Contains(body, `"code"`) || strings.Contains(body, "accounts") {
+			t.Errorf("%s %s ohne Sitzung: HTTP %d, Content-Type %q, %q", c.method, c.path, resp.StatusCode,
+				resp.Header.Get("Content-Type"), body)
+		}
+	}
+	// Der Hub-Block geht ohne Anmeldung, trägt aber keinen X-User, und den
+	// Eingang erreicht er nicht.
+	withType := map[string]string{"Content-Type": "application/json"}
+	for k, v := range node {
+		withType[k] = v
+	}
+	if resp, body := send(http.MethodPost, "/kephalaion/hub/v1/whoami", "", "{}", withType); resp.StatusCode != 200 ||
+		!strings.Contains(body, `"node":"laptop-gui"`) {
+		t.Errorf("Hub-Weg neben der Anmeldung: HTTP %d %s", resp.StatusCode, body)
+	}
+	for _, path := range []string{"/kephalaion/hub/gui/api/user", "/kephalaion/hub/../gui/api/user"} {
+		if resp, body := send(http.MethodGet, path, "", "", kleist); resp.StatusCode != 404 || strings.Contains(body, "accounts") {
+			t.Errorf("%s ohne Sitzung mit X-User: HTTP %d %s", path, resp.StatusCode, body)
+		}
 	}
 }

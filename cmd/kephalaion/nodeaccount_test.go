@@ -375,7 +375,7 @@ func TestAccountRotateNoRetry(t *testing.T) {
 func TestAccountRotateOldAddress(t *testing.T) {
 	e := newCommEnv(t)
 	var calls atomic.Int32
-	hub := newHubHandler(hubStore(t, e.cfg))
+	hub := newHubHandler(hubStore(t, e.cfg), hubViewer())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		hub.ServeHTTP(w, r)

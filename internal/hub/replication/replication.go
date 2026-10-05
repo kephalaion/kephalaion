@@ -64,9 +64,8 @@ func (h *Hub) authenticate(ctx context.Context, auth contract.NodeAuth) ([]strin
 }
 
 // checkAccount prüft Name, Token und Sperre eines Accounts — die gemeinsame
-// Anmeldung eines Accounts am Hub (store.CheckAccount), dieselbe wie am
-// Eingang der Weboberfläche. Unbekannt, falsches Token und gesperrt ergeben
-// ok false.
+// Anmeldung eines Accounts am Hub (store.CheckAccount). Unbekannt, falsches
+// Token und gesperrt ergeben ok false.
 func (h *Hub) checkAccount(ctx context.Context, a contract.AccountAuth) (acc store.Account, ok bool, err error) {
 	return store.CheckAccount(ctx, h.st, a.Account, a.Token)
 }

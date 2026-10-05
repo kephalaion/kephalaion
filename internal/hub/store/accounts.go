@@ -216,9 +216,10 @@ var dummyAccountHash = ident.HashToken("keph_unbekannter-account")
 // und keinen Account; der Hash wird in jedem Fall in konstanter Zeit
 // verglichen, für einen unbekannten Namen gegen dummyAccountHash. Bei ok
 // trägt der Account seine Rechte aus den lebenden SYSTEM:A:-Zeilen. Der
-// Vertrag (whoami, rotate) und der Eingang der Weboberfläche benutzen sie;
-// die Schreibvorgänge über einen Node prüfen in ihrer Transaktion
-// (accountUser in write.go).
+// Vertrag (whoami, rotate) benutzt sie; die Schreibvorgänge über einen Node
+// prüfen in ihrer Transaktion (accountUser in write.go). Die Weboberfläche
+// prüft kein Token: Sie zeigt die Accounts des Users, den die Anmeldung des
+// Proxys nennt (AccountsOfUser).
 func CheckAccount(ctx context.Context, st Store, name, token string) (acc Account, ok bool, err error) {
 	acc, err = st.Account(ctx, name)
 	known := err == nil

@@ -16,6 +16,7 @@ import (
 	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
+	"github.com/kephalaion/kephalaion/internal/hub/gui"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/reqlog"
 )
@@ -276,8 +277,8 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodHead, "/", 200, html, nil, []string{"Kephalaion"}, browser},
 		{http.MethodPost, "/", 405, plain, []string{"nur GET"}, nil, browser},
 		// Die Teile der Seite unter /gui/.
-		{http.MethodGet, "/gui/app.js", 200, script, []string{"\"gui/api/whoami\"", "keph_"}, nil, "*/*"},
-		{http.MethodHead, "/gui/app.js", 200, script, nil, []string{"whoami"}, ""},
+		{http.MethodGet, "/gui/app.js", 200, script, []string{"\"use strict\""}, nil, "*/*"},
+		{http.MethodHead, "/gui/app.js", 200, script, nil, []string{"strict"}, ""},
 		{http.MethodGet, "/gui/style.css", 200, style, []string{"prefers-color-scheme: dark"}, nil, "text/css,*/*;q=0.1"},
 		// Das Symbol der Seite: ohne es fragte der Browser /favicon.ico an der
 		// Wurzel des Hosts, am Präfix eines Proxys vorbei.
@@ -286,10 +287,14 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodGet, "/favicon.ico", 404, plain, []string{"unbekannter Pfad /favicon.ico"}, nil, ""},
 		{http.MethodPost, "/gui/app.js", 405, plain, []string{"nur GET"}, nil, ""},
 		{http.MethodPost, "/gui/style.css", 405, plain, []string{"nur GET"}, nil, ""},
-		{http.MethodGet, "/gui/api/whoami", 405, guiJSON, []string{`"code":"invalid"`, "nur POST"}, nil, ""},
-		// Der Body der Schleife ist {} ohne Content-Type: abgewiesen, bevor er
-		// gelesen wird.
-		{http.MethodPost, "/gui/api/whoami", 415, guiJSON, []string{`"code":"invalid"`, "application/json erwartet"}, nil, ""},
+		// Der Eingang der Seite: ohne X-User keine Anmeldung des Proxys —
+		// 403, nie 401.
+		{http.MethodGet, "/gui/api/user", 403, guiJSON, []string{`"code":"unauthenticated"`, "Keine Anmeldung des Proxys"}, nil, browser},
+		{http.MethodHead, "/gui/api/user", 403, guiJSON, nil, []string{"code"}, ""},
+		{http.MethodPost, "/gui/api/user", 405, guiJSON, []string{`"code":"invalid"`, "nur GET"}, nil, ""},
+		// Der Eingang mit Account und Token gibt es nicht mehr.
+		{http.MethodPost, "/gui/api/whoami", 404, plain, []string{"unbekannter Pfad /gui/api/whoami"}, []string{`"code"`}, ""},
+		{http.MethodGet, "/gui/api/whoami", 404, plain, []string{"unbekannter Pfad /gui/api/whoami"}, []string{`"code"`}, ""},
 		{http.MethodGet, "/gui", 404, plain, []string{"unbekannter Pfad /gui"}, []string{"<html"}, browser},
 		{http.MethodGet, "/gui/", 404, plain, []string{"unbekannter Pfad /gui/"}, []string{"<html"}, browser},
 		{http.MethodPost, "/gui", 404, plain, []string{"unbekannter Pfad /gui"}, nil, ""},
@@ -297,10 +302,14 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodGet, "/gui/index.html", 404, plain, []string{"unbekannter Pfad"}, []string{"<html"}, browser},
 		{http.MethodGet, "/gui/api", 404, plain, []string{"unbekannter Pfad /gui/api"}, nil, ""},
 		{http.MethodGet, "/gui/api/", 404, plain, []string{"unbekannter Pfad /gui/api/"}, nil, ""},
-		{http.MethodPost, "/gui/api/whoami/", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
+		{http.MethodGet, "/gui/api/user/", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
+		{http.MethodGet, "/gui//api/user", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
+		// Unter /hub/ liegt allein der Vertrag: Dort ist kein Eingang der Seite.
+		{http.MethodGet, "/hub/gui/api/user", 404, jsonType, []string{`"code":"invalid"`}, []string{"accounts"}, ""},
+		{http.MethodGet, "/hub/../gui/api/user", 404, plain, []string{"unbekannter Pfad"}, []string{"accounts"}, ""},
 		{http.MethodGet, "/gui/static/app.js", 404, plain, []string{"unbekannter Pfad"}, nil, ""},
-		{http.MethodGet, "/gui//app.js", 404, plain, []string{"unbekannter Pfad"}, []string{"whoami"}, ""},
-		{http.MethodGet, "/gui/../gui/app.js", 404, plain, []string{"unbekannter Pfad"}, []string{"whoami"}, ""},
+		{http.MethodGet, "/gui//app.js", 404, plain, []string{"unbekannter Pfad"}, []string{"strict"}, ""},
+		{http.MethodGet, "/gui/../gui/app.js", 404, plain, []string{"unbekannter Pfad"}, []string{"strict"}, ""},
 		{http.MethodGet, "/index.html", 404, plain, []string{"unbekannter Pfad /index.html"}, []string{"<html"}, browser},
 		{http.MethodGet, "/app.js", 404, plain, []string{"unbekannter Pfad /app.js"}, nil, ""},
 		{http.MethodGet, "/hub", 200, plain, []string{"Kephalaion Hub", "POST /hub/v1/<vorgang>"}, []string{version}, ""},
@@ -387,14 +396,16 @@ func TestServeHubListener(t *testing.T) {
 		}
 	}
 	// Die Host-Prüfung liegt vor allem, auch vor Begrüßung, Seite und
-	// Eingang.
+	// Eingang — auch mit X-User: Ihr 403 ist Text, nicht die Antwort des
+	// Eingangs.
 	for _, c := range []struct{ method, path, accept string }{
 		{http.MethodGet, "/", ""}, {http.MethodGet, "/", browser}, {http.MethodGet, "/gui/app.js", ""},
-		{http.MethodPost, "/gui/api/whoami", ""},
+		{http.MethodGet, "/gui/api/user", ""},
 	} {
 		req, _ := http.NewRequest(c.method, base+c.path, strings.NewReader("{}"))
 		req.Host = "evil.example:80"
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(gui.HeaderUser, "kleist")
 		if c.accept != "" {
 			req.Header.Set("Accept", c.accept)
 		}
@@ -402,9 +413,10 @@ func TestServeHubListener(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != 403 {
-			t.Errorf("%s %s mit fremdem Host: HTTP %d, erwartet 403", c.method, c.path, resp.StatusCode)
+		if resp.StatusCode != 403 || strings.Contains(string(body), `"code"`) || !strings.HasPrefix(string(body), "Forbidden: Host") {
+			t.Errorf("%s %s mit fremdem Host: HTTP %d %q, erwartet 403 der Host-Prüfung", c.method, c.path, resp.StatusCode, body)
 		}
 	}
 	// Seite und Skript nennen nur relative Pfade: Das Binary kennt den
@@ -433,20 +445,27 @@ func TestServeHubListener(t *testing.T) {
 			}
 		}
 	}
-	// Der Eingang der Seite über serve: 200 für einen angelegten Account,
-	// dieselbe 401 für ein falsches Token; das Log nennt den Account, nie
-	// das Token.
+	// Der Eingang der Seite über serve: Mit X-User nennt er die Accounts
+	// dieses Users — auch den gesperrten, und ohne Token oder Hash —, ohne
+	// X-User 403 unauthenticated, für einen fremden User 403 forbidden. Das
+	// Log nennt angemeldeten und angefragten User.
 	cc := "--config=" + cfgPath
 	runT(t, "hub", "collection", "add", "test", cc, "--description", "Zum Probieren").want(t, 0)
 	ra := runT(t, "hub", "account", "add", "bob", "--user", "kleist", cc)
 	ra.want(t, 0)
 	accountToken := tokenFrom(t, ra.out)
 	runT(t, "hub", "account", "grant", "bob", "test", "--write", "--vendor", "k-playbook", cc).want(t, 0)
-	whoami := func(account, token string) (int, string) {
+	runT(t, "hub", "account", "add", "bob-vm", "--user", "kleist", "--description", "Auf der VM", cc).want(t, 0)
+	runT(t, "hub", "account", "grant", "bob-vm", "test", "--dir", "docs", cc).want(t, 0)
+	runT(t, "hub", "account", "lock", "bob-vm", cc).want(t, 0)
+	runT(t, "hub", "account", "add", "carol", cc).want(t, 0)
+	user := func(query string, users ...string) (int, string) {
 		t.Helper()
-		payload, _ := json.Marshal(map[string]string{"account": account, "token": token})
-		req, _ := http.NewRequest(http.MethodPost, base+"/gui/api/whoami", bytes.NewReader(payload))
-		req.Header.Set("Content-Type", "application/json")
+		req, _ := http.NewRequest(http.MethodGet, base+"/gui/api/user"+query, nil)
+		req.Header.Set("Accept", "application/json")
+		for _, u := range users {
+			req.Header.Add(gui.HeaderUser, u)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -454,20 +473,32 @@ func TestServeHubListener(t *testing.T) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 		if got := resp.Header.Get("Content-Type"); got != guiJSON || resp.Header.Get("Cache-Control") != "no-store" {
-			t.Errorf("whoami der Seite: Content-Type %q, Cache-Control %q", got, resp.Header.Get("Cache-Control"))
+			t.Errorf("Eingang der Seite: Content-Type %q, Cache-Control %q", got, resp.Header.Get("Cache-Control"))
 		}
 		return resp.StatusCode, strings.TrimSpace(string(body))
 	}
-	if code, body := whoami("bob", accountToken); code != 200 || body != `{"account":"bob","user":"kleist","description":"",`+
-		`"collections":[{"name":"test","description":"Zum Probieren","rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":[]}}]}` {
-		t.Errorf("whoami der Seite: HTTP %d %s", code, body)
+	if code, body := user("", "kleist"); code != 200 || body != `{"viewer":"kleist","user":"kleist","accounts":[`+
+		`{"name":"bob","description":"","locked":false,"collections":[{"name":"test","description":"Zum Probieren",`+
+		`"rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":[]}}]},`+
+		`{"name":"bob-vm","description":"Auf der VM","locked":true,"collections":[{"name":"test","description":"Zum Probieren",`+
+		`"rights":{"write":false,"supersede":false,"vendor":[],"dirs":["docs"]}}]}]}` {
+		t.Errorf("Eingang der Seite: HTTP %d %s", code, body)
 	}
-	wrong, err := ident.NewToken()
-	if err != nil {
-		t.Fatal(err)
+	if code, body := user("?name=kleist", "kleist"); code != 200 || !strings.HasPrefix(body, `{"viewer":"kleist","user":"kleist",`) {
+		t.Errorf("Eingang der Seite mit eigenem name: HTTP %d %s", code, body)
 	}
-	if code, body := whoami("bob", wrong); code != 401 || body != `{"code":"unauthenticated","message":"Account oder Token stimmt nicht."}` {
-		t.Errorf("whoami der Seite mit falschem Token: HTTP %d %s", code, body)
+	if code, body := user(""); code != 403 || body != `{"code":"unauthenticated","message":"Keine Anmeldung des Proxys: `+
+		`Die Anfrage nennt keinen angemeldeten User."}` {
+		t.Errorf("Eingang der Seite ohne X-User: HTTP %d %s", code, body)
+	}
+	if code, body := user("", "admin"); code != 403 || body != `{"code":"invalid_user","message":"Dieser Name ist am Hub kein gültiger User."}` {
+		t.Errorf("Eingang der Seite mit X-User admin: HTTP %d %s", code, body)
+	}
+	if code, body := user("?name=carol", "kleist"); code != 403 || !strings.Contains(body, `"code":"forbidden"`) || strings.Contains(body, "carol") {
+		t.Errorf("Eingang der Seite für einen fremden User: HTTP %d %s", code, body)
+	}
+	if code, body := user("?name=a&name=b", "kleist"); code != 400 || !strings.Contains(body, `"code":"invalid"`) {
+		t.Errorf("Eingang der Seite mit zwei name: HTTP %d %s", code, body)
 	}
 	// Ein Eintrag mit alter Adresse (ohne /hub): check nennt den Hinweis des
 	// Hubs und sagt, was fehlt; mit /hub ist der Hub erreichbar.
@@ -488,8 +519,9 @@ func TestServeHubListener(t *testing.T) {
 		!strings.Contains(log, "hub GET /hub//v1/whoami 404") {
 		t.Errorf("Log ohne die Zeilen der Wurzel:\n%s", log)
 	}
-	for _, want := range []string{"hub GET /gui/app.js 200", "hub GET /gui 404", "hub POST /gui/api/whoami 200 ",
-		"hub POST /gui/api/whoami 401 ", " account=bob\n"} {
+	for _, want := range []string{"hub GET /gui/app.js 200", "hub GET /gui 404", "hub GET /gui/api/user 200 ",
+		" viewer=kleist user=kleist\n", "hub GET /gui/api/user 403 ", " viewer=-\n", " viewer=kleist user=carol\n",
+		"hub GET /gui/api/user 400 ", "hub POST /gui/api/whoami 404 "} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)
 		}

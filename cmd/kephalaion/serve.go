@@ -335,7 +335,7 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 		rl.hub = st
 		rl.server = &http.Server{
 			// Host wie am Node: dieser Rechner mit dem eigenen Port, sonst 403.
-			Handler:           loopback.Guard(newHubHandler(st)),
+			Handler:           loopback.Guard(newHubHandler(st, hubViewer())),
 			ReadHeaderTimeout: httpapi.ReadHeaderTimeout,
 			ReadTimeout:       httpapi.ReadTimeout,
 			WriteTimeout:      httpapi.WriteTimeout,
@@ -373,6 +373,13 @@ const hubPath = "/hub"
 // stimmen.
 const guiPath = "/gui"
 
+// hubViewer ist die eine Stelle, an der entsteht, wem die Weboberfläche des
+// Hubs den angemeldeten User glaubt (gui.Viewer): vorerst X-User der
+// Anmeldung des Proxys ohne weitere Prüfung (gui.HeaderViewer). Ein geheimer
+// Header des Proxys aus der config kommt hier dazu (eigene Task); Eingang und
+// Seite bleiben dabei, wie sie sind.
+func hubViewer() gui.Viewer { return gui.HeaderViewer }
+
 // newHubHandler ist der Hub-Listener ohne die Host-Prüfung (die legt
 // startRole außen herum): Das Binary ordnet seine Teile selbst, ein Proxy
 // davor nimmt nur seinen Präfix weg.
@@ -381,9 +388,10 @@ const guiPath = "/gui"
 //     kommt die Weboberfläche (internal/hub/gui), sonst eine kurze Begrüßung
 //     mit der Version (text/plain, für curl) — beide mit Vary: Accept.
 //   - Unter /gui/ die Teile der Seite: ihre Dateien (gui.Files: /gui/app.js,
-//     /gui/style.css, /gui/icon.svg) und ihr Eingang POST /gui/api/whoami,
-//     der einen Account allein prüft, ohne Node; er ist kein Teil des
-//     Vertrags. /gui, /gui/ und alles andere darunter 404.
+//     /gui/style.css, /gui/icon.svg) und ihr Eingang GET /gui/api/user, der
+//     die Accounts des angemeldeten Users nennt — wem er glaubt, sagt viewer;
+//     er ist kein Teil des Vertrags. /gui, /gui/ und alles andere darunter
+//     404.
 //   - An /hub und /hub/ ein kurzer Text ohne Version (diese Route liegt nach
 //     außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
 //     /v1/… sieht.
@@ -396,7 +404,7 @@ const guiPath = "/gui"
 // Mux GET /hub mit 301 auf /hub/ um, ebenso /gui), und ein Pfad, den der Mux
 // bereinigen würde, wird vorher mit 404 beantwortet — eine absolute Location
 // ohne den Präfix des Proxys ginge ins Leere.
-func newHubHandler(st hubstore.Store) http.Handler {
+func newHubHandler(st hubstore.Store, viewer gui.Viewer) http.Handler {
 	version := buildinfo.Get().Version
 	mux := http.NewServeMux()
 	page := gui.NewPage(version)
@@ -417,7 +425,7 @@ func newHubHandler(st hubstore.Store) http.Handler {
 	for _, name := range gui.Files {
 		mux.Handle(guiPath+"/"+name, gui.NewFile(name))
 	}
-	mux.Handle(guiPath+"/api/whoami", gui.NewWhoami(st))
+	mux.Handle(guiPath+"/api/user", gui.NewUser(st, viewer))
 	mux.HandleFunc(guiPath, notFound)
 	mux.HandleFunc(guiPath+"/", notFound)
 	short := func(w http.ResponseWriter, r *http.Request) {
