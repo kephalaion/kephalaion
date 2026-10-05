@@ -35,7 +35,7 @@ HOST_TARGET = $(shell go env GOOS)-$(shell go env GOARCH)
 # -buildvcs=false, weil der Commit ausdrücklich per -ldflags kommt.
 LDFLAGS = -s -w -X $(BUILDINFO).Version=$(VERSION) -X $(BUILDINFO).Commit=$(COMMIT)
 
-.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-test vscode-vsix vscode-install clean
+.PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-test vscode-vsix vscode-verify vscode-install clean
 
 # Die Erweiterung für VS Code steckt im Binary (internal/vscodeext, go:embed).
 # vscode-vsix baut sie mit vsce in fester Fassung per npx (braucht Node.js und
@@ -256,6 +256,26 @@ vscode-vsix: ## Baut die Erweiterung für VS Code mit der Version aus VERSION zu
 	    fail "vsce ist gescheitert"; \
 	  fi; \
 	  mv -f "$$part" "$$out"
+
+# Release und CI weisen damit nach, dass ein gebautes Binary die Erweiterung
+# trägt, und zwar mit der Version nach der Regel oben: Es schreibt sie mit
+# vscode vsix heraus, die Version kommt aus extension/package.json der .vsix
+# (braucht unzip und Node.js). VSCODE_BIN wählt das Binary, Vorgabe das dieser
+# Plattform in dist/.
+VSCODE_BIN ?= $(DIST_DIR)/$(BINARY)-$(HOST_TARGET)
+vscode-verify: ## Prüft, ob VSCODE_BIN die Erweiterung mit der Version aus VERSION trägt (Release, CI)
+	@set -eu; \
+	  tmp="$$(mktemp -d)"; \
+	  trap 'rm -rf "$$tmp"' EXIT; \
+	  "$(VSCODE_BIN)" vscode vsix -o "$$tmp/k.vsix" >/dev/null; \
+	  have="$$(unzip -p "$$tmp/k.vsix" extension/package.json | \
+	    node -e 'let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => console.log(JSON.parse(s).version));')"; \
+	  want="$(VSCODE_VERSION)"; \
+	  if [ "$$have" != "$$want" ]; then \
+	    printf 'Fehler: %s trägt die Erweiterung %s, erwartet %s (VERSION=%s).\n' "$(VSCODE_BIN)" "$$have" "$$want" "$(VERSION)" >&2; \
+	    exit 1; \
+	  fi; \
+	  echo "Erweiterung für VS Code im Binary: $$have ($(VSCODE_BIN))"
 
 # code aus einem Terminal der WSL, eines SSH-Remotes oder Devcontainers
 # installiert in den VS-Code-Server dort — dorthin gehört eine Erweiterung der

@@ -6,7 +6,9 @@ name: Release
 # Release — `upgrade` und install.sh sehen nie ein halbes.
 #
 # Assets: die vier Binaries kephalaion-<os>-<arch>, SHA256SUMS (deckt nur die
-# Binaries) und install.sh.
+# Binaries) und install.sh. Die Erweiterung für VS Code ist kein eigenes Asset:
+# Sie steckt in jedem Binary (REQUIRE_VSCODE=1, ohne sie scheitert der Lauf)
+# und trägt die Version des Tags (vX.Y.Z bzw. vX.Y.Z-… → X.Y.Z).
 #
 # Wiederholungslauf: workflow_dispatch mit dem Tag. Gibt es das Release schon,
 # werden die Assets mit --clobber ersetzt und das Release veröffentlicht.
@@ -74,12 +76,19 @@ jobs:
       - name: Toolchain prüfen
         run: make check-toolchain
 
+      # Node.js für die Erweiterung für VS Code: make dist baut sie mit vsce
+      # und bettet sie ins Binary ein. Version und SHA wie in ci.yml (Job check).
+      - name: Node.js einrichten
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
       # Ein Tag auf einem roten Commit wird nicht veröffentlicht.
       - name: make check
         run: make check
 
       - name: make dist
-        run: make dist VERSION="$TAG"
+        run: make dist VERSION="$TAG" REQUIRE_VSCODE=1
 
       - name: Assets prüfen
         run: |
@@ -88,6 +97,8 @@ jobs:
           sha256sum -c SHA256SUMS
           test -f ../install.sh || { echo "install.sh fehlt im getaggten Stand." >&2; exit 1; }
           ./kephalaion-linux-amd64 version | grep -F "kephalaion $TAG"
+          cd ..
+          make vscode-verify VERSION="$TAG" VSCODE_BIN=dist/kephalaion-linux-amd64
 
       - name: Release anlegen, Assets anhängen, veröffentlichen
         run: |
