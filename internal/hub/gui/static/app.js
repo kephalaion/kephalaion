@@ -1,114 +1,60 @@
-// Weboberfläche des Hubs: fragt Kephalaion-Account und Account-Token ab,
-// prüft beides am Hub (POST gui/api/whoami) und zeigt den Zugriff des
-// Accounts.
+// Weboberfläche des Hubs: zeigt die Accounts des Users, mit dem der Browser
+// am Proxy angemeldet ist, mit ihren Collections und Rechten
+// (GET gui/api/user).
 //
 // Regeln dieser Datei:
 //   - Nur relative Pfade. Die Seite liegt an der Wurzel des Hub-Listeners,
 //     hinter einem Proxy unter dessen Präfix; das Binary kennt ihn nicht.
-//   - Das Token lebt nur in Variablen der einen Prüfung: Der Browser legt es
-//     nirgends ab (kein Web Storage, kein Cookie), und es steht nie in einer
-//     Adresse. Nach der Antwort ist das Feld leer.
-//   - Was nicht wie ein Kephalaion-Token aussieht, wird nicht abgeschickt —
-//     ein versehentlich eingefügtes Passwort der Anmeldung an der Seite geht
-//     so nie an den Hub.
+//   - Die Seite fragt kein Token ab und zeigt keins: Wen sie zeigt, sagt der
+//     Hub (viewer, user) aus der Anmeldung des Proxys.
 //   - Alles, was vom Hub kommt, wird per textContent gesetzt, nie als HTML.
+//   - Einer Umleitung folgt sie nicht: Sie kommt von der Anmeldung davor und
+//     heißt, dass die Anmeldung abgelaufen ist.
+//   - Sie setzt nicht voraus, dass der gezeigte User (user) der angemeldete
+//     (viewer) ist.
 (function () {
   "use strict";
 
-  // Form eines Tokens wie ident.CheckToken: keph_ und 32 Bytes base64url
-  // ohne Padding, also 43 Zeichen.
-  var TOKEN_FORM = /^keph_[A-Za-z0-9_-]{43}$/;
-  var TOKEN_PREFIX = "keph_";
-  // Namensregel wie ident.CheckName. Maßgeblich prüft der Hub; hier hält sie
-  // nur Tippfehler und Fremdes im Feld des Accounts zurück.
-  var NAME_FORM = /^[a-z0-9][a-z0-9._-]{0,62}$/;
   // Der Eingang der Seite, relativ zur Seite.
-  var WHOAMI = "gui/api/whoami";
+  var USER_API = "gui/api/user";
   var TIMEOUT_MS = 15000;
 
   var TEXT = {
-    accountMissing: "Der Kephalaion-Account fehlt: der Name des Accounts, zu dem das Token gehört.",
-    accountForm: "Das ist kein Name eines Kephalaion-Accounts: klein geschrieben, a–z, 0–9, " +
-      "Punkt, Unterstrich und Bindestrich, höchstens 63 Zeichen. Es wurde nichts abgeschickt.",
-    tokenMissing: "Das Account-Token fehlt. Es beginnt mit keph_ und liegt meist unter " +
-      "~/.config/kephalaion/tokens/<hub>/<account>.token.",
-    tokenForeign: "Das ist kein Kephalaion-Token (die beginnen mit keph_). Gemeint ist nicht das " +
-      "Passwort dieser Seite, sondern das Token deines Kephalaion-Accounts, meist unter " +
-      "~/.config/kephalaion/tokens/<hub>/<account>.token. Es wurde nichts abgeschickt.",
-    tokenForm: "Das Token ist nicht vollständig: Nach keph_ folgen genau 43 Zeichen " +
-      "(A–Z, a–z, 0–9, - und _). Es wurde nichts abgeschickt.",
-    checking: "Prüfe am Hub …",
-    unauthenticated: "Account oder Token stimmt nicht. Wiederholte Fehlversuche können deinen " +
-      "Rechner für eine Weile sperren.",
+    loading: "Lade die Accounts …",
+    unauthenticated: "Keine Anmeldung des Proxys: Der Hub hat zu dieser Anfrage keinen " +
+      "angemeldeten User bekommen. Die Seite zeigt Accounts nur über den Proxy mit seiner " +
+      "Anmeldung. Ohne Proxy, direkt am Hub, gibt es diese Anmeldung nicht — dort zeigt " +
+      "kephalaion hub account list --user <user> die Accounts.",
+    invalidUser: "Der Name deiner Anmeldung am Proxy ist am Hub kein gültiger User " +
+      "(klein geschrieben, a–z, 0–9, Punkt, Unterstrich und Bindestrich, nicht admin). " +
+      "Accounts gehören zu einem User gleichen Namens.",
+    forbidden: "Die Accounts dieses Users zeigt dir der Hub nicht — nur deine eigenen.",
     invalid: "Der Hub hat die Anfrage abgelehnt: ",
     internal: "Fehler am Hub. Die Einzelheit steht in seinem Log.",
     expired: "Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.",
     unreachable: "Hub nicht erreichbar.",
-    unexpected: "Hub nicht erreichbar: unerwartete Antwort"
+    unexpected: "Hub nicht erreichbar: unerwartete Antwort",
+    ownTitle: "Deine Accounts",
+    otherTitle: "Accounts von ",
+    ownEmpty: "Du hast an diesem Hub noch keinen Account.",
+    otherEmpty: " hat an diesem Hub noch keinen Account.",
+    noCollection: "Dieser Account hat noch keine Collection.",
+    active: "aktiv",
+    locked: "gesperrt — die Rechte ruhen",
+    lockedCaption: "Gemerkte Rechte: Sie ruhen, solange der Account gesperrt ist.",
+    tokenHint: "Sein Token liegt meist unter ",
+    tokenHintEnd: " — die Seite zeigt es nicht."
   };
 
-  var form = document.getElementById("ask-form");
-  var accountInput = document.getElementById("keph-account");
-  var tokenInput = document.getElementById("keph-account-token");
-  var toggle = document.getElementById("token-toggle");
-  var submit = document.getElementById("ask-submit");
-  var reload = document.getElementById("reload");
   var message = document.getElementById("message");
-  var ask = document.getElementById("ask");
+  var reload = document.getElementById("reload");
+  var status = document.getElementById("status");
   var result = document.getElementById("result");
-  var again = document.getElementById("again");
-
-  var busy = false;
-  // expired: Die Anmeldung an der Seite ist abgelaufen. Jede weitere Prüfung
-  // wäre nur eine weitere 401 vor dem Hub; es hilft allein das Neuladen.
-  var expired = false;
 
   function showMessage(text, kind) {
     message.textContent = text;
     message.className = "message " + kind;
-    message.hidden = false;
-  }
-
-  function clearMessage() {
-    message.textContent = "";
-    message.hidden = true;
-  }
-
-  function hideToken() {
-    tokenInput.type = "password";
-    toggle.textContent = "anzeigen";
-    toggle.setAttribute("aria-pressed", "false");
-  }
-
-  function clearToken() {
-    tokenInput.value = "";
-    hideToken();
-  }
-
-  function setBusy(on) {
-    busy = on;
-    submit.disabled = on || expired;
-  }
-
-  // checkInput prüft die Eingabe, bevor irgendetwas den Browser verlässt.
-  // Liefert den Text der Ablehnung und das Feld dazu, oder null.
-  function checkInput(account, token) {
-    if (account === "") {
-      return { text: TEXT.accountMissing, field: accountInput };
-    }
-    if (!NAME_FORM.test(account)) {
-      return { text: TEXT.accountForm, field: accountInput };
-    }
-    if (token === "") {
-      return { text: TEXT.tokenMissing, field: tokenInput };
-    }
-    if (token.indexOf(TOKEN_PREFIX) !== 0) {
-      return { text: TEXT.tokenForeign, field: tokenInput };
-    }
-    if (!TOKEN_FORM.test(token)) {
-      return { text: TEXT.tokenForm, field: tokenInput };
-    }
-    return null;
+    status.hidden = false;
   }
 
   // readJSON liest den Body als JSON-Objekt, oder null — eine HTML-Seite
@@ -126,8 +72,8 @@
   }
 
   // outcome ordnet eine Antwort ein. Der Hub ist am JSON zu erkennen: eine
-  // Fehlerantwort trägt code, ein Erfolg account und collections. Ohne diese
-  // Form kommt die Antwort von davor:
+  // Fehlerantwort trägt code, ein Erfolg viewer, user und accounts. Ohne
+  // diese Form kommt die Antwort von davor:
   //   - eine Umleitung, 401 oder 403, oder eine Seite statt JSON — die
   //     Anmeldung an der Seite ist abgelaufen;
   //   - alles andere (502, 503 eines Proxys) — der Hub ist nicht erreichbar.
@@ -136,15 +82,22 @@
       return { kind: "expired" };
     }
     if (data && typeof data.code === "string") {
-      if (resp.status === 401 && data.code === "unauthenticated") {
+      if (resp.status === 403 && data.code === "unauthenticated") {
         return { kind: "unauthenticated" };
+      }
+      if (resp.status === 403 && data.code === "invalid_user") {
+        return { kind: "invalidUser" };
+      }
+      if (resp.status === 403 && data.code === "forbidden") {
+        return { kind: "forbidden" };
       }
       if (resp.status >= 400 && resp.status < 500) {
         return { kind: "invalid", detail: typeof data.message === "string" ? data.message : "" };
       }
       return { kind: "internal" };
     }
-    if (resp.status === 200 && data && typeof data.account === "string" && Array.isArray(data.collections)) {
+    if (resp.status === 200 && data && typeof data.viewer === "string" && typeof data.user === "string" &&
+        Array.isArray(data.accounts)) {
       return { kind: "ok", data: data };
     }
     if (resp.status === 401 || resp.status === 403 || (resp.status >= 200 && resp.status < 400)) {
@@ -173,13 +126,18 @@
     return td;
   }
 
-  function yesNo(label, yes) {
+  // yesNo zeigt ein Recht; resting: der Account ist gesperrt, ein Recht ruht.
+  function yesNo(label, yes, resting) {
     var td = cell(label);
-    td.appendChild(text("span", yes ? "ja" : "nein", yes ? "yes" : "no"));
+    if (yes && resting) {
+      td.appendChild(text("span", "ja (ruht)", "resting"));
+    } else {
+      td.appendChild(text("span", yes ? "ja" : "nein", yes ? "yes" : "no"));
+    }
     return td;
   }
 
-  function collectionRow(c) {
+  function collectionRow(c, resting) {
     var rights = c.rights && typeof c.rights === "object" ? c.rights : {};
     var vendor = Array.isArray(rights.vendor) ? rights.vendor : [];
     var dirs = Array.isArray(rights.dirs) ? rights.dirs : [];
@@ -193,9 +151,9 @@
     }
     tr.appendChild(th);
 
-    tr.appendChild(yesNo("Lesen", true));
-    tr.appendChild(yesNo("Schreiben (write)", rights.write === true));
-    tr.appendChild(yesNo("Fremdes (supersede)", rights.supersede === true));
+    tr.appendChild(yesNo("Lesen", true, resting));
+    tr.appendChild(yesNo("Schreiben (write)", rights.write === true, resting));
+    tr.appendChild(yesNo("Fremdes (supersede)", rights.supersede === true, resting));
 
     // Die Scopes wie in der Kommandozeile: vendor/<name> und die
     // Verzeichnis-Scopes als „dir <pfad>/“.
@@ -209,7 +167,7 @@
       scopes.appendChild(text("span", "—", "no"));
     } else {
       var list = document.createElement("ul");
-      list.className = "scopes";
+      list.className = resting ? "scopes resting" : "scopes";
       labels.forEach(function (label) {
         var li = document.createElement("li");
         li.appendChild(text("code", label));
@@ -221,53 +179,105 @@
     return tr;
   }
 
-  function showResult(data) {
-    document.getElementById("result-account").textContent = data.account;
-    document.getElementById("result-user").textContent = typeof data.user === "string" ? data.user : "";
-    var description = document.getElementById("result-description");
-    description.textContent = typeof data.description === "string" ? data.description : "";
-    description.hidden = description.textContent === "";
+  // head baut den Kopf der Tabelle; Schreiben und Fremdes tragen ihre
+  // Erklärung darunter.
+  function head() {
+    var thead = document.createElement("thead");
+    var tr = document.createElement("tr");
+    [
+      ["Collection"],
+      ["Lesen"],
+      ["Schreiben", "Neues anlegen, Eigenes ändern (write)"],
+      ["Fremdes", "ändern, löschen, umbenennen (supersede)"],
+      ["Scopes", "vendor/<name>, dir <pfad>/"]
+    ].forEach(function (col) {
+      var th = text("th", col[0]);
+      th.scope = "col";
+      if (col.length > 1) {
+        th.appendChild(text("span", col[1], "sub"));
+      }
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+    return thead;
+  }
 
-    var rows = document.getElementById("result-rows");
-    rows.textContent = "";
-    data.collections.forEach(function (c) {
+  // accountBlock baut den Block eines Accounts: Name, Status, Beschreibung,
+  // die Tabelle seiner Collections und wo sein Token meist liegt.
+  function accountBlock(a) {
+    var locked = a.locked === true;
+    var block = document.createElement("article");
+    block.className = locked ? "account locked" : "account";
+
+    var title = document.createElement("h3");
+    title.appendChild(text("span", String(a.name), "name"));
+    title.appendChild(text("span", locked ? TEXT.locked : TEXT.active, locked ? "badge locked" : "badge"));
+    block.appendChild(title);
+    if (typeof a.description === "string" && a.description !== "") {
+      block.appendChild(text("p", a.description, "description"));
+    }
+
+    var rows = document.createElement("tbody");
+    (Array.isArray(a.collections) ? a.collections : []).forEach(function (c) {
       if (c && typeof c === "object") {
-        rows.appendChild(collectionRow(c));
+        rows.appendChild(collectionRow(c, locked));
       }
     });
-    var none = rows.childElementCount === 0;
-    document.getElementById("result-empty").hidden = !none;
-    document.getElementById("result-table").hidden = none;
+    if (rows.childElementCount === 0) {
+      block.appendChild(text("p", TEXT.noCollection, "hint"));
+    } else {
+      var box = document.createElement("div");
+      box.className = "table-box";
+      var table = document.createElement("table");
+      if (locked) {
+        table.appendChild(text("caption", TEXT.lockedCaption));
+      }
+      table.appendChild(head());
+      table.appendChild(rows);
+      box.appendChild(table);
+      block.appendChild(box);
+    }
 
-    ask.hidden = true;
+    var hint = text("p", TEXT.tokenHint, "hint");
+    hint.appendChild(text("code", "~/.config/kephalaion/tokens/<hub>/" + String(a.name) + ".token"));
+    hint.appendChild(document.createTextNode(TEXT.tokenHintEnd));
+    block.appendChild(hint);
+    return block;
+  }
+
+  // showResult zeigt die Accounts von data.user. Ob das der angemeldete User
+  // (data.viewer) ist, entscheidet nur Überschrift und Text — die Seite
+  // zeigt jede Antwort gleich.
+  function showResult(data) {
+    var own = data.user === data.viewer;
+    document.getElementById("viewer").textContent = data.viewer;
+    document.getElementById("viewer-line").hidden = false;
+    document.getElementById("result-title").textContent = own ? TEXT.ownTitle : TEXT.otherTitle + data.user;
+    document.getElementById("result-user").textContent = data.user;
+
+    var list = document.getElementById("accounts");
+    list.textContent = "";
+    data.accounts.forEach(function (a) {
+      if (a && typeof a === "object") {
+        list.appendChild(accountBlock(a));
+      }
+    });
+    var empty = document.getElementById("result-empty");
+    empty.textContent = own ? TEXT.ownEmpty : data.user + TEXT.otherEmpty;
+    empty.hidden = list.childElementCount !== 0;
+
+    status.hidden = true;
     result.hidden = false;
-    document.getElementById("result-title").focus();
   }
 
-  // reset verwirft alles: die Übersicht, die Meldung und beide Felder.
-  function reset() {
-    document.getElementById("result-account").textContent = "";
-    document.getElementById("result-user").textContent = "";
-    document.getElementById("result-description").textContent = "";
-    document.getElementById("result-rows").textContent = "";
-    result.hidden = true;
-    ask.hidden = false;
-    clearMessage();
-    accountInput.value = "";
-    clearToken();
-    accountInput.focus();
-  }
-
-  function check(account, token) {
+  function load() {
     var abort = new AbortController();
     var timer = window.setTimeout(function () { abort.abort(); }, TIMEOUT_MS);
     // redirect "manual": Der Hub leitet nie um. Eine Umleitung kommt von der
-    // Anmeldung davor; ihr zu folgen hieße bei 307 oder 308, das Token an ihr
-    // Ziel zu schicken.
-    return fetch(WHOAMI, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ account: account, token: token }),
+    // Anmeldung davor (authproxy ohne Sitzung: 302 zur Anmeldung).
+    return fetch(USER_API, {
+      method: "GET",
+      headers: { "Accept": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
       redirect: "manual",
@@ -284,71 +294,44 @@
     });
   }
 
-  form.addEventListener("submit", function (ev) {
-    ev.preventDefault();
-    if (busy || expired) {
-      return;
+  function show(out) {
+    switch (out.kind) {
+      case "ok":
+        showResult(out.data);
+        return;
+      case "unauthenticated":
+        showMessage(TEXT.unauthenticated, "error");
+        return;
+      case "invalidUser":
+        showMessage(TEXT.invalidUser, "error");
+        return;
+      case "forbidden":
+        showMessage(TEXT.forbidden, "error");
+        return;
+      case "invalid":
+        showMessage(TEXT.invalid + out.detail, "error");
+        return;
+      case "internal":
+        showMessage(TEXT.internal, "error");
+        reload.hidden = false;
+        return;
+      case "expired":
+        showMessage(TEXT.expired, "error");
+        reload.hidden = false;
+        reload.focus();
+        return;
+      case "unexpected":
+        showMessage(TEXT.unexpected + " (HTTP " + out.status + ").", "error");
+        reload.hidden = false;
+        return;
+      default:
+        showMessage(TEXT.unreachable, "error");
+        reload.hidden = false;
     }
-    var account = accountInput.value.trim();
-    var token = tokenInput.value.trim();
-    var refused = checkInput(account, token);
-    if (refused) {
-      showMessage(refused.text, "error");
-      refused.field.focus();
-      return;
-    }
-    setBusy(true);
-    showMessage(TEXT.checking, "info");
-    check(account, token).then(function (out) {
-      // Das Token bleibt nicht liegen, gleich wie die Prüfung ausging.
-      token = "";
-      clearToken();
-      switch (out.kind) {
-        case "ok":
-          clearMessage();
-          accountInput.value = "";
-          showResult(out.data);
-          break;
-        case "unauthenticated":
-          showMessage(TEXT.unauthenticated, "error");
-          tokenInput.focus();
-          break;
-        case "invalid":
-          showMessage(TEXT.invalid + out.detail, "error");
-          break;
-        case "internal":
-          showMessage(TEXT.internal, "error");
-          break;
-        case "expired":
-          expired = true;
-          accountInput.value = "";
-          showMessage(TEXT.expired, "error");
-          reload.hidden = false;
-          reload.focus();
-          break;
-        case "unexpected":
-          showMessage(TEXT.unexpected + " (HTTP " + out.status + ").", "error");
-          break;
-        default:
-          showMessage(TEXT.unreachable, "error");
-      }
-      setBusy(false);
-    });
-  });
+  }
 
-  toggle.addEventListener("click", function () {
-    var show = tokenInput.type === "password";
-    tokenInput.type = show ? "text" : "password";
-    toggle.textContent = show ? "verbergen" : "anzeigen";
-    toggle.setAttribute("aria-pressed", show ? "true" : "false");
-  });
-
-  again.addEventListener("click", reset);
   reload.addEventListener("click", function () { window.location.reload(); });
 
-  // Ein Browser stellt Felder nach dem Neuladen gern wieder her: Die Seite
-  // beginnt immer leer.
-  accountInput.value = "";
-  clearToken();
-  submit.disabled = false;
+  showMessage(TEXT.loading, "info");
+  load().then(show);
 }());

@@ -549,7 +549,7 @@ func TestGUIBehindPrefix(t *testing.T) {
 
 	resp, page := do(http.MethodGet, pageURL.String(), browser, "", "", nil)
 	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" ||
-		!strings.Contains(page, "Kephalaion-Account") {
+		!strings.Contains(page, "Deine Accounts") {
 		t.Fatalf("Seite unter dem Präfix: HTTP %d, Content-Type %q:\n%s", resp.StatusCode, resp.Header.Get("Content-Type"), page)
 	}
 	// curl an derselben Stelle: weiter die Begrüßung.
@@ -570,8 +570,11 @@ func TestGUIBehindPrefix(t *testing.T) {
 			t.Errorf("%s: HTTP %d, Content-Type %q", rel(ref), resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
 	}
-	// Der Eingang, relativ wie die Seite ihn nennt. Dieser Proxy reicht
-	// X-User durch, wie ihn der Aufrufer schickt.
+	// Der Eingang, relativ wie in app.js. Dieser Proxy reicht X-User durch,
+	// wie ihn der Aufrufer schickt.
+	if _, script := do(http.MethodGet, rel("gui/app.js"), "*/*", "", "", nil); !strings.Contains(script, `"gui/api/user"`) {
+		t.Fatal("app.js nennt gui/api/user nicht")
+	}
 	if want := open.URL + "/kephalaion/gui/api/user"; rel("gui/api/user") != want {
 		t.Errorf("gui/api/user löst sich zu %s auf, erwartet %s", rel("gui/api/user"), want)
 	}

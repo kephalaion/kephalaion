@@ -130,67 +130,74 @@ func TestIndexFollowsPolicy(t *testing.T) {
 	}
 }
 
-// Die Felder der Abfrage: eigene Namen (kein username, kein password), das
-// Token verdeckt, nichts davon zum Vervollständigen angeboten. Der Knopf
-// ist gesperrt, bis das Skript läuft, und das Formular schickt nie per GET.
-func TestIndexFields(t *testing.T) {
+// Die Seite fragt nichts ab: kein Formular, kein Feld, kein Token. Sie nennt
+// den angemeldeten User im Kopf, erklärt die Rechte in Worten und sagt, dass
+// sie dich aus der Anmeldung am Proxy kennt.
+func TestIndexTexts(t *testing.T) {
 	index := strings.Join(strings.Fields(file(t, "index.html")), " ")
 	for _, want := range []string{
-		`<label for="keph-account">Kephalaion-Account</label>`,
-		`<input id="keph-account" name="keph-account" type="text" autocomplete="off"`,
-		`<label for="keph-account-token">Account-Token (keph_…)</label>`,
-		`<input id="keph-account-token" name="keph-account-token" type="password" autocomplete="off"`,
-		`spellcheck="false"`,
-		`<form id="ask-form" method="post" autocomplete="off" novalidate>`,
-		`<button type="submit" id="ask-submit" disabled>`,
-		`>anzeigen</button>`,
-		`>Anderes Token prüfen</button>`,
-		`Dieser Account hat noch keine Collection.`,
-		`Über einen Node siehst du davon nur die Collections, die dieser Node abgleicht (<code>kephalaion node whoami</code>).`,
+		`<p id="viewer-line" class="meta viewer" hidden>angemeldet als <strong id="viewer"></strong></p>`,
+		`<h2 id="result-title" tabindex="-1">Deine Accounts</h2>`,
+		`Die Seite kennt dich aus der Anmeldung am Proxy; sie fragt kein Token ab und zeigt keins.`,
+		`<div id="accounts"></div>`,
+		`<button type="button" id="reload" hidden>Seite neu laden</button>`,
 		`Unter <code>vendor/&lt;name&gt;/</code> zählt allein der Scope`,
 		`Direkt in <code>vendor/</code> schreibt niemand.`,
 		`<strong>Verzeichnis-Scope</strong> (<code>dir &lt;pfad&gt;/</code>): Unter <code>&lt;pfad&gt;/</code> darf der Account anlegen, ändern, löschen und umbenennen, auch ohne <code>write</code>`,
 		`Er nimmt niemandem etwas: <code>write</code> und <code>supersede</code> gelten dort wie überall.`,
 		`<code>kephalaion node dir push</code> schreibt nur dorthin`,
-		`Scopes<span class="sub"><code>vendor/&lt;name&gt;</code>, <code>dir &lt;pfad&gt;/</code></span>`,
+		`<strong>Gesperrt</strong>: Ein gesperrter Account darf nichts, auch nicht lesen. Seine Rechte sind gemerkt und ruhen`,
+		`Über einen Node siehst du davon nur die Collections, die dieser Node abgleicht (<code>kephalaion node whoami</code>).`,
 	} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index.html ohne %s", want)
 		}
 	}
-	for _, bad := range []string{`name="username"`, `name="password"`, `id="username"`, `id="password"`, `method="get"`, `action=`} {
+	for _, bad := range []string{"<form", "<input", "<textarea", "password", "keph_", "Account-Token", `method="`, "action="} {
 		if strings.Contains(index, bad) {
 			t.Errorf("index.html enthält %s", bad)
 		}
 	}
 }
 
-// Das Skript hält sich an die Entscheidungen: Das Token wird nirgends
-// abgelegt und steht in keiner Adresse, Daten des Hubs werden nie als HTML
-// gesetzt, abgeschickt wird nur die Form eines Tokens, einer Umleitung folgt
-// es nicht, und die Texte für 401, abgelaufene Anmeldung und „nicht
+// Das Skript hält sich an die Entscheidungen: Es legt nichts ab, liest
+// nichts aus der Adresse, setzt Daten des Hubs nie als HTML, fragt den
+// Eingang nur per GET ohne Body und folgt keiner Umleitung; die Texte für
+// keine Anmeldung, ungültigen User, abgelaufene Anmeldung und „nicht
 // erreichbar“ sind verschieden.
 func TestScriptFollowsDecisions(t *testing.T) {
 	js := file(t, "app.js")
 	for _, bad := range []string{"localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML",
 		"insertAdjacentHTML", "document.write", "eval(", "new Function", "location.href", "location.search", "location.hash",
-		"history.", "URLSearchParams", "console.", "XMLHttpRequest", "sendBeacon", "http://", "https://"} {
+		"history.", "URLSearchParams", "console.", "XMLHttpRequest", "sendBeacon", "http://", "https://",
+		`"POST"`, "body:", "keph_", "Authorization", "X-User"} {
 		if strings.Contains(js, bad) {
 			t.Errorf("app.js enthält %q", bad)
 		}
 	}
 	for _, want := range []string{
-		`/^keph_[A-Za-z0-9_-]{43}$/`,
-		`var WHOAMI = "gui/api/whoami";`,
-		`method: "POST"`,
-		`"Content-Type": "application/json"`,
+		`var USER_API = "gui/api/user";`,
+		`method: "GET"`,
 		`redirect: "manual"`,
-		`ev.preventDefault()`,
-		"Das ist kein Kephalaion-Token (die beginnen mit keph_). Gemeint ist nicht das",
-		"Account oder Token stimmt nicht. Wiederholte Fehlversuche können deinen",
+		`credentials: "same-origin"`,
+		`cache: "no-store"`,
+		`resp.type === "opaqueredirect"`,
+		`data.code === "unauthenticated"`,
+		`data.code === "invalid_user"`,
+		`data.code === "forbidden"`,
+		"Keine Anmeldung des Proxys: Der Hub hat zu dieser Anfrage keinen",
+		"Der Name deiner Anmeldung am Proxy ist am Hub kein gültiger User",
 		"Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.",
 		"Hub nicht erreichbar.",
 		"Fehler am Hub.",
+		"Du hast an diesem Hub noch keinen Account.",
+		"Dieser Account hat noch keine Collection.",
+		"gesperrt — die Rechte ruhen",
+		`"~/.config/kephalaion/tokens/<hub>/" + String(a.name) + ".token"`,
+		// Wen die Seite zeigt, sagt die Antwort; der angemeldete User ist
+		// nicht vorausgesetzt.
+		`var own = data.user === data.viewer;`,
+		`TEXT.otherTitle + data.user`,
 		// Die Scopes wie in der Kommandozeile, auch die Verzeichnis-Scopes.
 		`Array.isArray(rights.dirs) ? rights.dirs : []`,
 		`return "vendor/" + String(name);`,
@@ -201,13 +208,8 @@ func TestScriptFollowsDecisions(t *testing.T) {
 		}
 	}
 	// Genau ein fetch, und der geht an den Eingang der Seite.
-	if n := strings.Count(js, "fetch("); n != 1 || !strings.Contains(js, "fetch(WHOAMI, {") {
-		t.Errorf("app.js: %d Aufrufe von fetch, erwartet einen an WHOAMI", n)
-	}
-	// Der Hinweis auf die Sperre steht nur bei der 401 des Hubs, nicht bei
-	// der abgelaufenen Anmeldung.
-	if strings.Count(js, "sperren") != 1 {
-		t.Errorf("app.js nennt die Sperre %d-mal, erwartet einmal (nur bei 401 des Hubs)", strings.Count(js, "sperren"))
+	if n := strings.Count(js, "fetch("); n != 1 || !strings.Contains(js, "fetch(USER_API, {") {
+		t.Errorf("app.js: %d Aufrufe von fetch, erwartet einen an USER_API", n)
 	}
 }
 
@@ -218,7 +220,7 @@ func TestScriptFollowsDecisions(t *testing.T) {
 func TestStyle(t *testing.T) {
 	css := file(t, "style.css")
 	for _, want := range []string{"@media (prefers-color-scheme: dark)", "@media (max-width: 48rem)", "overflow-x: auto",
-		"overflow-wrap: break-word", "content: attr(data-label)", "[hidden]", "system-ui"} {
+		"overflow-wrap: break-word", "content: attr(data-label)", "[hidden]", "system-ui", ".badge.locked", ".resting"} {
 		if !strings.Contains(css, want) {
 			t.Errorf("style.css ohne %q", want)
 		}
@@ -230,7 +232,8 @@ func TestStyle(t *testing.T) {
 	}
 	// Die Spaltennamen für die schmale Ansicht setzt app.js als data-label.
 	js := file(t, "app.js")
-	for _, want := range []string{`setAttribute("data-label", label)`, `yesNo("Lesen", true)`, `"Schreiben (write)"`, `"Fremdes (supersede)"`, `cell("Scopes")`} {
+	for _, want := range []string{`setAttribute("data-label", label)`, `yesNo("Lesen", true, resting)`, `"Schreiben (write)"`,
+		`"Fremdes (supersede)"`, `cell("Scopes")`} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js ohne %s", want)
 		}

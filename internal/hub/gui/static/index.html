@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
-<title>Kephalaion – Zugriff eines Accounts</title>
+<title>Kephalaion – Accounts und Rechte</title>
 <link rel="icon" type="image/svg+xml" href="gui/icon.svg">
 <link rel="stylesheet" href="gui/style.css">
 <script src="gui/app.js" defer></script>
@@ -14,88 +14,35 @@
 <header class="top">
   <h1>Kephalaion</h1>
   <p class="meta">Version <span id="version">{{.Version}}</span> · Rolle hub</p>
+  <p id="viewer-line" class="meta viewer" hidden>angemeldet als <strong id="viewer"></strong></p>
 </header>
 
 <main>
-  <section id="ask" aria-labelledby="ask-title">
-    <h2 id="ask-title">Kephalaion-Token prüfen</h2>
-    <p>Gib deinen Kephalaion-Account und sein Account-Token ein. Die Seite prüft beides an
-    diesem Hub und zeigt, worauf der Account Zugriff hat.</p>
-
-    <div class="which">
-      <p><strong>Gemeint ist das Token deines Kephalaion-Accounts</strong> – das, was dein
-      Client (VS Code, Claude Code, …) als <code>X-Keph-Token-&lt;hub&gt;</code> schickt. Es
-      liegt meist unter <code>~/.config/kephalaion/tokens/&lt;hub&gt;/&lt;account&gt;.token</code>
-      und beginnt mit <code>keph_</code>.</p>
-      <p><strong>Nicht gemeint</strong> ist das Passwort, mit dem du dich an dieser Seite
-      angemeldet hast, und auch nicht das Token eines Nodes.</p>
+  <!-- Meldungen der Seite: laden, keine Anmeldung, abgelaufen, nicht erreichbar. -->
+  <section id="status" aria-live="polite">
+    <p id="message" class="message info">Lade die Accounts …</p>
+    <div class="actions">
+      <button type="button" id="reload" hidden>Seite neu laden</button>
     </div>
-
-    <!-- Abgeschickt wird nur per JavaScript (gui/app.js), als JSON im Body eines POST.
-         Der Knopf ist gesperrt, bis das Skript läuft; method=post hält das Token auch dann
-         aus der Adresse, wenn ein Browser das Formular doch selbst abschickte. -->
-    <form id="ask-form" method="post" autocomplete="off" novalidate>
-      <div class="field">
-        <label for="keph-account">Kephalaion-Account</label>
-        <input id="keph-account" name="keph-account" type="text" autocomplete="off"
-               autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="63">
-      </div>
-      <div class="field">
-        <label for="keph-account-token">Account-Token (keph_…)</label>
-        <div class="token-row">
-          <input id="keph-account-token" name="keph-account-token" type="password"
-                 autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
-                 aria-describedby="token-hint">
-          <button type="button" id="token-toggle" class="quiet" aria-pressed="false"
-                  aria-controls="keph-account-token">anzeigen</button>
-        </div>
-        <p id="token-hint" class="hint">Beginnt mit <code>keph_</code>. Nicht das Passwort
-        dieser Seite.</p>
-      </div>
-      <p id="message" class="message" role="alert" hidden></p>
-      <div class="actions">
-        <button type="submit" id="ask-submit" disabled>Zugriff anzeigen</button>
-        <button type="button" id="reload" class="quiet" hidden>Seite neu laden</button>
-      </div>
-    </form>
-
-    <p class="hint">Das Token geht nur für diese eine Prüfung an den Hub. Die Seite speichert
-    es nicht; nach einem Neuladen fragt sie erneut.</p>
-    <noscript><p class="message error">Diese Seite braucht JavaScript: Ohne prüft sie kein
-    Token und schickt nichts ab.</p></noscript>
+    <noscript><p class="message error">Diese Seite braucht JavaScript: Ohne lädt sie
+    keine Accounts.</p></noscript>
   </section>
 
   <section id="result" aria-labelledby="result-title" hidden>
-    <h2 id="result-title" tabindex="-1">Zugriff des Accounts</h2>
-    <p class="who">Account <strong id="result-account"></strong> · User
-    <strong id="result-user"></strong></p>
-    <p id="result-description" class="description" hidden></p>
+    <h2 id="result-title" tabindex="-1">Deine Accounts</h2>
+    <p class="lead">Alle Accounts des Users <strong id="result-user"></strong> an diesem Hub,
+    mit den Collections und Rechten. Die Seite kennt dich aus der Anmeldung am Proxy; sie
+    fragt kein Token ab und zeigt keins.</p>
 
-    <p id="result-empty" hidden>Dieser Account hat noch keine Collection.</p>
-    <div id="result-table" class="table-box" hidden>
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Collection</th>
-            <th scope="col">Lesen</th>
-            <th scope="col">Schreiben<span class="sub">Neues anlegen, Eigenes ändern
-            (<code>write</code>)</span></th>
-            <th scope="col">Fremdes<span class="sub">ändern, löschen, umbenennen
-            (<code>supersede</code>)</span></th>
-            <th scope="col">Scopes<span class="sub"><code>vendor/&lt;name&gt;</code>,
-            <code>dir &lt;pfad&gt;/</code></span></th>
-          </tr>
-        </thead>
-        <tbody id="result-rows"></tbody>
-      </table>
-    </div>
+    <p id="result-empty" class="message info" hidden></p>
+    <div id="accounts"></div>
 
     <div class="rules">
       <h3>Was die Rechte bedeuten</h3>
       <ul>
-        <li><strong>Lesen</strong> darf der Account in jeder Collection, die hier steht.</li>
+        <li><strong>Lesen</strong> darf ein Account in jeder Collection, die bei ihm steht.</li>
         <li><strong>Schreiben</strong> (<code>write</code>): Neues anlegen und Eigenes ändern,
-        löschen, umbenennen. Eigenes ist, was dein User angelegt hat.</li>
+        löschen, umbenennen. Eigenes ist, was der User des Accounts angelegt hat.</li>
         <li><strong>Fremdes</strong> (<code>supersede</code>): ändern, löschen und umbenennen,
         was ein anderer User angelegt hat. <code>write</code> ist dafür nicht nötig.</li>
         <li><strong>Scopes</strong>: Unter <code>vendor/&lt;name&gt;/</code> zählt allein der
@@ -108,13 +55,12 @@
         etwas: <code>write</code> und <code>supersede</code> gelten dort wie überall.
         <code>kephalaion node dir push</code> schreibt nur dorthin und unter
         <code>vendor/&lt;name&gt;/</code> — und ersetzt dort den ganzen Inhalt.</li>
+        <li><strong>Gesperrt</strong>: Ein gesperrter Account darf nichts, auch nicht lesen.
+        Seine Rechte sind gemerkt und ruhen; sie gelten wieder, sobald er entsperrt ist
+        (<code>kephalaion hub account unlock</code>, am Hub).</li>
       </ul>
       <p class="hint">Über einen Node siehst du davon nur die Collections, die dieser Node
       abgleicht (<code>kephalaion node whoami</code>).</p>
-    </div>
-
-    <div class="actions">
-      <button type="button" id="again">Anderes Token prüfen</button>
     </div>
   </section>
 </main>
