@@ -37,6 +37,21 @@ LDFLAGS = -s -w -X $(BUILDINFO).Version=$(VERSION) -X $(BUILDINFO).Commit=$(COMM
 
 .PHONY: help build test check check-quick check-toolchain race cover mutate dist dist-host dev-install vscode-test vscode-vsix vscode-install clean
 
+# Die Erweiterung für VS Code steckt im Binary (internal/vscodeext, go:embed).
+# vscode-vsix baut sie mit vsce in fester Fassung per npx (braucht Node.js und
+# beim ersten Mal Netz) und legt sie in das Verzeichnis, das go:embed nimmt.
+VSCODE_DIR := vscode
+VSCE := @vscode/vsce@4.0.0
+VSCODE_EMBED := internal/vscodeext/vsix/kephalaion.vsix
+# Die Version der Erweiterung ist die des Binarys: vX.Y.Z und vX.Y.Z-… werden
+# X.Y.Z (VS Code nimmt nur x.y.z; vsce prüft das nicht), alles andere — der
+# dev build — 0.0.0. vscode/package.json bleibt auf 0.0.0, die Version geht
+# als Argument an vsce.
+VSCODE_VERSION = $(or $(shell printf '%s\n' '$(VERSION)' | sed -nE 's/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-.*)?$$/\1.\2.\3/p'),0.0.0)
+# REQUIRE_VSCODE=1: fehlt Node.js oder scheitert vsce, bricht der Bau ab
+# (Release, CI); sonst nur eine Warnung und ein Binary ohne Erweiterung.
+REQUIRE_VSCODE ?=
+
 help: ## Zeigt diese Hilfe an
 	@echo "Targets:"
 	@echo ""
@@ -45,6 +60,7 @@ help: ## Zeigt diese Hilfe an
 	@echo ""
 	@echo "Parameter:"
 	@echo "  VERSION=v0.1.0            Version im Binary, sonst dev"
+	@echo "  REQUIRE_VSCODE=1          ohne Erweiterung für VS Code nicht bauen (Release, CI)"
 	@echo "  MUTATE=./internal/ident   make mutate nur für dieses Paket"
 	@echo ""
 
@@ -63,12 +79,12 @@ endef
 
 build: dist-host ## Alias für dist-host
 
-dist-host: ## Baut nur das Binary dieser Plattform nach ./dist/
+dist-host: vscode-vsix ## Baut nur das Binary dieser Plattform nach ./dist/
 	$(call build_binaries,$(HOST_TARGET))
 
 # dist räumt vorher auf: SHA256SUMS soll genau die vier Binaries dieses Laufs
 # decken, keine Reste eines früheren.
-dist: ## Baut alle vier Plattformen nach ./dist/ und schreibt SHA256SUMS
+dist: vscode-vsix ## Baut alle vier Plattformen nach ./dist/ und schreibt SHA256SUMS
 	@rm -rf "$(DIST_DIR)"
 	$(call build_binaries,$(RELEASE_TARGETS))
 	@set -eu; \
@@ -209,26 +225,47 @@ dev-install: dist-host ## Baut diese Plattform, ersetzt ~/.local/bin/kephalaion,
 	    fi ;; \
 	  esac
 
-# Die Erweiterung: Version aus vscode/package.json, gebaut mit vsce per npx
-# (braucht Node.js). Die .vsix landet in ./dist/ neben den Binaries.
-VSCODE_DIR := vscode
-VSCODE_VSIX = $(DIST_DIR)/$(BINARY)-$(shell node -p "require('./$(VSCODE_DIR)/package.json').version").vsix
-
 # Die Regeln der Erweiterung (vscode/rules.js: Adresse, Wahl der Hubs, Antworten eines Proxys)
 # prüft node --test ohne VS Code. make check ruft es mit, wenn Node.js da ist.
 vscode-test: ## Tests der Regeln der Erweiterung für VS Code (braucht Node.js)
 	node --test $(VSCODE_DIR)/test/*.test.js
 
-vscode-vsix: ## Baut die VS-Code-Erweiterung nach ./dist/ (braucht Node.js)
-	@mkdir -p "$(DIST_DIR)"
-	cd "$(VSCODE_DIR)" && npx --yes @vscode/vsce package --skip-license --out "$(abspath $(VSCODE_VSIX))"
+# Fehlt Node.js oder scheitert vsce (etwa ohne Netz), entfernt vscode-vsix eine
+# liegende .vsix, warnt und endet mit 0: build, dist und dev-install bauen dann
+# ein Binary ohne Erweiterung, das das selbst sagt. Mit REQUIRE_VSCODE=1 ist
+# beides ein Abbruch. Grenze: Ein schlichtes go build nach einem make bettet
+# die liegende .vsix ein (mit der Version jenes Laufs); make clean räumt sie weg.
+vscode-vsix: ## Baut die Erweiterung für VS Code mit der Version aus VERSION zum Einbetten (braucht Node.js)
+	@set -eu; \
+	  out="$(VSCODE_EMBED)"; \
+	  part="$${out%.vsix}.part.vsix"; \
+	  rm -f "$$out" "$$part"; \
+	  fail() { \
+	    if [ "$(REQUIRE_VSCODE)" = 1 ]; then \
+	      printf 'Fehler: %s — mit REQUIRE_VSCODE=1 kein Binary ohne Erweiterung für VS Code.\n' "$$1" >&2; \
+	      exit 1; \
+	    fi; \
+	    printf 'Warnung: %s — das Binary wird ohne Erweiterung für VS Code gebaut.\n' "$$1" >&2; \
+	    exit 0; \
+	  }; \
+	  command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1 || fail "node fehlt"; \
+	  echo "Baue Erweiterung für VS Code $(VSCODE_VERSION) ($$out)"; \
+	  if ! (cd "$(VSCODE_DIR)" && npx --yes $(VSCE) package "$(VSCODE_VERSION)" \
+	    --no-update-package-json --skip-license --out "$(abspath $(VSCODE_EMBED:.vsix=.part.vsix))"); then \
+	    rm -f "$$part"; \
+	    fail "vsce ist gescheitert"; \
+	  fi; \
+	  mv -f "$$part" "$$out"
 
 # code aus einem Terminal der WSL, eines SSH-Remotes oder Devcontainers
 # installiert in den VS-Code-Server dort — dorthin gehört eine Erweiterung der
-# Art workspace. --force: auch bei gleicher Version ersetzen.
-vscode-install: vscode-vsix ## Baut die Erweiterung und installiert sie mit code; danach „Developer: Reload Window“
-	code --install-extension "$(VSCODE_VSIX)" --force
+# Art workspace. --force: auch bei gleicher oder höherer Version ersetzen. Für
+# die Entwicklung; sonst kephalaion vscode install.
+vscode-install: ## Baut die Erweiterung und installiert sie mit code (Entwicklung); danach „Developer: Reload Window“
+	@$(MAKE) --no-print-directory vscode-vsix REQUIRE_VSCODE=1
+	code --install-extension "$(VSCODE_EMBED)" --force
 	@echo 'In VS Code: „Developer: Reload Window“'
 
-clean: ## Entfernt ./dist/ und ./coverage/
+clean: ## Entfernt ./dist/, ./coverage/ und die eingebettete .vsix
 	rm -rf "$(DIST_DIR)" "$(COVER_DIR)"
+	rm -f "$(VSCODE_EMBED)" "$(VSCODE_EMBED:.vsix=.part.vsix)"

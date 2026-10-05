@@ -12,6 +12,9 @@
 # Build-Ausgabe von make dist
 /dist/
 
+# Die Erweiterung für VS Code zum Einbetten, gebaut von make vscode-vsix
+/internal/vscodeext/vsix/*.vsix
+
 # Abdeckung aus make cover
 /coverage/
 
