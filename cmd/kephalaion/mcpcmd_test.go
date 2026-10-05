@@ -270,6 +270,17 @@ func TestNodeMCPVSCode(t *testing.T) {
 	}
 }
 
+// 0.0.0 ist ein dev build, nie zu alt; auch Cursor zählt.
+func TestNodeMCPVSCodeDevBuild(t *testing.T) {
+	e := newMCPEnv(t)
+	dev := filepath.Join(e.home, ".cursor-server", "extensions", "kascada.kephalaion-0.0.0")
+	if err := os.MkdirAll(dev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mcp(t, "status", "--assistant", "vscode").want(t, 0,
+		"vscode: über die Erweiterung — Erweiterung installiert ("+dev+", dev build)")
+}
+
 // Ein Assistent, der nicht im PATH liegt, wird übergangen und genannt — kein
 // Fehler. Ein Fehler bei einem Assistenten hält die anderen nicht auf.
 func TestNodeMCPNotFoundAndErrors(t *testing.T) {

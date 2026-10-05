@@ -41,6 +41,9 @@ Kommandos:
               ihre Datenbank liegt und ob der Dienst läuft
   config      zeigt, setzt, sichert und stellt die Einstellungen wieder her
               (show, set, unset, export, import)
+  vscode      installiert die eingebettete Erweiterung für VS Code (auch
+              Cursor, VSCodium, Insiders), schreibt sie als Datei und zeigt
+              die installierten Fassungen (install, vsix, status)
 
 Hilfe zu einem Kommando: kephalaion <kommando> --help
 
@@ -76,6 +79,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runService(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "vscode":
+		return runVSCode(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "Unbekanntes Kommando: %s\n\n", args[0])
 		fmt.Fprint(stderr, usage)
@@ -93,4 +98,5 @@ func printVersion(w io.Writer) {
 	fmt.Fprintf(w, "  Commit:    %s\n", commit)
 	fmt.Fprintf(w, "  Go:        %s\n", info.GoVersion)
 	fmt.Fprintf(w, "  Plattform: %s\n", info.Platform())
+	fmt.Fprintf(w, "  VS Code:   Erweiterung %s\n", embeddedText())
 }
