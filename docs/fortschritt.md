@@ -3,8 +3,8 @@
 Stand: 2026-10-05 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
-ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — die
-Abnahme auf der VM ersetzt die von 020 und ist Nacharbeit des Nutzers)
+ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
+eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die Abnahme von 020)
 
 ## So wird diese Datei aktualisiert
 
@@ -316,15 +316,18 @@ Abnahme auf der VM ersetzt die von 020 und ist Nacharbeit des Nutzers)
   - Tests: `internal/hub/gui` (alle Codes, gesperrter Account, User ohne Account, kein Hash,
     eigener Viewer), `TestServeHubListener`, `TestGUIBehindPrefix` (Stellvertreter, der
     `X-User` setzt; über den Hub-Block erreicht `X-User` den Eingang nicht).
-    Abnahme auf der VM: siehe „Zu testen“.
+    Auf der VM eingespielt am 2026-10-05 (dev 1689ed9, enthält Task 027) und abgenommen bis auf
+    die Ansicht mit eigener Sitzung: siehe „Zu testen“.
 
 ## In Arbeit
 
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
   `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“ (mit `/kephalaion/hub` und
   `uri strip_prefix /kephalaion`); siehe „Zu testen“.
-- **Task 026 — Abnahme der Weboberfläche auf der VM:** Nacharbeit des Nutzers (das Binary
-  kommt nur nach Rückfrage auf die VM), Schritte unter „Zu testen“. Sie ersetzt die offenen
+- **Task 026 — Abnahme der Weboberfläche auf der VM:** eingespielt am 2026-10-05 und von der KI
+  abgenommen (Punkte 2–4 unter „Zu testen“, die Seite über Caddy und authproxy mit einem
+  Probenutzer); offen nur Punkt 1, die eigenen Accounts im Browser mit Sitzung als `kamran` bzw.
+  `gabriel` (Nutzer). Sie ersetzt die offenen
   Schritte der Abnahme von Task 020 (G2–G5, G7 in `~/dev/vm/kephalaion/README.md`, „Abnahme der
   Weboberflaeche“): Die Abfrage des Account-Tokens gibt es nicht mehr.
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM:** Nacharbeit des Nutzers, Schritte
@@ -475,9 +478,9 @@ Abnahme auf der VM ersetzt die von 020 und ist Nacharbeit des Nutzers)
   „Abnahme von Task 021“: `grant kamran-wsl test --write --vendor test-docs --dir test-docs`,
   `node sync vm`, `node dir push vm:test test-docs ./docs`, `push` an die Wurzel abgelehnt.
   Lokal belegt im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`).
-- **Task 026 — Abnahme der Weboberfläche auf der VM** (Nacharbeit des Nutzers; das Binary
-  kommt nur nach Rückfrage auf die VM). Keine neue Schemafassung: Binary ersetzen und Dienst
-  neu starten genügt. Caddy steht schon wie die Vorlage in `installation.md` (`request_header
+- **Task 026 — Abnahme der Weboberfläche auf der VM** (eingespielt am 2026-10-05 16:14, dev
+  1689ed9 mit Task 027; Punkte 2–4 abgenommen, Punkt 1 offen für den Nutzer). Keine neue
+  Schemafassung: Binary ersetzen und Dienst neu starten genügt. Caddy steht schon wie die Vorlage in `installation.md` (`request_header
   -X-User` u. a. für die ganze Site seit 2026-10-05, `copy_headers X-User X-User-Email` im
   `route` von `handle /kephalaion/*`). Keine der Proben erzeugt eine 401:
   1. Im Browser mit Sitzung als `kamran` `https://<name>/kephalaion/` → „angemeldet als
@@ -496,6 +499,16 @@ Abnahme auf der VM ersetzt die von 020 und ist Nacharbeit des Nutzers)
 
   Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter für Caddy mit
   authproxy): `material/befunde/gui.md`, Abschnitt vom 2026-10-05.
+
+  **Abgenommen am 2026-10-05 (KI):** 2, 3 und 4 wie beschrieben, dazu `X-User` doppelt bzw.
+  `admin` → 403 `unauthenticated` bzw. `invalid_user`, fremder und leerer `name` → 403
+  `forbidden`, `POST` → 405; keine 401 am Hub und bei Caddy, fail2ban ohne Sperre. Die Seite im
+  Browser (Playwright) über Caddy und authproxy mit dem Probenutzer `probe026` (nur Dienst
+  `kephalaion`, danach gelöscht): „angemeldet als probe026“, „Deine Accounts“, „noch keinen
+  Account“, Konsole leer; fremder `name` per `fetch` → 403, nur der Eintrag des Browsers; CSP
+  und `no-referrer` an der Seite; 375 px ohne waagrechtes Scrollen, dunkles Schema; ohne Cookie
+  `opaqueredirect` (302 des authproxy), Neuladen führt zur Anmeldung. **Offen: Punkt 1** — die
+  eigenen Accounts sieht nur, wer mit eigener Sitzung anmeldet.
 - **Task 020 — Abnahme der Weboberfläche auf der VM: abgelöst durch Task 026.** Ausgeführt
   waren G1 und G6 (Befund `material/befunde/gui.md`); die Schritte mit Account-Token (G2–G5,
   G7 in `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“) gelten nicht mehr — die
