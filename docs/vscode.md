@@ -1,6 +1,6 @@
 ---
 title: Kephalaion — VS Code
-description: Erweiterung, die Collections über einen FileSystemProvider als Ordner in VS Code zeigt — lesen aus der Replica, schreiben über den Node am Hub; Ablauf, benötigte Werkzeuge, Status, Sprachen, Installation ohne Marketplace, gemeinsames Release, Ergebnis des Versuchs und Fundstellen.
+description: Erweiterung, die Collections über einen FileSystemProvider als Ordner in VS Code zeigt — lesen aus der Replica, schreiben über den Node am Hub; Ablauf, benötigte Werkzeuge, Status, Sprachen, Installation ohne Marketplace (`kephalaion vscode install`), eingebettet ins Binary mit gleicher Version, Ergebnis des Versuchs und Fundstellen.
 ---
 
 # Kephalaion in VS Code
@@ -267,8 +267,8 @@ Erweiterung auch an einem älteren Node richtig. Geprüft mit `node --test`
 **Eine ältere Erweiterung (bis 0.0.7) an einem neuen Node** zeigt in einer geöffneten Datei
 statt des Textes das JSON der Struktur (`{"address":…,"content":"…",…}`). **Nicht
 speichern:** Speichern schickte dieses JSON als Inhalt an den Hub und überschriebe das
-Dokument. Erst die Erweiterung aktualisieren (`make vscode-install` bzw. die `.vsix` des
-Releases), dann „Developer: Reload Window“. Eine eigene Prüfung dagegen gibt es nicht: Binary
+Dokument. Erst die Erweiterung aktualisieren (`kephalaion vscode install`), dann „Developer: Reload
+Window“. Eine eigene Prüfung dagegen gibt es nicht: Binary
 und Erweiterung erscheinen zusammen, und der Fehler ist vor dem Speichern sichtbar.
 
 Nach dem Update des Nodes braucht auch Copilot „Developer: Reload Window“: VS Code kennt sonst
@@ -329,45 +329,70 @@ Installation).
 
 ## Installation — ohne Marketplace
 
-Der Marketplace ist nicht nötig. Eine Erweiterung ist eine Datei `.vsix` und lässt sich lokal
-installieren:
+Der Marketplace ist nicht nötig. Die Erweiterung steckt im Binary (Task 027) und installiert
+sich mit einem Befehl, **als eigener User, nicht über sudo**:
 
 ```sh
-code --install-extension kephalaion-0.3.0.vsix
+kephalaion vscode install                # VS Code; sonst das einzige Editor-CLI im PATH
+kephalaion vscode install --code cursor  # Cursor; ebenso codium, code-insiders
 ```
 
-oder in VS Code über „Extensions: Install from VSIX…“. Unter WSL installiert `code` aus einem
-Terminal der WSL in den VS-Code-Server der WSL, also dorthin, wo eine Erweiterung der Art
-`workspace` hingehört — bestätigt am 2026-09-26: `code` meldet dabei „Installing extensions on
-WSL: Ubuntu…“. Cursor und VSCodium nehmen dieselbe Datei.
+`install` schreibt die eingebettete `.vsix` in eine temporäre Datei und ruft `<cli>
+--install-extension <datei> --force` — immer neu, auch über eine höhere Fassung. Ohne `--code`
+nimmt es `code`, wenn es im `PATH` ist, sonst das einzige von `code-insiders`, `cursor`,
+`codium`; sind es mehrere oder keins, bricht es ab und nennt die gefundenen. Danach im Editor
+„Developer: Reload Window“. Ohne CLI im `PATH` (etwa ein Editor ohne Shell-Befehl):
 
-Was ohne Marketplace fehlt: automatische Updates. Die übernimmt das gemeinsame Release (unten).
+```sh
+kephalaion vscode vsix -o kephalaion.vsix
+```
+
+und im Editor „Extensions: Install from VSIX…“. `kephalaion vscode status` zeigt die
+eingebettete Version und die installierten Fassungen je Editor (VS Code, Insiders, Cursor,
+VSCodium, samt ihrer Remote-Server-Verzeichnisse wie `~/.vscode-server`, `~/.cursor-server`).
+Ein Binary, das ohne Node.js gebaut ist, trägt keine Erweiterung und sagt das (`kephalaion
+version`, `vscode status`; `install` und `vsix` enden mit Exit 1).
+
+Unter WSL installiert `code` aus einem Terminal der WSL in den VS-Code-Server der WSL, also
+dorthin, wo eine Erweiterung der Art `workspace` hingehört — bestätigt am 2026-09-26: `code`
+meldet dabei „Installing extensions on WSL: Ubuntu…“. Dasselbe gilt für ein SSH-Remote und
+einen Devcontainer; root ohne sudo (etwa im Devcontainer) installiert normal.
+
+**Einmal beim Übergang:** Das erste `kephalaion upgrade` auf eine Fassung mit eingebetteter
+Erweiterung läuft noch mit dem alten Binary, das die Erweiterung nicht anfasst. Danach einmal
+von Hand `kephalaion vscode install`; jedes weitere `upgrade` erneuert sie selbst.
+
+Für die Entwicklung im Quell-Repo baut `make vscode-install` die Erweiterung aus `vscode/` und
+installiert sie mit `code`.
 
 ## Ein Repository, ein Release
 
-**Entschieden am 2026-09-26: Die Erweiterung liegt in diesem Repository und wird mit dem
-Binary zusammen veröffentlicht, unter derselben Version.** Ein Release erneuert beide, auch
-wenn sich nur eines geändert hat. Bei wenigen Nutzern ist das unkritisch; bei vielen Nutzern
-lässt es sich später trennen.
+**Entschieden am 2026-09-26, umgesetzt mit Task 027 (2026-10-05): Die Erweiterung liegt in
+diesem Repository, steckt im Binary (`go:embed`, `internal/vscodeext`) und trägt dessen
+Version.** Ein Release erneuert beide, auch wenn sich nur eines geändert hat.
 
-- **Gleiche Version heißt: kein Abgleich von Versionen zwischen Erweiterung und Node.** Die
-  Erweiterung fragt beim Start die Version des Nodes ab (`whoami`) und weist auf einen
-  Unterschied hin, statt Kompatibilitäten zu verwalten.
-- **Verzeichnis:** etwa `vscode/` im Repository, mit eigenem `package.json`. Der Build
-  braucht Node.js und `@vscode/vsce`; das kommt zur CI hinzu.
-- **Auslieferung, zwei Möglichkeiten:**
-  - als eigenes Asset `kephalaion-<version>.vsix` am Release, neben den Binaries und in
-    `SHA256SUMS`;
-  - oder **ins Binary eingebettet** (`go:embed`, eine `.vsix` ist klein) mit einem Befehl
-    wie `kephalaion vscode install`, der sie auspackt und `code --install-extension`
-    aufruft. Dann bringt `kephalaion upgrade` die passende Erweiterung gleich mit, und es gibt
-    nur eine Datei zu verteilen. Der Go-Build hängt dann vom Bau der Erweiterung ab
-    (Makefile).
-  - Neigung: eingebettet — ein Binary, eine Version, ein Upgrade.
-- **Vorabversionen:** `vsce` nimmt nach bisheriger Kenntnis keine Version mit Suffix
-  (`0.3.0-rc1`) an, sondern nur `major.minor.patch` und kennzeichnet Vorabversionen über
-  einen Schalter. Beim Bau zu prüfen, wie ein Tag `v0.3.0-rc1` auf die Version der
-  Erweiterung abgebildet wird.
+- **Version:** Tag `vX.Y.Z` → `X.Y.Z`, Vorabversion `vX.Y.Z-…` → `X.Y.Z` (VS Code nimmt nur
+  `x.y.z`; `vsce` prüft das nicht), dev build → `0.0.0`. `make vscode-vsix` gibt sie `vsce`
+  als Argument; `vscode/package.json` steht fest auf `0.0.0`, die Nummer pflegt niemand von
+  Hand.
+- **Kein Abgleich von Versionen:** Die Erweiterung vergleicht die Version aus `whoami` mit
+  ihrer eigenen und weist einmal je Sitzung auf einen Unterschied hin, mit `kephalaion vscode
+  install` (für Cursor usw. mit `--code`). Ist eine Seite ein dev build (`dev` bzw. `0.0.0`),
+  kein Hinweis.
+- **`upgrade` installiert neu, statt zu vergleichen:** Nach dem Ersetzen des Binarys und dem
+  Neustart des Dienstes ruft `kephalaion upgrade` das **neue** Binary mit `vscode install
+  --code <cli>` auf — je Editor, in dem die Erweiterung installiert ist, einmal. Fehlt das CLI
+  im `PATH` (typisch: SSH-Shell ohne `code`), ein Hinweis; scheitert es, eine Warnung mit dem
+  Befehl von Hand. Der Exit-Code des Upgrades ändert sich dadurch nie. Bei der globalen
+  Installation und unter sudo installiert `upgrade` nichts und nennt nur `kephalaion vscode
+  install` als eigener User.
+- **Bauen:** `make build`, `dist` und `dev-install` bauen die `.vsix` mit `vsce` (gepinnt, per
+  `npx`) und brauchen dafür Node.js. Fehlt es oder scheitert `vsce`, nur eine Warnung und ein
+  Binary ohne Erweiterung; mit `REQUIRE_VSCODE=1` (Release, CI) ein Abbruch. `make
+  vscode-verify` weist am gebauten Binary nach, dass es die Erweiterung mit der richtigen
+  Version trägt; Release und CI rufen es. `go build` und `go test ./...` laufen weiter ohne
+  Node.js. Grenze: Ein schlichtes `go build` nach einem `make` bettet die liegende `.vsix`
+  ein; `make clean` räumt sie weg.
 
 ## Suche: bewusst nicht
 

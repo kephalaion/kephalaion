@@ -67,6 +67,7 @@ dem Release. Alles Weitere, auch für Ansible und KI, steht in
 curl -fsSL https://github.com/kephalaion/kephalaion/releases/latest/download/install.sh | sh
 kephalaion node init          # Rollen einrichten, siehe „Einrichten“
 kephalaion service install    # Dienst: systemd --user bzw. LaunchAgent, startet serve
+kephalaion vscode install     # Erweiterung für VS Code (Cursor usw.: --code cursor), siehe „VS Code“
 ```
 
 Das Skript lädt das Binary der Plattform und `SHA256SUMS` aus dem neuesten Release, prüft die
@@ -106,6 +107,10 @@ unverändert. Vorabversionen (`v0.2.0-rc1`) und ältere Versionen gibt es nur mi
 ebenso das Ersetzen eines selbst gebauten `dev`-Binarys. Darf der Aufrufer das Binary nicht
 ersetzen, bricht `upgrade` vor dem Download ab und nennt den Weg — global macht das Upgrade
 der Verwalter: Ansible oder `sudo kephalaion upgrade && sudo systemctl restart kephalaion`.
+Danach installiert das neue Binary seine Erweiterung für VS Code neu, wo sie installiert ist;
+scheitert das, bleibt es bei einer Warnung. Einmal beim Übergang: Das erste `upgrade` auf eine
+Fassung mit eingebetteter Erweiterung läuft noch mit dem alten Binary — danach einmal
+`kephalaion vscode install`.
 Ob es eine neue Version gibt, meldet auch das MCP-Werkzeug `whoami` (Feld `update`); `serve`
 fragt GitHub dafür höchstens einmal am Tag. Ohne Anmeldung erlaubt die GitHub-API 60
 Anfragen je Stunde.
@@ -691,19 +696,22 @@ Die Erweiterung unter [`vscode/`](vscode/) zeigt Collections als Ordner im Explo
 (`keph://<hub>/<collection>/…`) und den Stand des Nodes in der Statusleiste. Sie spricht mit
 dem Node über MCP wie jeder andere Client. Hintergrund: [`docs/vscode.md`](docs/vscode.md).
 
-Noch nicht Teil der Installation; bis dahin aus dem Repository bauen, ohne Marketplace. Unter
-WSL aus einem Terminal der WSL — dann landet sie im VS-Code-Server der WSL, wo sie laufen
-muss (`extensionKind: workspace`):
+Sie steckt im Binary und trägt seine Version; installiert wird sie als eigener User, nicht über
+sudo, ohne Marketplace. Unter WSL, auf einem SSH-Remote oder im Devcontainer aus einem
+Terminal dort — dann landet sie im Server des Editors, wo sie laufen muss (`extensionKind:
+workspace`):
 
 ```sh
-make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie mit code
+kephalaion vscode install                # VS Code; sonst das einzige Editor-CLI im PATH
+kephalaion vscode install --code cursor  # Cursor; ebenso codium, code-insiders
+kephalaion vscode status                 # eingebettete und installierte Fassungen
+kephalaion vscode vsix -o kephalaion.vsix  # nur die Datei, für „Extensions: Install from VSIX…“
 ```
 
-Danach „Developer: Reload Window“. Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce`
-kommt per `npx`). Auf einem SSH-Remote gehört sie ebenso dorthin, wo der Node läuft: dort aus
-einem Terminal von VS Code installieren. In einem Devcontainer läuft sie im Container; wie sie
-dort einen Node erreicht, ist noch nicht gebaut ([`docs/konzept.md`](docs/konzept.md),
-„Devcontainer“).
+Danach „Developer: Reload Window“. `kephalaion upgrade` erneuert sie mit. Weicht ihre Version
+von der des Nodes ab, weist sie einmal je Sitzung darauf hin. In einem Devcontainer läuft sie
+im Container; wie sie dort einen Node erreicht, ist noch nicht gebaut
+([`docs/konzept.md`](docs/konzept.md), „Devcontainer“).
 
 - **Einrichtung braucht sie keine.** Die Adresse des Nodes liest sie aus `listen` im
   Abschnitt `node:` der config (Einstellung `kephalaion.nodeUrl` zum Überschreiben), Account
@@ -751,9 +759,14 @@ make check          # gofmt, go vet, alle Tests, Syntax von install.sh
 make check-quick    # dasselbe ohne die langsamen Tests (go test -short), für Zwischenstände
 make dist           # alle vier Plattformen und SHA256SUMS nach dist/
 make dev-install    # diese Plattform bauen, ~/.local/bin/kephalaion ersetzen, laufenden Dienst neu starten
-make vscode-install # VS-Code-Erweiterung bauen und mit code installieren (braucht Node.js)
+make vscode-install # VS-Code-Erweiterung bauen und mit code installieren (Entwicklung)
 make                # alle Targets
 ```
+
+`make build`, `dist` und `dev-install` bauen die Erweiterung für VS Code mit `vsce` (per `npx`)
+und betten sie ein; dafür braucht es Node.js. Ohne Node.js nur eine Warnung und ein Binary ohne
+Erweiterung, mit `REQUIRE_VSCODE=1` (Release, CI) ein Abbruch. `go build` und `go test ./...`
+laufen ohne Node.js.
 
 CI prüft jeden Push auf `dev` und `main` auf Linux (samt Cross-Build aller vier Plattformen
 und shellcheck): `dev` nur mit den schnellen Tests (`make check-quick`), `main` und Pull
@@ -767,8 +780,8 @@ Release-Stand. Gearbeitet wird auf `dev` — nach dem Klonen `git switch dev`.
 Ein Release entsteht mit `make -C k-playbook-local release VERSION=vX.Y.Z`: Es prüft `dev`
 (gepusht, ein vollständiger CI-Lauf für genau diesen Stand grün — fehlt er, stößt es ihn an
 und wartet darauf), schiebt `main` per Fast-Forward darauf und pusht den Tag. Aus dem Tag
-`v*` baut `.github/workflows/release.yml` das Release und veröffentlicht es mit den Binaries,
-`SHA256SUMS` und `install.sh`.
+`v*` baut `.github/workflows/release.yml` das Release und veröffentlicht es mit den Binaries
+(samt eingebetteter Erweiterung für VS Code), `SHA256SUMS` und `install.sh`.
 
 ## Lizenz
 

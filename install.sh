@@ -199,6 +199,33 @@ next_steps() {
 	say "                                (systemd --user bzw. LaunchAgent)"
 	say "  kephalaion node mcp add       nach dem ersten Account: den Node bei den"
 	say "                                KI-Assistenten anmelden (Claude Code, OpenCode, Codex)"
+	vscode_step
+}
+
+# vscode_step: eine Zeile zur Erweiterung für VS Code, nur wenn ein Editor-CLI
+# im PATH ist. Dieselbe Wahl wie kephalaion vscode install ohne --code: code,
+# sonst das einzige der anderen; sind es mehrere, nennt die Zeile --code.
+vscode_step() {
+	if command -v code >/dev/null 2>&1; then
+		say "  kephalaion vscode install     die Erweiterung für VS Code installieren"
+		return 0
+	fi
+	found=""
+	for cli in code-insiders cursor codium; do
+		if command -v "$cli" >/dev/null 2>&1; then
+			found="${found:+$found, }$cli"
+		fi
+	done
+	case "$found" in
+	"") ;;
+	*", "*)
+		say "  kephalaion vscode install --code <cli>"
+		say "                                die Erweiterung installieren ($found)"
+		;;
+	*)
+		say "  kephalaion vscode install     die Erweiterung für $found installieren"
+		;;
+	esac
 }
 
 # register_assistants: der automatische Anstoß bei den KI-Assistenten. Ob es

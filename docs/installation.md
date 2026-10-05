@@ -76,6 +76,20 @@ geladene Datei trägt die Quarantäne-Markierung, und macOS verweigert das nicht
 Binary. `~/.local/bin` steht auf macOS meist nicht im `PATH`; `install.sh` nennt die Zeile
 für `~/.zshrc`.
 
+### Erweiterung für VS Code
+
+Die Erweiterung steckt im Binary und trägt seine Version. Als eigener User, nicht über sudo:
+
+```sh
+kephalaion vscode install                # VS Code; Cursor, VSCodium, Insiders: --code cursor usw.
+kephalaion vscode status                 # eingebettete und installierte Fassungen
+```
+
+Danach im Editor „Developer: Reload Window“. Unter WSL, über SSH oder im Devcontainer aus einem
+Terminal dort aufrufen, dann landet sie im Server des Editors. Ohne Editor-CLI im `PATH`:
+`kephalaion vscode vsix -o kephalaion.vsix` und „Extensions: Install from VSIX…“. Einzelheiten
+in [`vscode.md`](vscode.md), „Installation — ohne Marketplace“.
+
 ### Rollen einrichten
 
 Hub und Node werden je mit einem Aufruf eingerichtet, ohne Rückfragen und nie überschreibend
@@ -146,8 +160,14 @@ kephalaion upgrade --version v0.2.0 # genau diese Version, auch zurück; nötig 
 `upgrade` prüft die Prüfsumme gegen `SHA256SUMS` und ersetzt das Binary atomar; scheitert
 etwas, bleibt das alte unverändert. Danach startet es einen laufenden Dienst pro User neu
 (`systemctl --user restart kephalaion.service` bzw. `launchctl kickstart -k
-gui/<uid>/io.github.kephalaion`). Was `--check` meldet, steht unten unter „Upgrade: was
-Kephalaion meldet“.
+gui/<uid>/io.github.kephalaion`). Danach installiert das neue Binary seine Erweiterung für
+VS Code neu, in jedem Editor, in dem sie installiert ist (`kephalaion vscode install --code
+<cli>`); scheitert das, bleibt es bei einer Warnung, der Exit-Code ändert sich nicht. Was
+`--check` meldet, steht unten unter „Upgrade: was Kephalaion meldet“.
+
+**Einmal beim Übergang:** Das erste `upgrade` auf eine Fassung mit eingebetteter Erweiterung
+läuft noch mit dem alten Binary, das die Erweiterung nicht anfasst — danach einmal `kephalaion
+vscode install`.
 
 ### Installation pro User entfernen
 

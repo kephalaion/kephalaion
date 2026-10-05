@@ -48,7 +48,8 @@ Assistenten (--assistant, gefunden über PATH):
             Rest der Datei bleibt, auch Kommentare. Die Header holt Codex je
             Verbindung über den Helfer (http_headers_helper)
   vscode    VS Code mit Copilot: Hier trägt node mcp nichts ein — den Node
-            meldet die Erweiterung für VS Code
+            meldet die Erweiterung für VS Code; sie installiert
+            kephalaion vscode install
 
 Kommandos:
   add      trägt den Node bei jedem gefundenen (oder genannten) Assistenten

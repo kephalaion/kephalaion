@@ -583,18 +583,28 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **prerelease** (Vorabversion) — ein Release, dessen Tag ein Suffix trägt
   (`v0.2.0-rc1`). Nie `latest`; nur ausdrücklich per Version zu erreichen.
 - **dev build** (Entwicklungs-Build) — ein Binary, das nicht aus einem Release stammt. Trägt
-  die Version `dev`, dazu den Commit aus `git describe`.
-- **version** — `kephalaion version`: zeigt Version, Commit, Go-Version und Plattform.
+  die Version `dev`, dazu den Commit aus `git describe`; seine eingebettete Erweiterung für
+  VS Code trägt `0.0.0`.
+- **version** — `kephalaion version`: zeigt Version, Commit, Go-Version, Plattform und die
+  Version der eingebetteten Erweiterung für VS Code.
+- **vscode** — `kephalaion vscode`: die Erweiterung für VS Code, eingebettet im Binary mit
+  dessen Version (`vX.Y.Z[-…]` → `X.Y.Z`). `install [--code <cli>]` installiert sie mit dem CLI
+  des Editors (`code`, `code-insiders`, `cursor`, `codium`) und `--force`, als eigener User,
+  nie über sudo; `vsix -o <datei>` schreibt nur die Datei; `status` zeigt die eingebettete und
+  die installierten Fassungen je Editor. Ein Binary **ohne Erweiterung gebaut** (ohne
+  Node.js) sagt das.
 - **upgrade** — `kephalaion upgrade`: ersetzt das laufende Binary durch das Binary eines
   Releases, nach Prüfung gegen `SHA256SUMS`, atomar. Stuft nie von selbst zurück. Ohne
   Schreibrecht bricht es vor dem Download mit dem Weg ab; nach Erfolg startet es einen
-  laufenden Dienst pro User neu. `--check` sagt, ob es eine neuere Version gibt, ob sich dieses
+  laufenden Dienst pro User neu und installiert mit dem neuen Binary die Erweiterung für
+  VS Code neu, wo sie installiert ist (nur Warnungen). `--check` sagt, ob es eine neuere Version gibt, ob sich dieses
   Binary selbst ersetzen kann (**self upgrade**, Schreibrecht in seinem Verzeichnis) und den
   Weg (**method**: `self`, `explicit` für einen dev build, `admin` global, `manual`);
   `--check --json` dasselbe als JSON, dieselbe Struktur wie das Feld `update` in `whoami`.
 - **install.sh** — Installationsskript für die Erstinstallation pro User nach
   `~/.local/bin/kephalaion`; liegt im Repo und hängt an jedem Release. Nennt am Ende die
-  nächsten Schritte (Rollen, `service install`).
+  nächsten Schritte (Rollen, `service install`, `vscode install`, wenn ein Editor-CLI im
+  `PATH` ist).
 - **user installation** (Installation pro User) — Binary, config, Daten und Dienst gehören
   einem User: `~/.local/bin`, `~/.config/kephalaion/`, `~/.local/share/kephalaion/`, systemd
   `--user` bzw. LaunchAgent (`service install`). Linux und macOS.
