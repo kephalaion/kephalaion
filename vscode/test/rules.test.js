@@ -4,7 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse } = require('../rules');
+const { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint } = require('../rules');
 
 test('nodeUrl: lokal, Proxy, host.docker.internal', () => {
   assert.deepStrictEqual(parseNodeUrl('http://127.0.0.1:7433'), { endpoint: 'http://127.0.0.1:7433/mcp', remote: false });
@@ -82,4 +82,24 @@ test('Header-Paare an eine entfernte nodeUrl: nur die gewählten Hubs, auch nach
   assert.deepStrictEqual(pairs(['vm'], true), {});
   mcpHeaders([{ hub: 'vm', account: 'kamran' }], read, (l) => logged.push(l));
   assert.deepStrictEqual(logged, ['MCP-Server: Hub vm: kamran.token hält kein gültiges Token']);
+});
+
+test('Version: Hinweis nur bei echter Abweichung, nie bei dev oder 0.0.0', () => {
+  assert.strictEqual(versionHint('v0.3.0', '0.3.0', 'Visual Studio Code'), undefined);
+  // Vorabversion: vX.Y.Z-… trägt die Erweiterung X.Y.Z.
+  assert.strictEqual(versionHint('v0.3.0-rc1', '0.3.0', 'Visual Studio Code'), undefined);
+  assert.strictEqual(versionHint('dev', '0.3.0', 'Visual Studio Code'), undefined);
+  assert.strictEqual(versionHint('v0.3.0', '0.0.0', 'Visual Studio Code'), undefined);
+  assert.strictEqual(versionHint('v0.0.0', '0.3.0', 'Visual Studio Code'), undefined);
+  assert.strictEqual(versionHint(undefined, '0.3.0', 'Visual Studio Code'), undefined);
+  assert.strictEqual(versionHint('v0.4.0', '0.3.0', 'Visual Studio Code'),
+    'Erweiterung 0.3.0 passt nicht zum Node 0.4.0 — im Terminal „kephalaion vscode install“, danach „Developer: Reload Window“.');
+  assert.match(versionHint('v0.4.0-rc2', '0.3.0', 'Visual Studio Code'), /Node 0\.4\.0 /);
+});
+
+test('Version: der Hinweis nennt das CLI des Editors', () => {
+  assert.match(versionHint('v0.4.0', '0.3.0', 'Cursor'), /„kephalaion vscode install --code cursor“/);
+  assert.match(versionHint('v0.4.0', '0.3.0', 'VSCodium'), /--code codium“/);
+  assert.match(versionHint('v0.4.0', '0.3.0', 'Visual Studio Code - Insiders'), /--code code-insiders“/);
+  assert.match(versionHint('v0.4.0', '0.3.0', undefined), /„kephalaion vscode install“/);
 });

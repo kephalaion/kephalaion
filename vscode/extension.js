@@ -376,6 +376,7 @@ class Status {
     this.log = log;
     this.who = undefined;
     this.error = undefined;
+    this.versionNoted = false;
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
     this.item.command = 'kephalaion.menu';
     this.item.show();
@@ -387,6 +388,7 @@ class Status {
     try {
       this.who = await this.node.call('whoami');
       this.error = undefined;
+      this.noteVersion();
     } catch (e) {
       this.who = undefined;
       this.error = e.message;
@@ -398,6 +400,17 @@ class Status {
 
   hubs() {
     return (this.who && this.who.hubs) || [];
+  }
+
+  // Einmal je Sitzung: Trägt die Erweiterung nicht die Version des Nodes, ein Hinweis, wie sie
+  // nachzieht (rules.versionHint).
+  noteVersion() {
+    if (this.versionNoted || !this.who || this.who.hidden) return;
+    const hint = rules.versionHint(this.who.version, ext.packageJSON.version, vscode.env.appName);
+    if (!hint) return;
+    this.versionNoted = true;
+    this.log(hint);
+    vscode.window.showInformationMessage(`Kephalaion: ${hint}`);
   }
 
   // Lesbare Collections eines Hubs; leer, wenn die Anmeldung nicht gilt.

@@ -142,4 +142,35 @@ function explainResponse(status, contentType) {
   return undefined;
 }
 
-module.exports = { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, PROXY_HINT };
+// Die Version x.y.z ohne führendes v und ohne Suffix (-rc1, +meta); undefined bei allem anderen
+// (etwa dev).
+function plainVersion(v) {
+  const m = /^v?(\d+\.\d+\.\d+)(?:[-+].*)?$/.exec(String(v || '').trim());
+  return m ? m[1] : undefined;
+}
+
+// Das CLI des Editors, in dem die Erweiterung läuft, nach vscode.env.appName — wie es
+// kephalaion vscode install --code annimmt.
+function editorCli(appName) {
+  const a = String(appName || '').toLowerCase();
+  if (a.includes('cursor')) return 'cursor';
+  if (a.includes('vscodium')) return 'codium';
+  if (a.includes('insiders')) return 'code-insiders';
+  return 'code';
+}
+
+// Der Hinweis, wenn die Erweiterung nicht die Version des Nodes trägt (beide kommen aus demselben
+// Binary: Tag vX.Y.Z bzw. vX.Y.Z-… → X.Y.Z). Kein Hinweis, wenn eine Seite ein dev build ist
+// (Node dev, Erweiterung 0.0.0) oder sich nicht lesen lässt. undefined, wenn alles passt.
+function versionHint(nodeVersion, extVersion, appName) {
+  const n = plainVersion(nodeVersion);
+  const e = plainVersion(extVersion);
+  if (!n || !e || n === '0.0.0' || e === '0.0.0' || n === e) return undefined;
+  const cli = editorCli(appName);
+  const cmd = cli === 'code' ? 'kephalaion vscode install' : `kephalaion vscode install --code ${cli}`;
+  return `Erweiterung ${e} passt nicht zum Node ${n} — im Terminal „${cmd}“, danach „Developer: Reload Window“.`;
+}
+
+module.exports = {
+  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, PROXY_HINT,
+};
