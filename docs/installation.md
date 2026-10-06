@@ -243,9 +243,10 @@ Version passt; `service unit --system` schreibt nichts.
 
 ### Hub-Einträge und Accounts, von Hand
 
-Tokens gehen nie durch Ansible. Die Hub-Einträge des Nodes und das erste `rotate` jedes
-Accounts richtet der Verwalter von Hand ein, als Systembenutzer. Ohne `--config` findet
-`sudo -u kephalaion kephalaion …` die globale config selbst.
+Tokens gehen nie durch Ansible. Die Hub-Einträge des Nodes und die Accounts samt Rechten legt
+der Verwalter von Hand an, als Systembenutzer; eingerichtet wird ein Account von seinem User
+selbst (Task 028). Ohne `--config` findet `sudo -u kephalaion kephalaion …` die globale config
+selbst.
 
 ```sh
 K="sudo -u kephalaion kephalaion"
@@ -256,15 +257,39 @@ $K hub collection add wissen
 $K hub node grant server wissen
 $K node collection add team:wissen
 
-# Je User ein Account; das Einrichtungstoken zeigt der Hub genau einmal.
+# Je User ein Account; das Einrichtungstoken zeigt der Hub genau einmal — der Verwalter gibt es
+# dem User (es gilt nur, bis der User es eingetauscht hat).
 $K hub account add alice --user alice
 $K hub account grant alice wissen --write
+```
 
-# Erstes rotate als Systembenutzer, über eine Datei nur für ihn …
+**Einrichten durch den User — der Regelweg.** Der User tauscht das Einrichtungstoken mit einem
+Aufruf selbst ein, als er selbst, ohne Zugriff auf `node.db` und ohne `sudo`:
+
+```sh
+kephalaion node account setup team alice <einrichtungstoken>     # oder: … --token-stdin
+kephalaion node account list                                      # was gilt
+```
+
+`setup` findet den Node über die globale config (`listen`, hier `http://127.0.0.1:7433`), prüft
+ihn ohne Token, erzeugt das neue Token auf dem Rechner des Users, lässt den Node rotieren (zum
+Node und zum Hub geht nur der Hash), schreibt `~alice/.config/kephalaion/tokens/team/alice.token`
+(`0600`) und trägt den Node bei den Assistenten des Users ein — je Schritt eine Zeile, Tokens
+nur gekürzt. Der Account muss eine Collection haben, die der Node abgleichen darf; den Abgleich
+braucht er nicht (direkt nach `add` und `grant` geht es). Ein unklarer Ausgang lässt die Datei
+`….token.pending` liegen; derselbe Aufruf klärt ihn, ohne zu rotieren. Das Einrichtungstoken
+darf hier als Argument kommen, weil es sofort rotiert wird — auf einem Rechner mit mehreren
+Usern sieht jeder die Prozessliste; gilt es beim Rotieren nicht mehr, erzeugt der Verwalter
+ein neues (`$K hub account token alice`). Grenzen: [`konzept.md`](konzept.md), „Einrichten durch
+den User“.
+
+**Sonderfall: das erste `rotate` durch den Verwalter** — etwa für einen User ohne Shell auf
+diesem Rechner. Dann über eine Datei nur für den Systembenutzer, und die Datei übergeben:
+
+```sh
 DIR="$(sudo -u kephalaion mktemp -d)"
 sudo -u kephalaion sh -c "umask 077; cat > $DIR/alice.token"   # Einrichtungstoken einfügen, Enter, Strg-D
 $K node account rotate team alice --token-file "$DIR/alice.token"
-# … und das neue Token dem User übergeben, am üblichen Ort.
 sudo -u alice install -d -m 0700 ~alice/.config/kephalaion/tokens ~alice/.config/kephalaion/tokens/team
 sudo install -o alice -g alice -m 0600 "$DIR/alice.token" ~alice/.config/kephalaion/tokens/team/alice.token
 sudo rm -r "$DIR"
@@ -318,8 +343,10 @@ Gefunden werden die Assistenten über `PATH`; ein nicht gefundener wird übergan
 - **Von Hand** mit `kephalaion node mcp add` — bei allen gefundenen Assistenten (oder den mit
   `--assistant` genannten), jederzeit wiederholbar; ein richtiger Eintrag bleibt unverändert.
 - **Automatisch** am Ende von `install.sh` (`kephalaion node mcp add --auto`, bei einer
-  Erstinstallation ohne Wirkung) und nach `kephalaion node account rotate` bzw. `check`, wenn
-  die Token-Datei unter `~/.config/kephalaion/tokens/` liegt. Diese Anstöße ändern nur
+  Erstinstallation ohne Wirkung), nach `kephalaion node account rotate` bzw. `check`, wenn
+  die Token-Datei unter `~/.config/kephalaion/tokens/` liegt, und nach `kephalaion node account
+  setup` (mit dem Node der config ebenso, mit `--node` wie `node mcp add --node … --hub
+  <hub>`). Diese Anstöße ändern nur
   Assistenten, die schon einen Eintrag haben; hat noch keiner einen, tragen sie überall ein —
   so entsteht der Eintrag mit dem ersten Account von selbst.
 - Ein `remove --assistant <name>` hält gegen die automatischen Anstöße, **nicht** gegen ein
@@ -347,10 +374,11 @@ Output-Schema beim Verbinden. Ändert ein Update ein Schema, kann eine laufende 
 Antworten gegen das alte prüfen und ablehnen: Die Schemas sind streng
 (`additionalProperties: false`), seit Task 024 trägt etwa `read` das Feld `content`.
 
-**Global** trägt jeder User für sich ein, Ansible trägt nichts ein: Das erste `rotate` des
-Verwalters als Systembenutzer schreibt in eine Datei außerhalb des eigenen `tokens/` und stößt
-nichts an. Nach der Übergabe der Token-Datei (oben, „Hub-Einträge und Accounts, von Hand“) ruft
-der User selbst auf:
+**Global** trägt jeder User für sich ein, Ansible trägt nichts ein: `kephalaion node account
+setup` des Users trägt am Ende selbst ein (oben, „Hub-Einträge und Accounts, von Hand“). Nur
+nach dem Sonderfall, dem ersten `rotate` durch den Verwalter, ruft der User nach der Übergabe
+der Token-Datei selbst auf — das `rotate` des Systembenutzers schreibt in eine Datei außerhalb
+des eigenen `tokens/` und stößt nichts an:
 
 ```sh
 kephalaion node mcp add
@@ -740,6 +768,25 @@ https://hub.example.org {
             header_up Host {upstream_hostport}
         }
     }
+    # Routen für Accounts (node account setup und list, Task 028): je ein Block mit genau dem Pfad.
+    handle /kephalaion/account/rotate {
+        uri strip_prefix /kephalaion
+        request_body {
+            max_size 64KiB
+        }
+        reverse_proxy localhost:7433 {
+            header_up Host {upstream_hostport}
+        }
+    }
+    handle /kephalaion/account/check {
+        uri strip_prefix /kephalaion
+        request_body {
+            max_size 64KiB
+        }
+        reverse_proxy localhost:7433 {
+            header_up Host {upstream_hostport}
+        }
+    }
     handle {
         respond 404
     }
@@ -775,6 +822,17 @@ https://hub.example.org {
   (`…/kephalaion/mcp/`, `…/kephalaion/x/mcp`, ohne Präfix) landet in `respond 404` bzw. in der
   Anmeldung der Option — dort zählt ein 401 für fail2ban. Die Kommandozeile und die Erweiterung
   erklären das als „Präfix falsch oder Anmeldung des Proxys“.
+- **Die Routen für Accounts** (Task 028): `node account setup` rotiert über den Node das
+  Einrichtungstoken, `node account list` prüft Token-Dateien — je Vorgang eine Anfrage an
+  `/account/rotate` bzw. `/account/check` mit dem Header-Paar, also wie `/mcp` ohne Anmeldung
+  des Proxys und ohne Header im Log. Je ein `handle` mit genau dem Pfad, kein benannter Matcher:
+  So sortiert Caddy sie (wie `/kephalaion/mcp`) vor einen Block für den Rest von
+  `/kephalaion/*` (`caddy adapt` zeigt die Reihenfolge). Ohne die beiden Blöcke antwortet statt
+  des Nodes der Proxy (404 bzw. die Anmeldung): `setup` nennt das „dort antwortet kein Node“ und
+  lässt das Einrichtungstoken gelten. Über den Proxy verdeckt der Node ohne gültige Anmeldung
+  auch hier: „falsches Token“, „Hub unbekannt“ und „der Hub nimmt den Node nicht an“ sind eine
+  Antwort (403 `account_unauthenticated`, `hidden`); „Hub nicht erreichbar“ und „Ausgang
+  unklar“ bleiben eigene Codes, ohne Version und Namen.
 - `header_up Host {upstream_hostport}` wie beim Hub (sonst 403 der Host-Prüfung des Nodes);
   `request_body max_size 8MiB` über den 7 MiB, die `/mcp` annimmt. `Origin` reicht Caddy
   durch: Eine fremde `Origin` bekommt vom Node 403, wie lokal (MCP für Browser ist nicht
@@ -795,7 +853,15 @@ Account), steht `login=invalid` direkt hinter `via`:
 
 **Ein Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind. Eine Anfrage
 ohne Paar (`initialize` ohne Token) zählt nicht, ebenso eine nur mit Paaren zu Aliasen, die der
-Node nicht kennt, und eine ohne `via` (lokal, nicht über den Proxy). Die Zeile lässt sich über
+Node nicht kennt, und eine ohne `via` (lokal, nicht über den Proxy). An den Routen für Accounts
+(Task 028) ist ein Fehlversuch eine Anfrage, deren Token der Hub ablehnt:
+
+```text
+2026-10-06T10:47:15+02:00 node POST /account/check 403 537µs via=80.131.88.238 login=invalid hub=vm node=vm-node account=probe028 code=account_unauthenticated
+```
+
+`node account list` verursacht so höchstens einen Fehlversuch je ungültiger Token-Datei, `node
+account setup` mit liegender `.pending` höchstens zwei je Aufruf. Die Zeile lässt sich über
 Header nicht fälschen: Namen stehen nur nach der Namensregel darin (sonst `(ungültig)`), `via`
 und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil der Proxy einen
 mitgeschickten `X-Forwarded-For` verwirft. Grenze: Ein Prozess auf dem Rechner des Nodes
@@ -808,7 +874,7 @@ Journal), Schwelle und Fenster wie bei einer Jail für 401 im Log des Proxys:
 ```ini
 # /etc/fail2ban/filter.d/kephalaion-mcp.conf
 [Definition]
-failregex = (?:^|\s)node [A-Z]+ /mcp \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)
+failregex = (?:^|\s)node [A-Z]+ /(?:mcp|account/rotate|account/check) \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)
 ignoreregex =
 journalmatch = _SYSTEMD_UNIT=kephalaion.service
 
@@ -851,6 +917,11 @@ curl -sS $H -X POST "$U" --data '{"jsonrpc":"2.0","id":1,"method":"initialize","
 curl -sS $H -X POST "$U" --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whoami","arguments":{}}}'
 # fremde Origin: 403 vom Node (kein 401, zählt nirgends)
 curl -sS -o /dev/null -w '%{http_code}\n' $H -H 'Origin: https://example.com' -X POST "$U" --data '{}'
+# Route für Accounts ohne Paar: 400 invalid vom Node (nicht die Anmeldung des Proxys)
+curl -sS -X POST https://hub.example.org/kephalaion/account/check
+# mit Dummy-Paar: 403, "hidden":true; im Journal des Nodes via=… login=invalid
+curl -sS -X POST -H 'X-Keph-Account-team: probe' -H "X-Keph-Token-team: <dummy-token>" \
+  https://hub.example.org/kephalaion/account/check
 ```
 
 Auf dem Rechner des Nodes zeigt dasselbe `whoami` an `http://127.0.0.1:7433/mcp` (ohne
@@ -893,32 +964,43 @@ kephalaion node mcp status --node "$N" --hub vm   # eingetragen / weicht ab / fe
 
 ### Ein Client ohne eigenen Node
 
-Ein Rechner, auf dem kein Node läuft, braucht nur das Binary (für `node mcp headers`, den
-Helfer von Claude Code und Codex, und für `node dir`), einen Account am Hub und dessen Token.
-Kein neues Kommando:
+Ein Rechner, auf dem kein Node läuft, braucht nur das Binary (für `node account setup|list`,
+`node mcp headers` — den Helfer von Claude Code und Codex — und `node dir`) und einen Account am
+Hub. Eingerichtet wird er über den entfernten Node (Task 028):
 
 1. **Am Hub** ein eigener Account je Rechner (Schema `<user>-<rechner>`), mit Rechten:
    `hub account add alice-laptop --user alice`, `hub account grant alice-laptop wissen
-   --write`. Das Einrichtungstoken zeigt der Hub genau einmal.
-2. **Das erste `rotate` an einem Node**, der den Hub als Eintrag hat — etwa am Node des
-   Hub-Rechners als Systembenutzer, wie unter „Hub-Einträge und Accounts, von Hand“ (`$K node
-   account rotate team alice-laptop --token-file "$DIR/alice-laptop.token"`).
-3. **Die Token-Datei übergeben**, per SSH und nie als Argument, nach
-   `~/.config/kephalaion/tokens/<alias>/<account>.token` mit `0600` (Verzeichnisse `0700`).
-   `<alias>` ist der Alias des Hub-Eintrags **am entfernten Node** (`team`), denn er steht im
-   Namen des Headers.
-4. **Die Adresse des Clients freigeben**, wo 443 nur für freigegebene Adressen offen ist (in
+   --write`. Das Einrichtungstoken zeigt der Hub genau einmal; der Verwalter gibt es dem User.
+   Der Account braucht eine Collection, die der entfernte Node abgleichen darf.
+2. **Die Adresse des Clients freigeben**, wo 443 nur für freigegebene Adressen offen ist (in
    Azure die NSG).
-5. `kephalaion node mcp add --node https://<name>/kephalaion` (mit `--hub`, wenn unter
-   `tokens/` mehr als ein Hub liegt); `node dir … --node https://<name>/kephalaion`.
+3. **Der User richtet ein**, auf seinem Rechner, mit einem Aufruf:
 
-**Rotation:** `node account rotate` braucht einen Hub-Eintrag am eigenen Node, und die
-automatischen Anstöße (`install.sh`, `rotate`, `check`; „Bei den Assistenten anmelden“) laufen
-auf einem Rechner ohne Node nie. Rotiert wird deshalb wie Schritt 2 an einem Node mit
-Hub-Eintrag (mit der aktuellen Token-Datei als `--token-file`), danach wie Schritt 3 übergeben.
-Der Eintrag bei den Assistenten bleibt richtig (er liest die Datei), wirksam mit einer neuen
-Sitzung. Bis die neue Datei da ist, schickt der Client das alte Token — jede Anfrage ein
-Fehlversuch für die Jail.
+   ```sh
+   kephalaion node account setup team alice-laptop <einrichtungstoken> --node https://<name>/kephalaion
+   kephalaion node account list --node https://<name>/kephalaion
+   ```
+
+   `team` ist der Alias des Hub-Eintrags **am entfernten Node**, denn er steht im Namen des
+   Headers und des Verzeichnisses unter `tokens/`. `setup` prüft den Node ohne Token (mit
+   `--ca-file` gegen eine eigene CA), lässt ihn rotieren, schreibt
+   `~/.config/kephalaion/tokens/team/alice-laptop.token` (`0600`) und trägt den Node bei den
+   Assistenten ein wie `kephalaion node mcp add --node https://<name>/kephalaion --hub team`.
+4. `node dir … --node https://<name>/kephalaion`.
+
+Der alte Weg — das erste `rotate` am Node des Hub-Rechners als Systembenutzer und die
+Token-Datei per SSH übergeben („Hub-Einträge und Accounts, von Hand“, Sonderfall) — geht weiter,
+ist aber nur noch ein Sonderfall.
+
+**Spätere Rotation:** `setup` richtet nur ein (es bricht ab, wenn die Token-Datei schon da
+ist), und `node account rotate` braucht einen Hub-Eintrag am eigenen Node; die automatischen
+Anstöße (`install.sh`, `rotate`, `check`) laufen auf einem Rechner ohne Node nie. Wer keinen
+eigenen Node hat, braucht für jedes spätere Rotieren weiter den Verwalter: ein neues
+Einrichtungstoken (`hub account token alice-laptop`), die alte Token-Datei löschen, dann `setup`
+erneut — oder `rotate` am Node mit Hub-Eintrag und die Datei übergeben. Ein Kommando für das
+spätere Rotieren über den Node ist Folgearbeit (Todo 18). Der Eintrag bei den Assistenten
+bleibt richtig (er liest die Datei), wirksam mit einer neuen Sitzung. Bis die neue Datei da ist,
+schickt der Client das alte Token — jede Anfrage ein Fehlversuch für die Jail.
 
 ### Grenzen
 
@@ -1093,10 +1175,11 @@ Reihenfolge und Regeln:
    `init` überschreibt nie und bricht ab, wenn es die Rolle schon gibt.
 4. Unit aus `kephalaion service unit --system` ablegen, `daemon-reload`, einschalten und
    starten. Ändert sich die Unit, neu starten.
-5. **Kein Token.** Hub-Einträge des Nodes und das erste `rotate` der Accounts richtet der
-   Verwalter von Hand ein (oben); die Tokens der User gehören den Usern bzw. k-playbook.
-   Bei den KI-Assistenten trägt Ansible nichts ein; das macht jeder User selbst
-   (`kephalaion node mcp add`, „Bei den Assistenten anmelden“).
+5. **Kein Token.** Hub-Einträge des Nodes und die Accounts richtet der Verwalter von Hand ein
+   (oben); eingetauscht wird das Einrichtungstoken vom User selbst (`kephalaion node account
+   setup`), die Tokens der User gehören den Usern bzw. k-playbook. Bei den KI-Assistenten trägt
+   Ansible nichts ein; das macht `setup` bzw. jeder User selbst (`kephalaion node mcp add`,
+   „Bei den Assistenten anmelden“).
 
 Alle Schritte sind wiederholbar: Ein zweiter Lauf ändert nichts, solange Version und Unit
 gleich bleiben.

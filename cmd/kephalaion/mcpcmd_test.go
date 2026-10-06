@@ -351,7 +351,7 @@ func TestNodeMCPNoNodeNoToken(t *testing.T) {
 	// Account, Exit 0.
 	e.listen(t, "")
 	e.mcp(t, "add").want(t, 0, "claude: übergangen: keine Token-Datei", "codex: übergangen: keine Token-Datei",
-		"Keine Token-Datei unter "+e.tokens, "kephalaion node account rotate")
+		"Keine Token-Datei unter "+e.tokens, "kephalaion node account setup <hub> <account> <einrichtungstoken>")
 	if len(e.fake.Writes()) != 0 {
 		t.Errorf("ohne Token-Datei geschrieben: %v", e.fake.Writes())
 	}

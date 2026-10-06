@@ -1,10 +1,12 @@
 # Fortschritt
 
-Stand: 2026-10-05 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-10-06 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
 ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
-eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die Abnahme von 020)
+eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die Abnahme von 020;
+028 Etappen 1–6 ausgeführt, der User richtet seinen Account selbst ein — auf der VM eingespielt,
+die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -319,7 +321,36 @@ eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die 
     Auf der VM eingespielt am 2026-10-05 (dev 1689ed9, enthält Task 027) und abgenommen bis auf
     die Ansicht mit eigener Sitzung: siehe „Zu testen“.
 
+- **Task 028 — Account selbst einrichten und Token-Dateien auflisten** (2026-10-06, Etappen
+  1–6):
+  - am Node neben `/mcp` die Routen für Accounts `POST /account/rotate` (Body `new_hash`) und
+    `POST /account/check`, je mit dem Header-Paar eines Hubs, je Vorgang eine Anfrage und eine
+    Logzeile (`internal/node/mcpnode/account.go`): Der Hub entscheidet, ohne Vorprüfung gegen
+    die Replica (geht direkt nach `add` + `grant`); nach `rotate` die Account-Zeilen in die
+    Replica; ein vom Hub abgelehntes Token ist ein Fehlversuch (`login=invalid`); über den
+    Proxy ohne gültige Anmeldung eine verdeckte Antwort für abgelehnt, unbekannten Hub und
+    abgewiesenen Node, eigene Codes für `unreachable` und `outcome_unknown`; der Handler
+    vergleicht den Pfad selbst, nie ein 3xx;
+  - `kephalaion node account setup <hub> <account> [<token> | --token-stdin] [--node url
+    [--ca-file pfad]]`: zuerst alles ohne Token, dann `.pending`, `rotate` über den Node,
+    Token-Datei (`0600`), Eintragen bei den Assistenten; „nicht erreicht“ nur vor dem
+    Abschicken (`httpapi.NotSent`) oder bei 404 ohne Code des Nodes, sonst unklar; eine liegende
+    `.pending` klärt derselbe Aufruf über `/account/check` (Exit 3: geklärt, erneut);
+  - `kephalaion node account list [--node …] [--json]`: alle Token-Dateien mit Zustand, je
+    Datei eine Anfrage;
+  - Doku: `begriffe.md` (account routes, `node account setup|list`), `vertrag.md` (Prosa zu
+    `rotate`), `konzept.md` („Einrichten durch den User“ mit Grenzen), `installation.md`
+    (Regelweg, Client ohne Node, Caddyfile mit den Routen, Filter der Jail), README, Hilfe von
+    `node account`, `hub account add`, `node mcp add`; Regeln in `k-playbook-local`;
+  - Tests: `internal/node/mcpnode` (`TestAccount*`), `cmd/kephalaion` (`TestAccountRoutesThroughServe`,
+    `TestNodeAccountSetup*`, `TestNodeAccountList*`).
+    Auf der VM eingespielt am 2026-10-06 (dev 15f372c, Caddy und Jail; Proben mit Dummy-Token
+    bestanden); Abnahme mit echtem Einrichtungstoken: siehe „Zu testen“.
+
 ## In Arbeit
+
+- **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM:** Nacharbeit des Nutzers,
+  Schritte unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Stand 2026-10-06“.
 
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM:** Nacharbeit des Nutzers, Schritte in
   `~/dev/vm/kephalaion/README.md`, „Abnahme des HTTPS-Wegs“ (mit `/kephalaion/hub` und
@@ -346,6 +377,12 @@ eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die 
 
 ## Zu tun
 
+- **Spätere Rotation ohne eigenen Node** (Todo 18, Folgearbeit von Task 028): `setup` richtet
+  nur ein; wer keinen eigenen Node hat, braucht für jedes spätere Rotieren den Admin
+  (`installation.md`, „Ein Client ohne eigenen Node“).
+- **Anleitung für neue Mitarbeiter** (Folgearbeit von Task 028, nicht Teil davon): den Teil
+  für den Mitarbeiter in `squad-km-dev-setup/k-playbook-local/docs/manual/einrichtung-neue-mitarbeiter.md`
+  auf `kephalaion node account setup` umstellen.
 - **Geheimer Header des Proxys** (Folge-Task von Task 026, direkt danach): Der Hub glaubt
   vorerst jedem `X-User`, der ihn auf Loopback erreicht — jeder Prozess auf seinem Rechner sieht
   so Accounts und Rechte eines beliebigen Users (keine Tokens). Ein Header mit einem Geheimnis,

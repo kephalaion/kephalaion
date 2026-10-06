@@ -454,9 +454,10 @@ func TestProxyForeignOrigin(t *testing.T) {
 // für Zeichen wie in der Vorlage (docs/installation.md, „Fehlversuche: eine
 // Jail auf dem Log des Nodes“, filter.d/kephalaion-mcp.conf), nach der der
 // Filter auf dem Rechner des Proxys steht: nicht verankert, Zeile des
-// Node-Listeners an /mcp, via an fester Stelle hinter der Dauer und direkt
-// danach login=invalid. TestJailFilterIsTemplate hält beide gleich.
-const jailFailregex = `(?:^|\s)node [A-Z]+ /mcp \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)`
+// Node-Listeners an /mcp oder einer der Routen für Accounts (Task 028), via
+// an fester Stelle hinter der Dauer und direkt danach login=invalid.
+// TestJailFilterIsTemplate hält beide gleich.
+const jailFailregex = `(?:^|\s)node [A-Z]+ /(?:mcp|account/rotate|account/check) \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)`
 
 // jailAddr steht für <ADDR>, das fail2ban durch eine IPv4- oder
 // IPv6-Adresse ersetzt, und fängt sie. Vereinfacht: fail2bans Ausdruck für

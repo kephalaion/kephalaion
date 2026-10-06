@@ -24,8 +24,10 @@ seine Replica ab (`node sync`) und zeigt sie an (`node doc`), über `transport l
 MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read` und `changes` — gelesen
 wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und `rename` — geschrieben
 wird über den Hub, mit Rechten je Collection —, und gleicht als Node im Hintergrund ab.
-Accounts tauschen ihr Token am Node (`node account rotate`); `node whoami` zeigt, wen der Node
-kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
+Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
+erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
+list`); am eigenen Node tauscht `node account rotate` ein Token; `node whoami` zeigt, wen der
+Node kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
 ein, zum Lesen und Schreiben. Ein Node auf einem anderen Rechner erreicht den Hub über
 `https`: TLS beendet ein Reverse-Proxy vor dem Hub, der auf Loopback bleibt
 ([`docs/installation.md`](docs/installation.md)). Noch nicht gebaut: `ssh`, Suche, weitere
@@ -51,7 +53,8 @@ im Konzept.
   `write`, `append`, `replace_section`, `rename`, `supersede`, `delete`,
   `replace_directory`), dazu eigene für k-playbook (Eingang, Warteschlange, Todos, Tasks).
 - **Kommandozeile** — `init`, `status`, `config`, Verwaltung von Collections, Nodes, Accounts
-  und Hubs, Dokumente am Hub, `node sync`, `node account rotate`, `serve`; später `search`.
+  und Hubs, Dokumente am Hub, `node sync`, `node account setup|list|rotate`, `serve`; später
+  `search`.
 - **Stufen** — 1 lesen, 2 schreiben mit Rechten, 3 Vorgänge auf Dateien, 4 Schnipsel
   (zurückgestellt), 5 semantische Suche.
 
@@ -273,7 +276,26 @@ kephalaion hub account token alice     # neues Einrichtungstoken, das alte gilt 
 
 Das Einrichtungstoken ist das erste Token des Accounts. Sein erster Vorgang tauscht es am
 Node gegen ein eigenes — `rotate`, ein Kommando der Kommandozeile, nie ein MCP-Werkzeug, damit
-das Token nicht im Kontext der KI steht:
+das Token nicht im Kontext der KI steht. **Der Regelweg ist ein Aufruf des Users** (Task 028),
+auch ohne eigenen Node und ohne Zugriff auf `node.db` — über den Node der config oder einen
+entfernten (`--node https://<name>/kephalaion`):
+
+```sh
+kephalaion node account setup privat alice <einrichtungstoken>   # oder --token-stdin
+kephalaion node account list                                      # Token-Dateien und ihr Zustand
+```
+
+`setup` prüft zuerst alles ohne Token (Adresse, keine Token-Datei da, der Node antwortet),
+erzeugt dann das neue Token auf diesem Rechner, legt es als `alice.token.pending` ab, lässt
+den Node rotieren — über dessen Routen für Accounts (`/account/rotate`, `/account/check`), zum
+Node und zum Hub geht nur der Hash —, schreibt `alice.token` (`0600`) und trägt den Node bei den
+Assistenten ein; je Schritt eine Zeile, Tokens nur gekürzt. Das Einrichtungstoken darf hier als
+Argument kommen, weil es sofort rotiert wird (Grenzen: [`docs/konzept.md`](docs/konzept.md),
+„Einrichten durch den User“). Bei unklarem Ausgang bleibt `.pending` liegen; derselbe Aufruf
+klärt sie, ohne zu rotieren. `list` fragt den Node je Datei einmal: gültig, ungültig,
+unbekannt (über einen Proxy: ungültig oder unbekannt), nicht geprüft, unlesbar.
+
+Am eigenen Node geht es auch mit einer Token-Datei und `rotate`:
 
 ```sh
 T=~/.config/kephalaion/tokens/privat          # je Hub ein Verzeichnis, benannt nach dem Alias
@@ -304,7 +326,8 @@ für Nodes (der Vertrag unter `/hub`: `POST /hub/v1/whoami|rotate|sync` und
 `/hub/v1/create|write|delete|rename`, siehe [`docs/vertrag.md`](docs/vertrag.md); an der
 Wurzel `/` für einen Browser die Weboberfläche (siehe „Weboberfläche“), sonst eine kurze
 Begrüßung mit der Version, `/v1/…` dort ist 404 mit dem Hinweis auf
-`/hub`, nie eine Umleitung), den Node als MCP-Server für Clients unter `/mcp`. Als
+`/hub`, nie eine Umleitung), den Node als MCP-Server für Clients unter `/mcp`, daneben seine
+Routen für Accounts (`POST /account/rotate`, `/account/check`; für `node account setup|list`). Als
 Dienst startet ihn `kephalaion service install` (siehe „Installation“); von Hand läuft er im
 Vordergrund, schreibt je Anfrage eine Zeile nach stderr (Methode, Pfad, Status, Dauer, Node- und
 Account-Namen, bei einem Schreibvorgang über MCP Vorgang, Hub und Fehlercode — nie ein Token,
@@ -318,7 +341,8 @@ Aufrufers aus `X-Forwarded-For` (`via`).
 
 **Der Node über einen Proxy** (Task 023): Derselbe Reverse-Proxy, der den Hub nach außen
 reicht, kann auch `/mcp` reichen — als `https://<name>/kephalaion/mcp`, für Clients auf einem
-anderen Rechner ohne eigenen Node. Trägt eine Anfrage `X-Forwarded-For`, kam sie über den
+anderen Rechner ohne eigenen Node; ebenso die Routen für Accounts (`…/kephalaion/account/rotate`,
+`…/account/check`, Task 028). Trägt eine Anfrage `X-Forwarded-For`, kam sie über den
 Proxy; ohne gültige Anmeldung an mindestens einem Hub antwortet der Node dann verdeckt: keine
 Version, kein `update`, keine Namen von Node und Hubs. Lokal bleibt alles, wie es ist. Bei einem
 falschen Token antwortet der Node nie 401; die Logzeile trägt stattdessen `login=invalid`
@@ -337,7 +361,8 @@ OpenCode und Codex als MCP-Server `kephalaion` ein, auf User-Ebene und für alle
 Token nie im Klartext (Claude Code und Codex holen die Header bei jeder Verbindung über
 `kephalaion node mcp headers`, OpenCode verweist auf die Token-Datei); VS Code meldet die
 Erweiterung (unten). `kephalaion node mcp status` zeigt je Assistent, ob er eingetragen ist,
-`remove` entfernt den Eintrag. `install.sh` und `node account rotate` stoßen das von selbst an.
+`remove` entfernt den Eintrag. `install.sh`, `node account setup` und `node account rotate`
+stoßen das von selbst an.
 Einzelheiten: [`docs/installation.md`](docs/installation.md), „Bei den Assistenten anmelden“.
 Einen Node auf einem anderen Rechner trägt `kephalaion node mcp add --node
 https://<name>/kephalaion --hub <alias>` ein — auch ohne eigene config; zuerst prüft es den Node

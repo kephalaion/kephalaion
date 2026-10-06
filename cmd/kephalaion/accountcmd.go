@@ -54,8 +54,11 @@ Kommandos:
 
 Das Einrichtungstoken ist das erste Token des Accounts. Sein erster Vorgang
 tauscht es gegen ein eigenes: rotate über einen Node, der eine seiner
-Collections abgleichen darf (kephalaion node account rotate); danach ist es
-wertlos. Gespeichert wird nur der Hash. Account-Namen folgen den
+Collections abgleichen darf. Das macht der User selbst auf seinem Rechner,
+mit einem Aufruf, auch ohne eigenen Node (kephalaion node account setup <hub>
+<account> <token>; über einen Node auf einem anderen Rechner mit --node
+https://<name>/kephalaion); am eigenen Node geht auch kephalaion node account
+rotate. Danach ist es wertlos. Gespeichert wird nur der Hash. Account-Namen folgen den
 Regeln für Collections, admin ist reserviert, und sie sind gemeinsam mit den
 Node-Namen eindeutig. Jede Änderung an den Rechten ist ein Schreibvorgang mit
 Revision und gleicht sich zu den Nodes ab; sie steht im Protokoll (actions) als
@@ -272,8 +275,11 @@ func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 func printAccountToken(w io.Writer, token, account string) {
 	fmt.Fprintln(w, "Einrichtungstoken (wird nicht wieder angezeigt, gespeichert ist nur der Hash):")
 	fmt.Fprintf(w, "  %s\n", token)
-	fmt.Fprintln(w, "Als Erstes am Node gegen ein eigenes Token tauschen, danach ist es wertlos —")
-	fmt.Fprintln(w, "über eine Datei oder stdin, nie als Argument:")
+	fmt.Fprintln(w, "Als Erstes gegen ein eigenes Token tauschen, danach ist es wertlos. Der User")
+	fmt.Fprintln(w, "richtet den Account damit auf seinem Rechner selbst ein (<hub> ist der Alias")
+	fmt.Fprintln(w, "des Hub-Eintrags am Node; ohne Node in seiner config mit --node <url>):")
+	fmt.Fprintf(w, "  kephalaion node account setup <hub> %s <einrichtungstoken>\n", account)
+	fmt.Fprintln(w, "Am eigenen Node über eine Datei oder stdin, nie als Argument:")
 	fmt.Fprintf(w, "  kephalaion node account rotate <hub> %s --token-file <pfad>\n", account)
 }
 

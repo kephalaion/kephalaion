@@ -456,8 +456,8 @@ func registerAssistants(ctx context.Context, name string, target assistant.Targe
 	}
 	if rep.NoLogin && !opts.Auto && len(rep.SkippedHubs) == 0 {
 		fmt.Fprintf(stdout, "Keine Token-Datei unter %s: Ohne Anmeldung wird nicht neu eingetragen. Zuerst den ersten Account "+
-			"einrichten — kephalaion node account rotate <hub> <account> --token-file %s; rotate trägt danach selbst ein.\n",
-			target.TokensDir, assistant.TokenFile(target.TokensDir, "<hub>", "<account>"))
+			"einrichten — kephalaion node account setup <hub> <account> <einrichtungstoken> (schreibt %s und trägt "+
+			"danach selbst ein).\n", target.TokensDir, assistant.TokenFile(target.TokensDir, "<hub>", "<account>"))
 	}
 	if changed && !opts.DryRun {
 		fmt.Fprintln(stdout, "Wirksam in einer neuen Sitzung des Assistenten.")

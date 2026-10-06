@@ -279,9 +279,14 @@ func (e *acctEnv) check(t *testing.T, base string, h http.Header) acctReply {
 
 // lastLine ist die letzte Logzeile ohne Zeitstempel.
 func (e *acctEnv) lastLine() string {
-	lines := strings.Split(strings.TrimSpace(e.log.String()), "\n")
-	_, rest, _ := strings.Cut(lines[len(lines)-1], " ")
+	_, rest, _ := strings.Cut(e.lastFullLine(), " ")
 	return rest
+}
+
+// lastFullLine ist die letzte Logzeile, wie sie im Journal steht.
+func (e *acctEnv) lastFullLine() string {
+	lines := strings.Split(strings.TrimSpace(e.log.String()), "\n")
+	return lines[len(lines)-1]
 }
 
 func wantAccountError(t *testing.T, what string, r acctReply, status int, code string, contains ...string) {
@@ -422,7 +427,14 @@ func TestAccountOutcomes(t *testing.T) {
 		if l := e.lastLine(); !strings.Contains(l, " via=127.0.0.1 login=invalid hub=zentrale") {
 			t.Errorf("%s: Logzeile Fehlversuch über den Proxy: %q", name, l)
 		}
+		// Der Filter der Jail trifft die Zeile, einmal.
+		if hits := jailHits(t, e.lastFullLine()); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
+			t.Errorf("%s: Filter der Jail: %v in %q", name, hits, e.lastLine())
+		}
 		hiddenUnknown := do(e.proxy, pair("nirgends", "anna", tok))
+		if hits := jailHits(t, e.lastFullLine()); len(hits) != 0 {
+			t.Errorf("%s: unbekannter Hub trifft den Filter: %q", name, e.lastLine())
+		}
 		if hiddenUnknown.status != hiddenWrong.status || hiddenUnknown.body != hiddenWrong.body {
 			t.Errorf("%s: unbekannter Hub über den Proxy %d %s, falsches Token %d %s", name, hiddenUnknown.status,
 				hiddenUnknown.body, hiddenWrong.status, hiddenWrong.body)

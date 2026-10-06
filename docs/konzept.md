@@ -1242,7 +1242,7 @@ ungültig, unbekannt, `.pending` offen) — gefragt beim Node, nicht in einer ei
   gespeichert und geloggt wird es nirgends.
 - **Spätere Rotation ohne eigenen Node** braucht weiter den Admin: `setup` richtet ein (es
   bricht ab, wenn die Token-Datei schon liegt), ein Kommando für das spätere Rotieren über den
-  Node gibt es noch nicht.
+  Node gibt es noch nicht (Todo 18).
 
 **Sperren** wirkt beim Schreiben sofort, denn geschrieben wird nur über den Hub. Beim Lesen
 wirkt es auf einem Node erst mit dem nächsten Abgleich; der Hub meldet Sperren deshalb sofort
@@ -1461,7 +1461,8 @@ Projekte dieses Rechners.
   umgehängt werden.
 - **Kein Token in Ansible.** Ansible legt Binary, Systembenutzer, Verzeichnisse, config und
   Dienst an und richtet die Rollen ein (`init` mit ausdrücklichem `--config` und `--db`). Die
-  Hub-Einträge des Nodes (`node hub add`, erstes `rotate`) richtet der Verwalter von Hand ein;
+  Hub-Einträge des Nodes (`node hub add`) und die Accounts richtet der Verwalter von Hand ein;
+  das erste `rotate` macht der User selbst (`node account setup`, „Einrichten durch den User“),
   die Tokens der User gehören den Usern bzw. k-playbook.
 
 **Die config wird gefunden — entschieden am 2026-09-26.** Reihenfolge:

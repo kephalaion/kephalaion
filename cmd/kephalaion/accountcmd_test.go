@@ -16,7 +16,7 @@ func TestHubAccountFlow(t *testing.T) {
 	runT(t, "hub", "node", "add", "laptop", c).want(t, 0)
 
 	r := runT(t, "hub", "account", "add", "bob", "--description", "Bob", c)
-	r.want(t, 0, "Account bob angelegt (User bob)", "wird nicht wieder angezeigt", "node account rotate <hub> bob")
+	r.want(t, 0, "Account bob angelegt (User bob)", "wird nicht wieder angezeigt", "node account setup <hub> bob <einrichtungstoken>", "node account rotate <hub> bob")
 	tok := tokenFrom(t, r.out)
 	runT(t, "hub", "account", "add", "bob", c).want(t, 1, "gibt es schon")
 	runT(t, "hub", "account", "add", "admin", c).want(t, 1, "reserviert")
