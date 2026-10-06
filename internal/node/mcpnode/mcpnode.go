@@ -23,6 +23,10 @@
 // Header-Paar vermerkt im Log login=invalid, direkt hinter via; das zählt
 // eine Jail auf dem Rechner des Proxys (docs/konzept.md, „Kommunikation“).
 //
+// Daneben die Routen für Accounts (/account/rotate, /account/check,
+// account.go): kein MCP, je Vorgang eine Anfrage, für node account setup
+// und list.
+//
 // Wie jedes Paket unter internal/node kennt es den Hub nicht: Den Weg zu ihm
 // und den Anstoß des Abgleichs bekommt es als HubLink.
 package mcpnode
@@ -63,13 +67,17 @@ type Node struct {
 	link    HubLink
 }
 
-// NewHandler liefert den Handler des Nodes: /mcp mit Prüfung von Host und
-// Origin, alles andere 404. version steht in der Antwort auf initialize —
-// außer verdeckt (über einen Proxy ohne gültige Anmeldung, guard); update
-// liefert für whoami die letzte Antwort auf die Frage nach einer neuen
-// Version — ohne selbst GitHub zu fragen. link ist der Weg zum Hub für
-// create, write, delete und rename. Der Body einer Anfrage darf
-// MaxRequestBytes groß sein.
+// NewHandler liefert den Handler des Nodes: /mcp und die Routen für
+// Accounts (/account/rotate, /account/check, account.go), je mit Prüfung von
+// Host und Origin; alles andere 404. Der Pfad wird genau verglichen, ohne
+// ServeMux: Der leitete einen Pfad, den er bereinigt, mit 301 um, und eine
+// absolute Location ohne den Präfix des Proxys ginge ins Leere. version
+// steht in der Antwort auf initialize — außer verdeckt (über einen Proxy ohne
+// gültige Anmeldung, guard); update liefert für whoami die letzte Antwort
+// auf die Frage nach einer neuen Version — ohne selbst GitHub zu fragen. link
+// ist der Weg zum Hub für create, write, delete und rename und für die
+// Routen für Accounts. Der Body einer Anfrage an /mcp darf MaxRequestBytes
+// groß sein.
 func NewHandler(nodes store.Store, version string, update func() upgrade.Report, link HubLink) http.Handler {
 	n := &Node{nodes: nodes, version: version, update: update, link: link}
 	full, hidden := n.server(version), n.server("")
@@ -79,9 +87,19 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report,
 		}
 		return full
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBytes})
-	mux := http.NewServeMux()
-	mux.Handle(Path, n.guard(h))
-	return mux
+	mcpHandler, rotate, check := n.guard(h), n.accountHandler(true), n.accountHandler(false)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case Path:
+			mcpHandler.ServeHTTP(w, r)
+		case AccountRotatePath:
+			rotate.ServeHTTP(w, r)
+		case AccountCheckPath:
+			check.ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
 }
 
 // server ist der MCP-Server mit allen Werkzeugen; version steht in

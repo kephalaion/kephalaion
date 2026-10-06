@@ -21,7 +21,9 @@ import (
 )
 
 // proxyNode ist „Proxy plus Node“ für die Tests (Task 023), wie Caddys
-// handle /kephalaion/mcp: Nur prefix+/mcp reicht er an den Node-Listener
+// handle /kephalaion/mcp und die beiden für die Routen für Accounts (Task
+// 028): Nur prefix+/mcp, prefix+/account/rotate und prefix+/account/check
+// reicht er an den Node-Listener
 // unter nodeAddr, den Präfix nimmt er weg, Host setzt er auf den Node
 // (header_up Host {upstream_hostport}) und X-Forwarded-For neu — einen
 // mitgeschickten verwirft er. Alles andere beantwortet rest (ohne: 404), wie
@@ -52,7 +54,9 @@ func newProxyNode(t *testing.T, nodeAddr string, cert *tls.Certificate, prefix s
 	}
 	p.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.hits.Add(1)
-		if r.URL.Path == prefix+"/mcp" {
+		// Wie Caddy: genau /mcp und die Routen für Accounts zum Node.
+		switch r.URL.Path {
+		case prefix + "/mcp", prefix + "/account/rotate", prefix + "/account/check":
 			rp.ServeHTTP(w, r)
 			return
 		}

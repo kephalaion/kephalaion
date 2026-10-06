@@ -363,7 +363,9 @@ func startRole(ctx context.Context, cfg config.Config, r config.Role, sec *confi
 	return rl, nil
 }
 
-// newNodeHandler ist der Eingang des Nodes für Clients: MCP unter /mcp.
+// newNodeHandler ist der Eingang des Nodes für Clients: MCP unter /mcp,
+// daneben die Routen für Accounts (/account/rotate, /account/check), die
+// über link zum Hub gehen wie die Werkzeuge, die schreiben.
 func newNodeHandler(st nodestore.Store, update func() upgrade.Report, link mcpnode.HubLink) http.Handler {
 	return mcpnode.NewHandler(st, buildinfo.Get().Version, update, link)
 }
