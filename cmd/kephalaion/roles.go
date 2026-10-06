@@ -164,7 +164,7 @@ const nodeUsage = `Aufruf:
   kephalaion node init [--db sqlite:///pfad/node.db] [--config pfad]
   kephalaion node hub add|check|list|show|set|rm|token …
   kephalaion node collection add|list|rm …
-  kephalaion node account setup|rotate|check …
+  kephalaion node account setup|rotate|check|list …
   kephalaion node sync [<alias>]
   kephalaion node doc list|get …
   kephalaion node dir push|pull …
@@ -177,8 +177,8 @@ Kommandos:
                check fragt einen Hub, wer der Node für ihn ist
   collection   die Collections, die der Node von seinen Hubs haben will
   account      richtet einen Account mit seinem Einrichtungstoken über einen
-               Node ein (setup), ersetzt das Token am Hub (rotate) und prüft es
-               (check)
+               Node ein (setup), ersetzt das Token am Hub (rotate), prüft es
+               (check) und zeigt alle Token-Dateien mit Zustand (list)
   sync         gleicht die Replicas mit den Hubs ab (Transport local, http und
                https); serve tut das im Hintergrund selbst
   doc          listet und liest Dokumente aus der Replica

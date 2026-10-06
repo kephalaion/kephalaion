@@ -22,6 +22,7 @@ const nodeAccountUsage = `Aufruf:
                                  [--node url [--ca-file pfad]]
   kephalaion node account rotate <hub> <account> (--token-file pfad | --token-stdin)
   kephalaion node account check  <hub> <account> (--token-file pfad | --token-stdin)
+  kephalaion node account list   [--node url [--ca-file pfad]] [--json]
 
 Kommandos:
   setup    richtet einen Account mit seinem Einrichtungstoken (aus kephalaion
@@ -42,6 +43,10 @@ Kommandos:
            Token-Datei eine Datei .pending, prüft check beide und räumt auf:
            gilt das neue, ersetzt es die Datei; gilt das alte, löscht es
            .pending; gilt keines, bleiben beide.
+  list     zeigt alle Token-Dateien dieses Linux-Users unter
+           ~/.config/kephalaion/tokens/ (<account>.token und .pending) mit
+           Hub, Account, Zustand, User und Collections — gefragt beim Node,
+           je Datei genau eine Anfrage, nicht in einer eigenen Datenbank.
 
 setup:
   <hub> ist der Alias des Hub-Eintrags am Node, <token> das Einrichtungstoken.
@@ -71,6 +76,15 @@ setup:
   Einrichtungstoken erzeugt der Admin (kephalaion hub account token
   <account>).
 
+list:
+  Der Node wie bei setup (--node, sonst listen der config; ohne Node Exit 2).
+  Zustände: gültig; ungültig (der Hub lehnt das Token ab); unbekannt (der
+  Node kennt den Hub nicht); über einen Proxy ungültig oder unbekannt (die
+  verdeckte Antwort trennt beides nicht); nicht geprüft (Node oder Hub nicht
+  erreichbar, der Hub nimmt den Node nicht an); unlesbar (die Datei hält kein
+  gültiges Token — sie wird nicht gefragt). Ein ungültiges Token ist am Node
+  ein Fehlversuch wie am MCP-Eingang: höchstens einer je Datei.
+
 --token-file pfad (rotate, check)
   Die Datei hält das Token als eine Zeile. rotate liest das alte, schreibt
   das neue vor dem Aufruf nach pfad.pending (0600) und ersetzt nach Erfolg die
@@ -94,9 +108,12 @@ rotate ist ein Kommando, kein MCP-Werkzeug: Das Token stünde sonst im Kontext
 der KI. Es wird nie wiederholt — danach gilt das alte Token nicht mehr.
 
 Optionen:
-  --node url      setup: der Node, über den rotiert wird (siehe oben)
-  --ca-file pfad  setup: mit --node https://… das Zertifikat gegen diese CA
-                  (PEM) prüfen statt gegen die System-Roots
+  --node url      setup, list: der Node, über den rotiert bzw. geprüft wird
+                  (siehe oben)
+  --ca-file pfad  setup, list: mit --node https://… das Zertifikat gegen
+                  diese CA (PEM) prüfen statt gegen die System-Roots
+  --json          list: als JSON ({"node", "files": [{hub, account, kind,
+                  file, state, user, collections, reason}]})
   --config pfad   Ort der config (siehe kephalaion node init --help)
 
 Exit-Codes von setup:
@@ -105,6 +122,12 @@ Exit-Codes von setup:
       Ausgang unklar (.pending bleibt), nicht zu entscheiden
   2   falscher Aufruf, auch ohne Node in der config und ohne --node
   3   eine liegende .pending ist geklärt und gelöscht: setup erneut aufrufen
+
+Exit-Codes von list:
+  0   Liste ausgegeben (auch mit Dateien, die nicht geprüft sind)
+  1   der Node antwortet nicht (alle Dateien nicht geprüft) oder tokens/
+      ist nicht lesbar
+  2   falscher Aufruf, auch ohne Node in der config und ohne --node
 `
 
 func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -136,6 +159,7 @@ func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	}
 	return dispatch("node account", u, args, stdout, stderr, map[string]func([]string) int{
 		"setup":  func(a []string) int { return runNodeAccountSetup(a, stdin, stdout, stderr) },
+		"list":   func(a []string) int { return runNodeAccountList(a, stdout, stderr) },
 		"rotate": leaf("rotate", (*command).accountRotate),
 		"check":  leaf("check", (*command).accountCheck),
 	})
