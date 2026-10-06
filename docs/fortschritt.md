@@ -472,6 +472,26 @@ eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die 
 
 ## Zu testen
 
+- **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM** (Nacharbeit des Nutzers; ein
+  Agent legt keinen Account an — die Ausgabe von `hub account add` brächte das Token in seinen
+  Kontext). Eingespielt am 2026-10-06 (dev 15f372c, Caddy mit `/kephalaion/account/rotate` und
+  `/kephalaion/account/check`, Filter der Jail `kephalaion-mcp` für beide; Proben mit
+  Dummy-Token bestanden: kein Header im Log von Caddy, Fehlversuch mit `via` im Journal,
+  `Ignore … by command`, `fail2ban-regex` trifft; `~/dev/vm/kephalaion/README.md`, „Stand
+  2026-10-06“). Keine neue Schemafassung. Schritte:
+  1. Test-Account anlegen: `sudo -u kephalaion kephalaion hub account add <name> --user <user>`,
+     `… hub account grant <name> omni --write` (das Einrichtungstoken tippt der Nutzer selbst).
+  2. Auf der VM als normaler Linux-User: `kephalaion node account setup vm <name>
+     <einrichtungstoken>` ohne `--node` (Node aus der globalen config) → `Token rotiert`, Datei
+     unter `~/.config/kephalaion/tokens/vm/<name>.token` (`0600`), Eintrag bei den
+     Assistenten; danach `kephalaion node account list` → `gültig`.
+  3. Vom Mac im Modus `hub` mit einem Binary ab Task 028: `kephalaion node account setup vm
+     <name2> <einrichtungstoken> --node https://<name>/kephalaion`, dann `node account list
+     --node https://<name>/kephalaion` → `gültig`; eine neue Sitzung eines Assistenten sieht
+     den Node.
+  4. Im Journal von `kephalaion.service` und `caddy.service` kein Token (`grep -c -F -f
+     <token-datei>` → 0); danach die Test-Accounts entfernen (`hub account rm`).
+
 - **Task 021 — Abnahme des Verzeichnis-Scopes auf der VM** (Nacharbeit des Nutzers; die KI
   tauscht Binary, Dienst und `node.db` der VM nicht). Keine neue Schemafassung; zuerst der Hub
   (VM), dann die WSL (`make dev-install`). Schritte in `~/dev/vm/kephalaion/README.md`,
