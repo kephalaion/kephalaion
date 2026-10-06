@@ -18,23 +18,60 @@ import (
 )
 
 const nodeAccountUsage = `Aufruf:
+  kephalaion node account setup  <hub> <account> [<token> | --token-stdin]
+                                 [--node url [--ca-file pfad]]
   kephalaion node account rotate <hub> <account> (--token-file pfad | --token-stdin)
   kephalaion node account check  <hub> <account> (--token-file pfad | --token-stdin)
 
 Kommandos:
+  setup    richtet einen Account mit seinem Einrichtungstoken (aus kephalaion
+           hub account add bzw. token) auf diesem Rechner ein — ohne eigenen
+           Node und ohne node.db, über einen Node, den dieser Rechner
+           erreicht: Das neue Token entsteht hier, der Node lässt den Hub
+           rotieren (zu Node und Hub geht nur der Hash), das Token landet in
+           ~/.config/kephalaion/tokens/<hub>/<account>.token (0600), und der
+           Node wird bei den KI-Assistenten eingetragen.
   rotate   ersetzt das Token eines Accounts am Hub: Der Node erzeugt ein neues
            Token, meldet sich mit dem alten an und schickt dem Hub nur den Hash
-           des neuen. Danach gilt nur noch das neue. Der erste Vorgang jedes
-           Accounts ist ein rotate mit dem Einrichtungstoken aus
-           kephalaion hub account add. Nach Erfolg schreibt der Node die Zeilen
-           des Accounts in seine Replica — nur die gewünschter Collections —,
-           der Account ist also sofort bekannt, ohne Abgleich.
+           des neuen. Danach gilt nur noch das neue. Nach Erfolg schreibt der
+           Node die Zeilen des Accounts in seine Replica — nur die gewünschter
+           Collections —, der Account ist also sofort bekannt, ohne Abgleich.
+           Braucht die node.db dieses Rechners mit dem Hub-Eintrag; ohne sie:
+           setup.
   check    fragt den Hub, ob das Token gilt (whoami). Liegt neben der
            Token-Datei eine Datei .pending, prüft check beide und räumt auf:
            gilt das neue, ersetzt es die Datei; gilt das alte, löscht es
            .pending; gilt keines, bleiben beide.
 
---token-file pfad
+setup:
+  <hub> ist der Alias des Hub-Eintrags am Node, <token> das Einrichtungstoken.
+  Es darf hier — und nur hier — als Argument kommen, weil es sofort rotiert
+  wird; --token-stdin liest es als eine Zeile von der Standardeingabe. Grenze:
+  Auf einem Rechner mit mehreren Usern sieht jeder die Prozessliste; gilt das
+  Token beim Rotieren nicht mehr, erzeugt der Admin ein neues.
+  Der Node ist --node <url> — http://127.0.0.1:<port> oder über einen Proxy
+  https://<name>/<präfix>, etwa https://<name>/kephalaion (die Basis ohne
+  /mcp; --ca-file prüft das Zertifikat gegen diese CA) —, sonst listen im
+  Abschnitt node: der config des Users bzw. der globalen. Steht dort kein
+  Node, ist --node Pflicht.
+  Ablauf, je Schritt eine Zeile, Tokens nur gekürzt: zuerst alles ohne Token
+  — Adresse, keine Token-Datei da (sonst Abbruch, bevor das Token gelesen
+  wird; was gilt, zeigt kephalaion node account list), der Node antwortet
+  (initialize ohne Token). Dann das neue Token nach <datei>.pending (0600),
+  rotate über den Node, die Token-Datei, das Eintragen bei den Assistenten:
+  mit dem Node der config wie kephalaion node mcp add --auto, mit --node wie
+  kephalaion node mcp add --node <url> --hub <hub>.
+  Nie wiederholt. Lehnt der Hub ab, kennt der Node den Hub nicht oder
+  erreicht er ihn nicht, ist nichts geändert: .pending wird gelöscht, das
+  Einrichtungstoken gilt weiter. Ist der Ausgang unklar (auch ein 502 des
+  Proxys, eine Zeitüberschreitung), bleibt .pending. Derselbe Aufruf klärt
+  sie dann, ohne zu rotieren: Gilt ihr Token, wird es die Token-Datei; gilt
+  es nicht, aber das Einrichtungstoken, wird .pending gelöscht (Exit 3,
+  setup erneut aufrufen); gilt keins, bleibt sie — ein neues
+  Einrichtungstoken erzeugt der Admin (kephalaion hub account token
+  <account>).
+
+--token-file pfad (rotate, check)
   Die Datei hält das Token als eine Zeile. rotate liest das alte, schreibt
   das neue vor dem Aufruf nach pfad.pending (0600) und ersetzt nach Erfolg die
   Datei; .pending verschwindet. Scheitert der Aufruf eindeutig, bleibt die
@@ -48,15 +85,26 @@ Kommandos:
   ersten Account bei allen gefundenen. Scheitert das, bleibt es bei einer
   Warnung.
 --token-stdin
-  liest das alte Token als eine Zeile von der Standardeingabe; rotate gibt
-  das neue nach Erfolg einmal aus, bei unklarem Ausgang ebenfalls, deutlich
-  als unklar markiert.
+  rotate, check: liest das alte Token als eine Zeile von der
+  Standardeingabe; rotate gibt das neue nach Erfolg einmal aus, bei unklarem
+  Ausgang ebenfalls, deutlich als unklar markiert. setup: das
+  Einrichtungstoken statt als Argument.
 
 rotate ist ein Kommando, kein MCP-Werkzeug: Das Token stünde sonst im Kontext
 der KI. Es wird nie wiederholt — danach gilt das alte Token nicht mehr.
 
 Optionen:
+  --node url      setup: der Node, über den rotiert wird (siehe oben)
+  --ca-file pfad  setup: mit --node https://… das Zertifikat gegen diese CA
+                  (PEM) prüfen statt gegen die System-Roots
   --config pfad   Ort der config (siehe kephalaion node init --help)
+
+Exit-Codes von setup:
+  0   eingerichtet
+  1   Fehler: Node nicht erreichbar, Token-Datei schon da, abgelehnt,
+      Ausgang unklar (.pending bleibt), nicht zu entscheiden
+  2   falscher Aufruf, auch ohne Node in der config und ohne --node
+  3   eine liegende .pending ist geklärt und gelöscht: setup erneut aufrufen
 `
 
 func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -87,6 +135,7 @@ func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 		}
 	}
 	return dispatch("node account", u, args, stdout, stderr, map[string]func([]string) int{
+		"setup":  func(a []string) int { return runNodeAccountSetup(a, stdin, stdout, stderr) },
 		"rotate": leaf("rotate", (*command).accountRotate),
 		"check":  leaf("check", (*command).accountCheck),
 	})

@@ -41,6 +41,7 @@ func postAccount(t *testing.T, client *http.Client, url, alias, account, tok, bo
 // an. Ein falsches Token über den Proxy ist ein Fehlversuch mit via; ein
 // unbekannter Hub sieht dort genauso aus. Kein Token im Log.
 func TestAccountRoutesThroughServe(t *testing.T) {
+	slow(t, "serve mit Hub und Node, zwei Hubs, lokal und über einen Proxy")
 	e := newCommEnv(t)
 	e.run(t, "config", "set", "node", "sync_interval", "0").want(t, 0)
 	srv := startServe(t, portZero(t, e.cfg))

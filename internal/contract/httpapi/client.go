@@ -238,7 +238,7 @@ func (c *Client) once(ctx context.Context, op string, version int, auth contract
 		// Die url.Error nennt Methode und Adresse, keine Header. Ein
 		// Zertifikatsfehler bleibt, so oft man es versucht: keine
 		// Wiederholung.
-		return &callError{err: fmt.Errorf("Hub %s: %w", c.base, unwrapURL(err)), sent: !notSent(err), retry: !certError(err)}
+		return &callError{err: fmt.Errorf("Hub %s: %w", c.base, unwrapURL(err)), sent: !NotSent(err), retry: !certError(err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
@@ -311,10 +311,12 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.Status, msg)
 }
 
-// notSent sagt, ob ein Fehler von http.Client.Do sicher vor dem Abschicken
+// NotSent sagt, ob ein Fehler von http.Client.Do sicher vor dem Abschicken
 // entstand: Die Verbindung kam nicht zustande, oder der TLS-Handshake
 // scheiterte — am Zertifikat, oder weil die Gegenseite kein TLS spricht.
-func notSent(err error) bool {
+// Dieselbe Regel gilt für den Client der Routen für Accounts am Node
+// (cmd/kephalaion, node account setup): nur dann „nicht erreicht“.
+func NotSent(err error) bool {
 	var op *net.OpError
 	if errors.As(err, &op) && op.Op == "dial" {
 		return true
