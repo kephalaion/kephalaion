@@ -355,7 +355,11 @@ Antwort aus einer lokalen Replica kommen.
   Wiederholung jeweils doppelt so lang, höchstens eine Woche. Die Zeile lässt sich über Header
   nicht fälschen: Account und Alias stehen nur über `ident.LogName` darin (keine Leerzeichen,
   kein `=`), `via` und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil
-  der Proxy mitgeschickte Werte von `X-Forwarded-For` verwirft. Grenze: Ein Prozess auf dem
+  der Proxy mitgeschickte Werte von `X-Forwarded-For` verwirft. Auch eine kodierte Schreibweise
+  des Pfads (`/%6dcp`, `/account/rotat%65`) zählt nicht an der Jail vorbei: Der Node wählt die
+  Route am Pfad, wie er im Log steht, nicht am dekodierten — so eine Anfrage ist 404, ohne dass
+  ein Token geprüft wird (ein Proxy wie Caddy wählt seine Route am dekodierten Pfad und reicht
+  die Schreibweise durch). Grenze: Ein Prozess auf dem
   Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen —
   so eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
   vertrauenswürdig. Die Tokens sind lang und zufällig — die Jail ist eine Absicherung

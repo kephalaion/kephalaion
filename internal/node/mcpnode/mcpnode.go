@@ -71,7 +71,13 @@ type Node struct {
 // Accounts (/account/rotate, /account/check, account.go), je mit Prüfung von
 // Host und Origin; alles andere 404. Der Pfad wird genau verglichen, ohne
 // ServeMux: Der leitete einen Pfad, den er bereinigt, mit 301 um, und eine
-// absolute Location ohne den Präfix des Proxys ginge ins Leere. version
+// absolute Location ohne den Präfix des Proxys ginge ins Leere. Verglichen
+// wird der Pfad, wie die Anfrage ihn schreibt und das Log ihn nennt
+// (EscapedPath, wie reqlog), nicht der dekodierte: Eine kodierte
+// Schreibweise (/%6dcp, /account/rotat%65) ist 404, ohne eine Route zu
+// erreichen. Sonst stünde ein Fehlversuch unter einem Pfad im Log, den der
+// Filter der Jail nicht trifft — ein Proxy reicht die Schreibweise durch,
+// Caddy wählt seine Route am dekodierten Pfad. version
 // steht in der Antwort auf initialize — außer verdeckt (über einen Proxy ohne
 // gültige Anmeldung, guard); update liefert für whoami die letzte Antwort
 // auf die Frage nach einer neuen Version — ohne selbst GitHub zu fragen. link
@@ -89,7 +95,7 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report,
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxRequestBytes})
 	mcpHandler, rotate, check := n.guard(h), n.accountHandler(true), n.accountHandler(false)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
+		switch r.URL.EscapedPath() {
 		case Path:
 			mcpHandler.ServeHTTP(w, r)
 		case AccountRotatePath:

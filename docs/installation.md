@@ -864,9 +864,13 @@ Node nicht kennt, und eine ohne `via` (lokal, nicht über den Proxy). An den Rou
 account setup` mit liegender `.pending` höchstens zwei je Aufruf. Die Zeile lässt sich über
 Header nicht fälschen: Namen stehen nur nach der Namensregel darin (sonst `(ungültig)`), `via`
 und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil der Proxy einen
-mitgeschickten `X-Forwarded-For` verwirft. Grenze: Ein Prozess auf dem Rechner des Nodes
-erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen — so eine Zeile mit
-fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als vertrauenswürdig.
+mitgeschickten `X-Forwarded-For` verwirft. Auch eine kodierte Schreibweise des Pfads geht nicht
+an der Jail vorbei: Caddy wählt seine Route am dekodierten Pfad und reicht `…/account/rotat%65`
+oder `…/%6dcp` so an den Node durch, der Node wählt seine Route aber am Pfad, wie er im Log steht
+— eine solche Anfrage ist 404, ohne dass ein Token geprüft wird. Grenze: Ein Prozess auf dem
+Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen — so
+eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
+vertrauenswürdig.
 
 Filter und Jail für die globale Installation (System-Unit `kephalaion.service`, Log im
 Journal), Schwelle und Fenster wie bei einer Jail für 401 im Log des Proxys:

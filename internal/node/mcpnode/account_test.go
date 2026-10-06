@@ -586,6 +586,59 @@ func TestAccountInvalid(t *testing.T) {
 	}
 }
 
+// Eine kodierte Schreibweise der Pfade (/%6dcp, /account/rotat%65) kommt an
+// keine Route. Ein Proxy wählt seine Route am dekodierten Pfad und reicht
+// die Schreibweise durch (Caddy wie der Nachbau), das Log nennt sie, wie sie
+// kam, und der Filter der Jail trifft nur die Klartextpfade. Deshalb ist sie
+// am Node 404, lokal und über den Proxy: kein Weg zum Hub, kein
+// login=invalid — ein falsches Token wird gar nicht erst geprüft, kein
+// Fehlversuch geht an der Jail vorbei. Derselbe Fehlversuch am Klartextpfad
+// trifft den Filter.
+func TestEncodedPathsReachNoRoute(t *testing.T) {
+	e := newAcctEnv(t)
+	e.hub.add("anna", "anna", e.newToken(t), "wissen")
+	wrong := pair("zentrale", "anna", e.newToken(t))
+	mcpHeader := merge(wrong, http.Header{"Content-Type": {"application/json"},
+		"Accept": {"application/json, text/event-stream"}})
+	routes := []struct {
+		path    string
+		header  http.Header
+		body    string
+		encoded []string
+	}{
+		{Path, mcpHeader, initializeBody, []string{"/%6dcp", "/%6Dcp", "/m%63p", "/mc%70", "/%6d%63%70"}},
+		{AccountRotatePath, wrong, `{"new_hash":"` + ident.HashToken(e.newToken(t)) + `"}`,
+			[]string{"/account/rotat%65", "/%61ccount/rotate", "/account%2Frotate", "/account%2frotate"}},
+		{AccountCheckPath, wrong, "", []string{"/account/%63heck", "/accoun%74/check", "/account%2Fcheck"}},
+	}
+	for _, route := range routes {
+		for _, p := range route.encoded {
+			for _, base := range []string{e.direct, e.proxy} {
+				r := e.call(t, base, http.MethodPost, p, route.header, route.body)
+				line := e.lastLine()
+				f := strings.Fields(line)
+				if r.status != http.StatusNotFound || len(f) < 4 || f[2] != p || f[3] != "404" {
+					t.Errorf("%s: HTTP %d, Logzeile %q", p, r.status, line)
+				}
+				if via := strings.Contains(line, " via=127.0.0.1"); via != (base == e.proxy) {
+					t.Errorf("%s: via in %q", p, line)
+				}
+				if hits := jailHits(t, e.lastFullLine()); strings.Contains(line, "login=invalid") || len(hits) != 0 {
+					t.Errorf("%s: Fehlversuch %v in %q", p, hits, line)
+				}
+			}
+		}
+		e.call(t, e.proxy, http.MethodPost, route.path, route.header, route.body)
+		if hits := jailHits(t, e.lastFullLine()); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
+			t.Errorf("%s: Filter der Jail %v in %q", route.path, hits, e.lastLine())
+		}
+	}
+	// Am Hub nur die beiden Klartextpfade.
+	if rot, who := e.hub.counts(); rot != 1 || who != 1 {
+		t.Errorf("am Hub: rotate %d, whoami %d, erwartet je 1", rot, who)
+	}
+}
+
 // Die Replica lässt sich nach rotate nicht schreiben: Der Erfolg bleibt —
 // das Token gilt —, mit Hinweis und Anstoß des Abgleichs.
 func TestAccountRotateReplicaFails(t *testing.T) {

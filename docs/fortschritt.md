@@ -330,7 +330,9 @@ die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
     Replica; ein vom Hub abgelehntes Token ist ein Fehlversuch (`login=invalid`); über den
     Proxy ohne gültige Anmeldung eine verdeckte Antwort für abgelehnt, unbekannten Hub und
     abgewiesenen Node, eigene Codes für `unreachable` und `outcome_unknown`; der Handler
-    vergleicht den Pfad selbst, nie ein 3xx;
+    vergleicht den Pfad selbst, nie ein 3xx, und kodiert, wie das Log ihn nennt (eine kodierte
+    Schreibweise wie `/account/rotat%65` oder `/%6dcp` ist 404 und geht nicht an der Jail
+    vorbei);
   - `kephalaion node account setup <hub> <account> [<token> | --token-stdin] [--node url
     [--ca-file pfad]]`: zuerst alles ohne Token, dann `.pending`, `rotate` über den Node,
     Token-Datei (`0600`), Eintragen bei den Assistenten; „nicht erreicht“ nur vor dem
