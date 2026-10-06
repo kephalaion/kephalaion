@@ -52,7 +52,8 @@ festen Ersatz-Hash. Unbekannt, falsches Token und gesperrt sind dieselbe Antwort
 ## whoami
 
 Bestätigt den Node und nennt, was er abgleichen darf. Mit Account-Teil prüft es zusätzlich den
-Account — so prüft ein Node nach einem unklaren `rotate`, welches Token gilt.
+Account — so prüft ein Node nach einem unklaren `rotate`, welches Token gilt, und ebenso ein
+Client über den Node (siehe `rotate`).
 
 | Feld | JSON | Bedeutung |
 |---|---|---|
@@ -71,8 +72,13 @@ Antwort:
 
 ## rotate
 
-Ersetzt das Token eines Accounts. Der Node erzeugt das neue Token, schickt nur seinen Hash und
-behält das Token selbst; zur Anmeldung dient das alte.
+Ersetzt das Token eines Accounts. Zum Hub geht nur der Hash des neuen Tokens; zur Anmeldung
+dient das alte. Das neue Token erzeugt, wer den Vorgang anstößt: der Node selbst (`node account
+rotate`, er behält das Token) oder ein Client, der den Node über dessen Weg für Accounts aufruft
+(`node account setup`, Route `/account/rotate`, [`begriffe.md`](begriffe.md), „account
+routes“) — dann erzeugt und behält der Client das Token und schickt auch dem Node nur den Hash.
+Der Node ist in beiden Fällen der Träger und meldet sich wie immer selbst an; am Vertrag ändert
+sich nichts.
 
 | Feld | JSON | Bedeutung |
 |---|---|---|
@@ -103,8 +109,10 @@ danach stellt er sie nur noch zusammen.
 
 **Nicht wiederholbar.** Nach einem erfolgreichen `rotate` gilt das alte Token nicht mehr; ein
 zweiter Versuch mit ihm scheitert. Ein Transport wiederholt `rotate` deshalb nie (siehe
-„Ausgang und Wiederholung“). Ist der Ausgang unklar (`contract.ErrOutcomeUnknown`), prüft der
-Node mit `whoami`, welches Token gilt.
+„Ausgang und Wiederholung“). Ist der Ausgang unklar (`contract.ErrOutcomeUnknown`), prüft mit
+`whoami`, wer das neue Token hält: der Node selbst (`node account check`) bzw. der Client über
+den Node (Route `/account/check`, `whoami` mit Account-Teil am Hub) — ein Node, der nur den
+Hash kennt, kann das allein nicht klären; er meldet dem Client den unklaren Ausgang.
 
 ## sync
 
@@ -381,8 +389,8 @@ der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier
 - **Unklar** — jeder andere Fehler nach dem Abschicken: Zeitüberschreitung, abgebrochene
   Verbindung, unlesbare Antwort, 5xx; über `local` jeder Fehler, der kein Fehler des Vertrags
   ist, auch einer der Datenbank nach dem Commit. Der Hub kann ausgeführt haben. Nach `rotate`
-  prüft der Node mit `whoami`; nach einem Schreibvorgang stößt er den Abgleich an, und der
-  Aufrufer sieht nach.
+  prüft mit `whoami`, wer das neue Token hält (der Node oder der Client über ihn); nach einem
+  Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach.
 
 In Go: ein `*contract.Error` ist abgelehnt, `contract.ErrOutcomeUnknown` unklar,
 `contract.ErrUnknownOperation` der unbekannte Vorgang; jeder andere Fehler heißt nicht
@@ -502,4 +510,7 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   probieren; er muss dafür aber selbst angemeldet sein. Eine Begrenzung kommt später. Seit
   der Hub hinter einem Reverse-Proxy nach außen spricht (`https`), wird sie dringlicher: Der
   Proxy begrenzt nichts (Caddy ohne Plugin); Übergang ist fail2ban auf das Zugriffslog des
-  Proxys (401/403 auf `/v1/`), siehe [`installation.md`](installation.md).
+  Proxys (401/403 auf `/v1/`), siehe [`installation.md`](installation.md). Über die Routen für
+  Accounts am Node (`/account/rotate`, `/account/check`) probiert ein Client Tokens mit der
+  Anmeldung des Nodes; dort zählt die Jail am Log des Nodes (`login=invalid`) wie am
+  MCP-Eingang.

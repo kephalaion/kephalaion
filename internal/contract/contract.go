@@ -124,7 +124,10 @@ type RotateRequest struct {
 	// Token ist das bisherige Token des Accounts.
 	Token string `json:"token"`
 	// NewHash ist sha256 des neuen Tokens, 64 Zeichen hex. Das neue Token
-	// selbst verlässt den Node nie.
+	// selbst geht nie zum Hub: Es bleibt bei dem, der es erzeugt — dem Node
+	// (node account rotate) oder dem Client, der den Node über
+	// /account/rotate aufruft (node account setup); dann sieht auch der Node
+	// nur den Hash.
 	NewHash string `json:"new_hash"`
 }
 

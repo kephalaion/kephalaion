@@ -359,7 +359,9 @@ Antwort aus einer lokalen Replica kommen.
   Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen —
   so eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
   vertrauenswürdig. Die Tokens sind lang und zufällig — die Jail ist eine Absicherung
-  zusätzlich, nicht die einzige Schranke.
+  zusätzlich, nicht die einzige Schranke. Dasselbe gilt an den Routen für Accounts neben `/mcp`
+  (`/account/rotate`, `/account/check`, Task 028; „Einrichten durch den User“): Lehnt der Hub
+  das Token ab, trägt ihre Zeile `login=invalid` hinter `via`, und dieselbe Jail zählt sie.
 - **Folgen einer Sperre.** fail2ban sperrt die ganze Adresse auf 80 und 443 — auch den Abgleich
   eines Nodes vom selben Rechner mit dem Hub hinter demselben Proxy und die Weboberfläche
   hinter dessen Anmeldung. Ausgenommen ist nur, was die Jail ausdrücklich ausnimmt (auf der VM
@@ -416,8 +418,10 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
   Leere); die Weboberfläche nennt deshalb nur relative Pfade (`gui/app.js`,
   `gui/api/user`), `X-Forwarded-Prefix` liest das Binary nicht.
   Nach außen ohne Anmeldung gehen nur der Hub (`/kephalaion/hub/*`, Nodes weisen sich mit
-  dem Token aus) und seit Task 023 der MCP-Eingang des Nodes (genau `/kephalaion/mcp` an
-  `/mcp` auf 7433, Clients mit Header-Paaren; ohne gültige Anmeldung verdeckt, siehe oben);
+  dem Token aus), seit Task 023 der MCP-Eingang des Nodes (genau `/kephalaion/mcp` an
+  `/mcp` auf 7433, Clients mit Header-Paaren; ohne gültige Anmeldung verdeckt, siehe oben)
+  und seit Task 028 die Routen für Accounts daneben (genau `/kephalaion/account/rotate` und
+  `/kephalaion/account/check`);
   wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und Weboberfläche nennen die
   Version.
 - **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020; umgebaut nach der
@@ -1070,6 +1074,7 @@ Generalschlüssel.
 | Lesen | prüft gegen die Account-Zeilen seiner Replica | — |
 | Schreiben | prüft vorher Anmeldung und Lesbarkeit gegen die Account-Zeilen seiner Replica, reicht dann durch | prüft Anmeldung, Lesbarkeit, Recht, Form und Vorbedingung — maßgeblich |
 | `rotate` | reicht durch, muss den Account nicht kennen | prüft, liefert den Account-Eintrag |
+| Prüfen über den Node (`/account/check`) | reicht durch (`whoami` mit Account-Teil), keine Vorprüfung gegen die Replica | prüft — maßgeblich |
 
 **Grenze beim Schreiben (Task 014):** Weil der Node vorher gegen seine Replica prüft, setzt
 Schreiben voraus, dass sie die Collection und die `SYSTEM:A:`-Zeile des Accounts schon trägt —
@@ -1141,6 +1146,103 @@ Hub hat nicht ausgeführt.
 Gelingt das, war die Rotation erfolgreich; sonst wiederholt er sie mit dem alten. Der Hub
 kennt keinen Wiederholungsfall, `rotate` verlangt immer ein gültiges altes Token. Der
 Mechanismus wird so definiert; ein Account implementiert die Wiederholung, wenn er will.
+
+**Einrichten durch den User — entschieden am 2026-10-05, gebaut in Task 028.** Bis dahin konnte
+nur rotieren, wer an die `node.db` eines am Hub eingetragenen Nodes kam: am globalen Node der
+Systembenutzer, also der Admin; ein Client ohne eigenen Node gar nicht (`rotate` ist bewusst
+kein MCP-Werkzeug). Jetzt gilt: Der Admin legt den Account an und gibt Rechte (`hub account
+add`, `grant`, später in der Oberfläche); der User ruft **ein** Kommando auf,
+`kephalaion node account setup <hub> <account>` mit dem Einrichtungstoken, und ist arbeitsfähig
+— gleich, ob Hub und Node auf seinem Rechner liegen oder entfernt sind und ob er einen eigenen
+Node hat. Es rotiert über einen Node, den er nur erreicht (auf der VM `127.0.0.1:7433`, entfernt
+`https://<name>/kephalaion`), schreibt `~/.config/kephalaion/tokens/<hub>/<account>.token`
+(`0600`) und trägt den Node bei den Assistenten ein; jeder Schritt eine Zeile, Tokens nur
+gekürzt. `node account list` zeigt alle Token-Dateien des Linux-Users mit Zustand (gültig,
+ungültig, unbekannt, `.pending` offen) — gefragt beim Node, nicht in einer eigenen Datenbank.
+`node account rotate|check` am eigenen Node bleiben, wie sie sind.
+
+- **Der Weg am Node.** Neben `/mcp` hat der Node-Listener zwei Routen für Accounts
+  (**account routes**, [`begriffe.md`](begriffe.md)): `POST /account/rotate` (Body: der Hash des
+  neuen Tokens) und `POST /account/check`, beide mit Account und Token im Header-Paar des Hubs,
+  je Vorgang genau eine HTTP-Anfrage und eine Logzeile — kein MCP, dessen `whoami` drei
+  Anfragen bräuchte, jede ein Fehlversuch. Der Node reicht `rotate` mit seiner eigenen
+  Anmeldung durch (er ist der Träger, wie bei `node account rotate`) und schreibt die
+  Account-Zeilen in seine Replica; zum Prüfen fragt er den Hub (`whoami` mit Account-Teil). Es
+  entscheidet der Hub, ohne Vorprüfung gegen die Replica: Ein frisch angelegter Account steht
+  dort erst nach dem nächsten Abgleich, `setup` direkt nach `add` und `grant` gelingt trotzdem.
+  Der Vertrag bleibt, wie er ist.
+- **Das neue Token entsteht beim User und verlässt seinen Rechner nie.** Der Client erzeugt es,
+  legt es vor dem Aufruf als `<datei>.pending` ab (`0600`) und schickt altes Token und neuen
+  Hash; Node, Hub und Admin sehen nur den Hash. Danach meldet sich der Client mit dem Token an
+  wie jeder MCP-Client, auch an der Route zum Prüfen — dort geht es, wie bei jedem
+  Schreibvorgang über MCP, unterwegs bis zum Hub (`whoami` mit Account-Teil); gespeichert oder
+  geloggt wird es nirgends, auch nicht im Log des Proxys.
+- **Ausgänge wie bei `node account rotate`, nie wiederholt.** Erfolg macht aus `.pending` die
+  Token-Datei. Gelöscht wird `.pending` nur bei eindeutigem Ausgang ohne Wirkung: vom Hub
+  abgelehnt, Hub dem Node unbekannt (über den Proxy die eine verdeckte Antwort), der Hub nimmt
+  den Node nicht an, oder Hub nicht erreicht — den Code dafür gibt der Node nur, wenn der Weg
+  zum Hub „nicht abgeschickt“ meldet (so streng wie der Client des Vertrags); ebenso, wenn der
+  Client schon den Node nachweislich nicht erreicht (Verbindung oder TLS, 404 ohne Code des
+  Nodes). Alles andere nach dem Abschicken ist unklar und lässt `.pending` liegen: der Code des
+  Nodes für „Ausgang unklar“, ein Status des Proxys (Caddy antwortet auch 502, wenn der Node
+  nach gelungenem `rotate` abbricht), Zeitüberschreitung, abgebrochene Verbindung, eine Antwort
+  ohne Code des Nodes.
+- **Unklaren Ausgang klären.** `node account check` hilft einem User ohne eigenen Node nicht
+  (es braucht die eigene `node.db`). Geklärt wird deshalb über den Node beim Hub, mit der Route
+  zum Prüfen; maßgeblich ist der Hub, nicht die Replica. Ein zweiter Aufruf von `setup` erkennt
+  die liegende `.pending` und rotiert nicht: Gilt ihr Token, wird es die Token-Datei. Gilt es
+  nicht, prüft `setup` das Einrichtungstoken, wie `node account check` das alte Token: Nur wenn
+  es gilt — der `rotate` kam nicht an —, löscht es die `.pending`, und `setup` lässt sich
+  wiederholen. Gilt keins, oder lässt es sich nicht entscheiden (nicht geprüft), bleibt die
+  `.pending` — sonst ginge ein gültiges Token verloren —, mit Hinweis auf den Admin.
+
+**Grenzen des Einrichtens durch den User:**
+
+- **Das Einrichtungstoken als Argument.** Weil es sofort rotiert wird, darf es bei `setup` als
+  Argument kommen (oder über `--token-stdin`) — die einzige Ausnahme von „Token nie als
+  Argument“, und sie gilt überall, auch auf der VM. Auf einem Rechner mit mehreren Usern sieht
+  jeder Linux-User die Prozessliste und erreicht den lokalen Node; wer `/proc` schnell genug
+  liest, könnte vor dem User rotieren. Das Fenster liegt im Bereich von Millisekunden; auf der
+  VM sind die User in `docker` ohnehin wie root. Abhilfe: Der User merkt das Scheitern (das
+  Token gilt nicht mehr), der Admin erzeugt mit `hub account token <name>` ein neues
+  Einrichtungstoken.
+- **Abbruch vor dem Rotieren.** Bricht `setup` ab, bevor es rotiert (Node nicht erreichbar,
+  Token-Datei vorhanden), bleibt das Einrichtungstoken gültig, obwohl es in Prozessliste und
+  Shell-Verlauf stand. Deshalb prüft `setup` alles, was kein Token braucht — Adresse,
+  vorhandene Datei, Node (`initialize` ohne Token) —, bevor es das Token liest und rotiert;
+  liegt eine `.pending`, liest es das Token nur zum Prüfen, nie für ein `rotate`.
+- **Rotieren von außen mit entwendetem Token.** Der Weg rotiert jedes Token, nicht nur ein
+  Einrichtungstoken, und ist auf der VM über 443 ohne Anmeldung des Proxys erreichbar. Wer ein
+  entwendetes Token hat, kann es von außen rotieren und den eigentlichen User aussperren. Mit
+  dem Token hat er über MCP ohnehin vollen Zugriff; bisher konnte aber nur rotieren, wer an die
+  `node.db` eines am Hub eingetragenen Nodes kam. Abhilfe: Der Admin sperrt den Account (`hub
+  account lock`) oder erzeugt ein neues Einrichtungstoken (`hub account token`). Keine
+  Einschränkung im Code; die Beschränkung auf Einrichtungstokens gehört zu Todo 16.
+- **Fehlversuche gegen die Jail.** Lehnt der Hub das Token an einer der Routen ab, ist das ein
+  Fehlversuch wie am MCP-Eingang (`login=invalid` hinter `via`, „Kommunikation“). `list`
+  verursacht höchstens einen je ungültiger Datei — liegt eine `.pending` neben einer `.token`,
+  prüft es beide (zwei Anfragen; nach unklarem Ausgang gilt eine davon) —, `setup` mit einer
+  `.pending`, die nicht gilt, höchstens zwei je Aufruf (`.pending`, dann das
+  Einrichtungstoken; gilt keins, Hinweis auf den Admin statt eines weiteren Versuchs). Die Jail
+  sperrt nach 10 in 10 min, eine Adresse mit früherer Sperre schon nach 5 (jeder Versuch zählt
+  dort doppelt) — für so eine Adresse reichen drei veraltete Token-Dateien und zwei Aufrufe von
+  `list`. Eine Datei, die kein gültiges Token hält, fragt `list` gar nicht erst.
+- **„Ungültig oder unbekannt“ über einen entfernten Node.** Über den Proxy ist die Antwort ohne
+  gültige Anmeldung verdeckt: „vom Hub abgelehnt“, „Hub dem Node unbekannt“ und „der Hub nimmt
+  den Node nicht an“ sind dieselbe Antwort, `list` zeigt dafür einen Zustand. Ein falscher Alias
+  sieht von außen aus wie ein falsches Token.
+- **Eigene Codes für „Ausgang unklar“ und „nicht geprüft“ über den Proxy** (Entscheidung des
+  Nutzers, 2026-10-06). Verdeckt der Node auch sie, läse der Client ein unklares `rotate` als
+  Ablehnung und löschte die `.pending` — das einzige gültige Token. Preis: Während eines
+  Ausfalls oder einer Zeitüberschreitung des Hubs sieht ein Fremder, dass es den Alias gibt
+  (Version und Namen nennt die Antwort weiter nicht). Ebenso unterscheidet die Antwortzeit
+  einen unbekannten Alias (sofort) von einem bekannten (Weg zum Hub).
+- **Das Token beim Prüfen unterwegs.** Die Route zum Prüfen schickt das Token wie jeder
+  Schreibvorgang über MCP über Node und Proxy bis zum Hub (`whoami` mit Account-Teil);
+  gespeichert und geloggt wird es nirgends.
+- **Spätere Rotation ohne eigenen Node** braucht weiter den Admin: `setup` richtet ein (es
+  bricht ab, wenn die Token-Datei schon liegt), ein Kommando für das spätere Rotieren über den
+  Node gibt es noch nicht.
 
 **Sperren** wirkt beim Schreiben sofort, denn geschrieben wird nur über den Hub. Beim Lesen
 wirkt es auf einem Node erst mit dem nächsten Abgleich; der Hub meldet Sperren deshalb sofort

@@ -12,7 +12,7 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **serve** — `kephalaion serve`, der Dienst. Trägt die Rollen, die in der Konfiguration
   stehen: `hub:`, `node:` oder beide in einem Prozess. Keine eigene Rolle und kein eigener
   Eintrag in der config, sondern der eine Aufruf, der nicht endet: Er lauscht je Rolle auf
-  ihrem `listen` (MCP für Clients unter `/mcp`; am Hub-Listener an der Wurzel die **gui** für
+  ihrem `listen` (MCP für Clients unter `/mcp`, daneben die **account routes**; am Hub-Listener an der Wurzel die **gui** für
   Browser und die **greeting** für alles andere, der Vertrag für Nodes unter **/hub**), nur auf
   Loopback — Nodes anderer Rechner kommen über einen **reverse proxy** (`https`). Als Node
   gleicht er im Hintergrund ab (`sync_interval`); später hält er
@@ -109,8 +109,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Log des Hubs steht die Adresse des Aufrufers als `via` (aus `X-Forwarded-For`). Aufbau in
   [`installation.md`](installation.md).
 - **node address** (Adresse des Nodes) — wie ein Client auf der Kommandozeile den Node nennt
-  (`--node` bei `node dir` und `node mcp add|status`): die Basis ohne `/mcp`, angehängt wird
-  `/mcp`. Lokal `http://127.0.0.1:7433` (aus `listen`), über einen Proxy
+  (`--node` bei `node dir`, `node mcp add|status` und `node account setup|list`): die Basis ohne
+  `/mcp`, angehängt wird `/mcp` bzw. der Pfad einer der **account routes**. Lokal `http://127.0.0.1:7433` (aus `listen`), über einen Proxy
   `https://<name>/<präfix>`, etwa `https://<name>/kephalaion` (Task 023). `http` nur zu diesem
   Rechner (`localhost`, `127.0.0.1`, `[::1]`) und zu `host.docker.internal`, alles andere nur
   `https` — sonst gingen Tokens im Klartext übers Netz; keine Query, kein User, keiner
@@ -120,9 +120,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   HTML), heißt das „Präfix falsch oder Anmeldung des Proxys“. **Entfernt** (remote) ist jede
   Adresse außer `http` zu Loopback — also `https` und `http://host.docker.internal`; für einen
   **entry** mit entfernter Adresse gilt die Wahl der Hubs (**--hub**).
-- **via proxy** (über den Proxy) — eine Anfrage an `/mcp`, die den Header `X-Forwarded-For`
-  trägt; daran erkennt der Node, dass sie über einen **reverse proxy** kam (Task 023). Kein
-  zweiter Listener, keine Einstellung. Voraussetzung: Der Proxy setzt den Header selbst und
+- **via proxy** (über den Proxy) — eine Anfrage an `/mcp` oder eine der **account routes**, die
+  den Header `X-Forwarded-For` trägt; daran erkennt der Node, dass sie über einen **reverse
+  proxy** kam (Task 023). Kein zweiter Listener, keine Einstellung. Voraussetzung: Der Proxy setzt den Header selbst und
   verwirft einen mitgeschickten — Caddy tut beides von sich aus; hinter einem Proxy ohne ihn
   sähe jede Anfrage lokal aus. Ohne gültige Anmeldung an mindestens einem Hub ist die Antwort
   dann **hidden**; lokal (ohne den Header) bleibt alles, wie es war.
@@ -133,15 +133,45 @@ Ausführlich: [`konzept.md`](konzept.md).
   Hub-Eintrag: Eine Adresse ohne Hub-Teil ist „an keinem Hub gültig angemeldet“, eine mit
   Hub-Teil „nicht lesbar“ — gleich, ob es den Hub gibt. `whoami` trägt dann `hidden: true`, leere
   `hubs` und `unknown_hubs` und einen Satz zur Anmeldung. Mit gültiger Anmeldung an mindestens
-  einem Hub antwortet der Node wie lokal, auch zu den übrigen Hubs.
+  einem Hub antwortet der Node wie lokal, auch zu den übrigen Hubs. An den **account routes**
+  ist verdeckt die eine Antwort für „vom Hub abgelehnt“, „Hub dem Node unbekannt“ und „der Hub
+  nimmt den Node nicht an“: 403 `account_unauthenticated` mit `hidden: true`, ohne Namen.
 - **login=invalid** (Fehlversuch) — Vermerk in der Logzeile einer Anfrage an `/mcp` mit
   mindestens einem ungültigen Header-Paar (falsches Token; unbekannter oder gesperrter
-  Account; ein Header des Paars fehlt; der Node hat den Hub noch nie abgeglichen). Er steht
-  direkt hinter `via` bzw. der Dauer, vor allen Namen, und zählt je Anfrage einmal, gleich wie
-  viele Paare ungültig sind. Eine Anfrage ohne Header-Paar (etwa `initialize` ohne Token) und
-  eine mit Paaren nur zu Aliasen, die der Node nicht kennt, tragen ihn nicht. Auf dem Rechner
-  des Proxys zählt eine fail2ban-Jail die Zeilen mit `via` und `login=invalid` im Journal des
-  Dienstes ([`installation.md`](installation.md)); der Node selbst antwortet nie 401.
+  Account; ein Header des Paars fehlt; der Node hat den Hub noch nie abgeglichen) und einer
+  Anfrage an eine der **account routes**, deren Token der Hub ablehnt (`rotate`:
+  `account_unauthenticated`, `whoami`: `valid` falsch). Er steht direkt hinter `via` bzw. der
+  Dauer, vor allen Namen, und zählt je Anfrage einmal, gleich wie viele Paare ungültig sind.
+  Eine Anfrage ohne Header-Paar (etwa `initialize` ohne Token) und eine mit Paaren nur zu
+  Aliasen, die der Node nicht kennt, tragen ihn nicht — an den **account routes** ebenso wenig
+  ein unbekannter Alias und ein Hub, der nicht erreicht wurde. Auf dem Rechner des Proxys zählt
+  eine fail2ban-Jail die Zeilen mit `via` und `login=invalid` im Journal des Dienstes
+  ([`installation.md`](installation.md)); der Node selbst antwortet nie 401.
+- **account routes** (Weg für Accounts) — die zwei Routen am Node-Listener neben `/mcp` (Task
+  028), über die ein Client ohne Zugriff auf die Datenbank des Nodes das Token eines Accounts
+  rotieren und prüfen lässt — für **node account setup** und **node account list**. Kein MCP:
+  je Vorgang genau eine HTTP-Anfrage und eine Logzeile. Beide nehmen Account und Token im
+  Header-Paar genau eines Hubs (`X-Keph-Account-<alias>`, `X-Keph-Token-<alias>`), antworten
+  mit JSON und nie mit einem Token; es entscheidet der Hub, ohne Vorprüfung gegen die Replica —
+  so gelten sie auch für einen Account, den der Node noch nicht abgeglichen hat.
+  - **/account/rotate** — `POST`, Body `{"new_hash": "<sha256 des neuen Tokens, hex>"}`: Der
+    Node ruft `rotate` über seinen Hub-Eintrag (er ist der **carrier**), schreibt die
+    Account-Zeilen in seine Replica und antwortet mit Hub, Account, User und Collections. Das
+    neue Token erzeugt der Client; zum Node und zum Hub geht nur sein Hash.
+  - **/account/check** — `POST` ohne Body: Der Node fragt den Hub (`whoami` mit Account-Teil)
+    und antwortet bei gültigem Token mit Hub, Account, User und Collections.
+  - Fehler als `{"code": …, "message": …}`: `invalid` (400; 405 für anderes als `POST`),
+    `account_unauthenticated` (403, vom Hub abgelehnt: ein Fehlversuch, **login=invalid**),
+    `unknown_hub` (403, der Node hat keinen Eintrag mit dem Alias), `hub_refused` (502, der Hub
+    nimmt den Node nicht an), `no_shared_collection` (409, nur `rotate`), `unreachable` (503,
+    Hub nicht erreicht: nichts geändert bzw. **nicht geprüft**), `outcome_unknown` (504, nur
+    `rotate`: abgeschickt, Ausgang unklar), `internal` (500, Fehler des Nodes, nichts
+    abgeschickt). **Via proxy** ohne gültige Anmeldung sind `account_unauthenticated`,
+    `unknown_hub` und `hub_refused` dieselbe Antwort (403 `account_unauthenticated`, `hidden:
+    true`, ohne Namen); `unreachable`, `outcome_unknown` und `internal` bleiben eigene Codes,
+    ohne Version und ohne Namen. Nach außen reicht der Proxy genau `/kephalaion/account/rotate`
+    und `/kephalaion/account/check` durch, wie `/kephalaion/mcp`. Nie ein 3xx; jeder andere Pfad
+    am Node-Listener ist 404.
 - **/hub** (Hub-Pfad) — der Ort des Vertrags am Hub-Listener von `serve`: `POST
   /hub/v1/<vorgang>`. Die Adresse eines **hub entry** endet darauf (`http://localhost:7434/hub`,
   hinter einem Proxy `https://<name>/kephalaion/hub`), der Client hängt `/v1/<vorgang>` an;
@@ -252,7 +282,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Das Gegenstück der Erweiterung für VS Code ist **kephalaion.hubs**. (Bei `node whoami`
   beschränkt `--hub` nur die Anzeige.)
 - **--auto** (automatischer Anstoß) — `node mcp add --auto`: der Aufruf aus `install.sh`;
-  dieselbe Regel gilt nach `node account rotate` und `check`. Er ändert nur Assistenten, die
+  dieselbe Regel gilt nach `node account rotate` und `check` und nach `node account setup` mit
+  dem Node aus der config. Er ändert nur Assistenten, die
   schon einen Eintrag `kephalaion` haben; hat noch keiner der gefundenen einen, trägt er wie
   `add` bei allen gefundenen ein. Ohne Node in der config endet er ohne Meldung mit Exit 0.
 - **kephalaion.nodeUrl** — Einstellung der Erweiterung für VS Code: die Adresse des Nodes als
@@ -455,7 +486,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   heißen.
 - **setup token** (Einrichtungstoken) — das Token, das `hub account add` und `hub account
   token` einmal anzeigen: das erste Token des Accounts. Sein erster Vorgang tauscht es per
-  `rotate` gegen ein eigenes, danach ist es wertlos.
+  `rotate` gegen ein eigenes, danach ist es wertlos — üblich mit **node account setup** durch
+  den User selbst; das ist das einzige Kommando, bei dem ein Token als Argument kommen darf.
 - **token** — Geheimnis eines Accounts, Format `keph_<geheimnis>`. Jede Anfrage trägt
   Account-Name und Token. Gespeichert wird nur der Hash. Unabhängig vom Transport.
 - **account token** (Account-Token) — das **token** eines Accounts, wenn es von anderen zu
@@ -526,10 +558,12 @@ Ausführlich: [`konzept.md`](konzept.md).
   nie als Argument übergeben und nur gekürzt angezeigt (`keph_…` und die letzten vier
   Zeichen).
 - **--token-file** — eine Datei, die das Token eines Accounts als eine Zeile hält (`0600`), bei
-  `node account rotate|check`; üblicher Ort `~/.config/kephalaion/tokens/<hub>/<account>.token`,
+  `node account rotate|check` (**node account setup** schreibt sie selbst); üblicher Ort `~/.config/kephalaion/tokens/<hub>/<account>.token`,
   `<hub>` der Alias des Hub-Eintrags. Daneben **pending** (`<datei>.pending`): das neue Token eines
   laufenden `rotate`, geschrieben vor dem Aufruf; nach Erfolg ersetzt es die Datei, bei
-  unklarem Ausgang bleibt es, bis `check` es klärt.
+  unklarem Ausgang bleibt es, bis `check` es klärt. Bei **node account setup** liegt nur
+  `.pending` (das Einrichtungstoken kommt als Argument oder über stdin); ein zweiter Aufruf
+  von `setup` klärt sie über **/account/check**, **node account list** zeigt sie.
 - **check** — `kephalaion node hub check <alias>`: `whoami` am Hub, zeigt Erreichbarkeit,
   Node-Namen und erlaubte Collections und merkt beim ersten Kontakt die `hub_id`. Bei `https`
   erklärt es, was schiefgeht: Zertifikat nicht vertraut (mit Aussteller; `--ca-file`?), gilt
@@ -539,7 +573,32 @@ Ausführlich: [`konzept.md`](konzept.md).
   Proxy die Route nicht?); eine Anmeldung des Proxys (401: Route hinter `forward_auth`, oder
   die Adresse ohne `/hub` landet in der Anmeldung vor dem Rest).
   `kephalaion node account check <hub> <account>`: `whoami` mit Account-Teil, ob ein Token
-  gilt; löst ein liegengebliebenes `pending` auf.
+  gilt; löst ein liegengebliebenes `pending` auf. Es braucht die eigene `node.db` mit
+  Hub-Eintrag; ohne sie prüft **node account list** über einen Node (**/account/check**).
+- **node account setup** — `kephalaion node account setup <hub> <account> [<token> |
+  --token-stdin] [--node <url> [--ca-file <pfad>]]` (Task 028): Der User richtet seinen Account
+  mit dem **setup token** selbst ein, ohne eigenen Node und ohne Zugriff auf `node.db` — über
+  einen Node, den er erreicht: ohne `--node` `listen` der config des Users bzw. der globalen
+  (auf der VM `http://127.0.0.1:7433`), sonst die **node address** (`https://<name>/kephalaion`);
+  steht in der config kein Node, ist `--node` Pflicht. Zuerst alles ohne Token: Adresse, keine
+  Token-Datei da, Node antwortet (`initialize` ohne Token). Dann erzeugt es das neue Token,
+  legt es als **pending** ab (`0600`), lässt den Node über **/account/rotate** rotieren,
+  schreibt `tokens/<hub>/<account>.token` (`0600`) und trägt den Node bei den Assistenten ein —
+  mit dem Node aus der config wie **--auto**, mit `--node` wie `node mcp add --node <url> --hub
+  <hub>`. Je Schritt eine Zeile, Tokens nur gekürzt. Liegt schon eine **pending**, rotiert es
+  nicht, sondern klärt sie über **/account/check**: Gilt sie, wird sie die Token-Datei; gilt
+  sie nicht, aber das Einrichtungstoken, wird sie gelöscht (dann `setup` erneut); sonst bleibt
+  sie, mit Hinweis auf den Admin (`hub account token`). Das Einrichtungstoken darf als Argument
+  kommen, weil es sofort rotiert wird (Grenzen: [`konzept.md`](konzept.md), „Einrichten durch
+  den User“). Exit 0 eingerichtet, 1 Fehler, 2 falscher Aufruf, 3 geklärt — erneut aufrufen.
+- **node account list** — `kephalaion node account list [--node <url> [--ca-file <pfad>]]
+  [--json]` (Task 028): alle Token-Dateien des Linux-Users unter `tokens/` (`<account>.token`
+  und **pending**) mit Hub, Account, Datei, Zustand, User und Collections — gefragt beim Node
+  über **/account/check**, je Datei genau eine Anfrage, nicht in einer eigenen Datenbank;
+  Adresse wie bei **node account setup**. Zustände: **gültig**, **ungültig**, **unbekannt** (der
+  Node kennt den Hub nicht), über einen Proxy **ungültig oder unbekannt** (die verdeckte
+  Antwort trennt beides nicht), **nicht geprüft** (Node oder Hub nicht erreichbar, der Hub
+  nimmt den Node nicht an), **unlesbar** (die Datei hält kein gültiges Token; keine Anfrage).
 - **--create** — `kephalaion node hub add <alias> --transport local --create`: legt den Node
   am Hub derselben config an und trägt sein Token direkt in `node.db` ein, ohne es anzuzeigen.
 - **name rule** (Namensregel) — Namen von Collections, Nodes, Accounts und Hub-Aliasen:
@@ -553,7 +612,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   Erster Vorgang jedes Accounts; eine eigene Begrüßung gibt es nicht. Vorgang des Vertrags,
   nie wiederholt; ein Schreibvorgang mit einer Zeile `rotate` in `actions`. Am Node das
   Kommando `kephalaion node account rotate <hub> <account> (--token-file pfad |
-  --token-stdin)` — ein CLI-Kommando, kein MCP-Werkzeug.
+  --token-stdin)` — ein CLI-Kommando, kein MCP-Werkzeug. Ohne eigenen Node rotiert ein Client
+  über den Node: **node account setup** und **/account/rotate**; das neue Token erzeugt dann
+  der Client.
 - **whoami** — Vorgang des Vertrags: bestätigt den Node, nennt die `hub_id` und seine
   erlaubten Collections und prüft wahlweise einen Account (`valid`). Am Node auch ein
   MCP-Werkzeug für Clients: Version, `update` (neueste Version und Weg, aus der Antwort, die
