@@ -191,12 +191,15 @@ Ausführlich: [`konzept.md`](konzept.md).
   `..`, den `ServeMux` sonst umleitete.
 - **gui** (Weboberfläche) — die Seite des Hub-Listeners für Browser: an seiner Wurzel (`GET
   /` mit `text/html` in `Accept`), ihre Teile unter `/gui/` (`gui/app.js`, `gui/style.css`,
-  `gui/icon.svg`, der Eingang **gui/api/user**). Sie zeigt dem **viewer** — dem User, mit
-  dem der Browser am Proxy angemeldet ist — alle Accounts seines Users: Name, Beschreibung,
-  Status (gesperrt: die Rechte ruhen) und je Collection Rechte, Scopes `vendor/<name>` und
-  Verzeichnis-Scopes (`dir <pfad>/`). Ein Token fragt sie nicht ab, zeigt und überträgt keins
-  (Task 026; bis dahin fragte sie Account und **account token** ab). Kein Teil des Vertrags,
-  nur lesen, keine Verwaltung (die bleibt in der CLI).
+  `gui/icon.svg`, die Eingänge **gui/api/user** und **gui/api/users**). Sie zeigt dem
+  **viewer** — dem User, mit dem der Browser am Proxy angemeldet ist — alle Accounts seines
+  Users: Name, Beschreibung, Status (gesperrt: die Rechte ruhen) und je Collection Rechte,
+  Scopes `vendor/<name>` und Verzeichnis-Scopes (`dir <pfad>/`). Einem **gui admin** zeigt sie
+  zuerst die Liste aller Accounts, nach User geordnet; ein Klick auf einen User zeigt dessen
+  Ansicht, „Alle Accounts“ führt zurück — innerhalb der Seite, die Adresse bleibt (Task 029).
+  Ein Token fragt sie nicht ab, zeigt und überträgt keins (Task 026; bis dahin fragte sie
+  Account und **account token** ab). Kein Teil des Vertrags, nur lesen, keine Verwaltung (die
+  bleibt in der CLI).
   Nur relative Pfade, nie eine Umleitung: Hinter einem Proxy liegt sie unter dessen Präfix
   (`https://<name>/kephalaion/`) und hinter dessen Anmeldung, aus der sie den **viewer**
   kennt. Ohne Proxy (Browser auf `http://localhost:7434/`) setzt niemand `X-User`: Die Seite
@@ -212,16 +215,40 @@ Ausführlich: [`konzept.md`](konzept.md).
   Stelle (`gui.Viewer`, gebaut in `hubViewer`), vorerst jedem: Ein Prozess auf dem Rechner des
   Hubs kann ihn auf Loopback selbst setzen und Accounts und Rechte eines beliebigen Users
   sehen, keine Tokens. Der **viewer** ist keine Anmeldung im Vertrag und gibt kein Recht außer
-  dieser Leseansicht.
+  dieser Leseansicht. `gui.Viewer` meldet zum User auch, ob er **gui admin** ist.
+- **gui admin** (Admin der Weboberfläche) — ein **viewer**, dessen Anfrage genau einen Header
+  `X-User-Roles` trägt, der unter seinen durch Komma getrennten Einträgen genau
+  `kephalaion.admin` enthält (Leerraum um einen Eintrag zählt nicht, Groß- und Kleinschreibung
+  zählt; Task 029). Den Header setzt authproxy aus den Rollen des Benutzers im Portal (dort
+  vergeben), Caddy kopiert ihn wie `X-User` per `copy_headers` und entfernt vorher jeden
+  `X-User-Roles` des Browsers (`request_header -X-User*`). Andere Rollen machen niemanden zum
+  **gui admin**, auch `authproxy.admin` nicht; zweimal der Header, ein Teiltreffer
+  (`kephalaion.admins`) oder kein gültiger **viewer**: kein **gui admin**. Er sieht in der
+  **gui** die Accounts aller User und darf in **gui/api/user** jeden `name` abfragen — lesen,
+  nie verwalten, nie ein Token. Entscheidet dieselbe Stelle wie den **viewer** (`gui.Viewer`,
+  gebaut in `hubViewer`), mit derselben Grenze: Wer den Port des Hubs erreicht, kann auch
+  `X-User-Roles` selbst setzen. Nicht zu verwechseln mit **admin**, dem reservierten Namen, unter
+  dem die CLI am Hub handelt: Der **gui admin** ist ein gewöhnlicher **user** mit einer Rolle am
+  Proxy und schreibt nichts.
 - **gui/api/user** — der Eingang der **gui**, `GET /gui/api/user` (auch `HEAD`) am
-  Hub-Listener: kein Vorgang des Vertrags, keine Fassung, ohne Token. Nennt `viewer`, `user`
-  und `accounts` nach Name, je Account `name`, `description`, `locked` und `collections` nach
-  Name mit `description` und `rights` (`write`, `supersede`, `vendor`, `dirs`; Listen immer
-  da); ein User ohne Account ist eine leere Liste. Query höchstens ein `name` (sonst 400
-  `invalid`): ohne ihn der **viewer**, ein anderer — auch ein leeres `name=` — 403
-  `forbidden`; vorerst sieht jeder nur sich selbst. Ohne **viewer** 403 `unauthenticated`,
-  mit einem Namen, der am Hub kein User sein kann, 403 `invalid_user`; nie 401. Ins Log
-  `viewer` und `user`, nie Token oder Hash.
+  Hub-Listener: kein Vorgang des Vertrags, keine Fassung, ohne Token. Nennt `viewer`, `admin`
+  (ob der **viewer** **gui admin** ist), `user` und `accounts` nach Name, je Account `name`,
+  `description`, `locked` und `collections` nach Name mit `description` und `rights`
+  (`write`, `supersede`, `vendor`, `dirs`; Listen immer da); ein User ohne Account ist eine
+  leere Liste. Query höchstens ein `name` (sonst 400 `invalid`): ohne ihn der **viewer**. Ein
+  anderer — auch ein leeres `name=` — ist 403 `forbidden`, außer für einen **gui admin**: Er
+  darf jeden `name` abfragen; ist der kein gültiger User-Name (auch leer), 400 `invalid`, ein
+  gültiger ohne Account 200 mit leerer Liste (Task 029). Ohne **viewer** 403
+  `unauthenticated`, mit einem Namen, der am Hub kein User sein kann, 403 `invalid_user`; nie
+  401. Ins Log `viewer`, `admin` und `user`, nie Token oder Hash.
+- **gui/api/users** — der Eingang der **gui** für die Liste aller Accounts, `GET
+  /gui/api/users` (auch `HEAD`, sonst 405) am Hub-Listener, nur für einen **gui admin** (Task
+  029): kein Vorgang des Vertrags, ohne Token. Nennt `viewer`, `admin` und `users` nach Name,
+  je User `name` und `accounts` nach Name, je Account `name`, `locked` und `collections` (die
+  Namen; bei einem gesperrten Account die gemerkten). Nur User mit mindestens einem Account —
+  eine eigene Tabelle der User gibt es nicht. Ohne **viewer** 403 `unauthenticated`, mit
+  ungültigem User 403 `invalid_user`, ohne die Rolle 403 `forbidden`; nie 401, nie Hash oder
+  Token; 500 `internal` mit der Einzelheit nur im Log. Ins Log `viewer` und `admin`.
 - **bridge** (Brücke) — *zurückgestellt.* Wäre der Prozess, den ein Client über stdio
   startet, und reichte an den Node weiter. Nur falls ein Client zwingend stdio braucht.
 - **devcontainer** — ein Container für die Entwicklung (VS Code Dev Containers). Zwei Wege:
@@ -481,7 +508,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   ohne Rechte, ohne Anmeldung. Setzt nur der Admin (`hub account add|set … --user`); ohne Angabe
   der Name des Accounts. Steht in `accounts` (mit Index, `hub account list --user`), in den
   `SYSTEM:A:`-Zeilen und in `created_by`/`updated_by` der Dokumente; `whoami` nennt ihn. Ein
-  User hat meist mehrere Accounts; die **gui** zeigt sie dem **viewer** gleichen Namens. Namensregel wie bei Accounts, nicht `admin`; er gehört nicht
+  User hat meist mehrere Accounts; die **gui** zeigt sie dem **viewer** gleichen Namens und jedem **gui admin**. Namensregel wie bei Accounts, nicht `admin`; er gehört nicht
   zu den gemeinsamen Namen von Nodes und Accounts (`principal_names`) und darf wie ein Node
   heißen.
 - **setup token** (Einrichtungstoken) — das Token, das `hub account add` und `hub account
@@ -548,7 +575,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   die Sperre auf. `hub account lock` macht alle Zeilen eines Accounts zu Löschmarken und merkt
   seine Rechte; `unlock` legt sie wieder an.
 - **admin** — Account und User, als die die CLI am Hub handelt; steht in `created_by` und in
-  `actions`. Als Account- und Node-Name reserviert (`ident.CheckPrincipalName`).
+  `actions`. Als Account- und Node-Name reserviert (`ident.CheckPrincipalName`). Nicht der
+  **gui admin** (Rolle `kephalaion.admin` am Proxy, nur lesen in der **gui**).
 - **actions** (Protokoll) — Tabelle des Hubs: wer (Account, nicht User) wann was getan hat. `subject` nennt das
   Ziel einer Handlung ohne Dokument — Collection, Node oder `<node>:<collection>`. Ein
   Schreibvorgang über einen Node trägt je Dokument eine Zeile mit `account`, `carrier` (der
