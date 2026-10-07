@@ -1,6 +1,7 @@
-/* Weboberfläche des Hubs: die Accounts des angemeldeten Users. Systemschrift,
-   keine fremden Quellen; hell und dunkel über prefers-color-scheme; schmal
-   ohne waagrechtes Scrollen. */
+/* Weboberfläche des Hubs: die Accounts des angemeldeten Users, für einen
+   Admin der Weboberfläche dazu die Liste aller. Systemschrift, keine fremden
+   Quellen; hell und dunkel über prefers-color-scheme; schmal ohne
+   waagrechtes Scrollen. */
 
 :root {
   color-scheme: light dark;
@@ -102,6 +103,11 @@ h2 {
 
 h2:focus {
   outline: none;
+}
+
+/* „Alle Accounts“ steht über der Überschrift der Ansicht eines Users. */
+.actions.nav {
+  margin: 0 0 0.75rem;
 }
 
 h3 {
@@ -260,6 +266,75 @@ caption {
 
 .description {
   color: var(--muted);
+}
+
+/* Die Liste aller Accounts: je User eine Gruppe, sein Name ein Knopf, der
+   wie ein Verweis aussieht; je Account eine Zeile, die schmal umbricht. */
+.count {
+  margin: -0.5rem 0 0.75rem;
+}
+
+.user-group {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.user-group h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0 0 0.375rem;
+  font-size: 1.0625rem;
+}
+
+button.user-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.you {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.account-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding: 0.375rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.account-list li:first-child {
+  border-top: 0;
+}
+
+.collections.no {
+  color: var(--no);
+}
+
+.hint.setup {
+  margin: 1rem 0 0;
 }
 
 /* Die Tabelle scrollt in ihrem eigenen Kasten, nie die Seite. */

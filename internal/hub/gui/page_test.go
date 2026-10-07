@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -132,7 +133,9 @@ func TestIndexFollowsPolicy(t *testing.T) {
 
 // Die Seite fragt nichts ab: kein Formular, kein Feld, kein Token. Sie nennt
 // den angemeldeten User im Kopf, erklärt die Rechte in Worten und sagt, dass
-// sie dich aus der Anmeldung am Proxy kennt.
+// sie dich aus der Anmeldung am Proxy kennt. Für einen Admin der
+// Weboberfläche hat sie die Liste aller Accounts mit dem Hinweis auf die
+// Kommandozeile und den Knopf „Alle Accounts“ zurück zur Liste.
 func TestIndexTexts(t *testing.T) {
 	index := strings.Join(strings.Fields(file(t, "index.html")), " ")
 	for _, want := range []string{
@@ -148,6 +151,14 @@ func TestIndexTexts(t *testing.T) {
 		`<code>kephalaion node dir push</code> schreibt nur dorthin`,
 		`<strong>Gesperrt</strong>: Ein gesperrter Account darf nichts, auch nicht lesen. Seine Rechte sind gemerkt und ruhen`,
 		`Über einen Node siehst du davon nur die Collections, die dieser Node abgleicht (<code>kephalaion node whoami</code>).`,
+		`<section id="list" aria-labelledby="list-title" hidden>`,
+		`<h2 id="list-title" tabindex="-1">Alle Accounts</h2>`,
+		`<p id="list-count" class="meta count"></p>`,
+		`<p id="list-empty" class="message info" hidden></p>`,
+		`<div id="users"></div>`,
+		`Du siehst die Liste als Admin der Weboberfläche (Rolle <code>kephalaion.admin</code> am Proxy).`,
+		`Accounts und Rechte richtest du derzeit per Kommandozeile am Hub ein: <code>kephalaion hub account add|grant|revoke|lock|unlock …</code>. Verwalten kann diese Seite nichts.`,
+		`<div id="result-nav" class="actions nav" hidden> <button type="button" id="back" class="quiet">Alle Accounts</button> </div>`,
 	} {
 		if !strings.Contains(index, want) {
 			t.Errorf("index.html ohne %s", want)
@@ -161,10 +172,11 @@ func TestIndexTexts(t *testing.T) {
 }
 
 // Das Skript hält sich an die Entscheidungen: Es legt nichts ab, liest
-// nichts aus der Adresse, setzt Daten des Hubs nie als HTML, fragt den
-// Eingang nur per GET ohne Body und folgt keiner Umleitung; die Texte für
-// keine Anmeldung, ungültigen User, abgelaufene Anmeldung und „nicht
-// erreichbar“ sind verschieden.
+// nichts aus der Adresse und ändert sie nicht, setzt Daten des Hubs nie als
+// HTML, fragt nur seine beiden Eingänge per GET ohne Body und folgt keiner
+// Umleitung; die Texte für keine Anmeldung, ungültigen User, abgelaufene
+// Anmeldung und „nicht erreichbar“ sind verschieden. Die Liste aller
+// Accounts holt es nur, wenn der Hub den Angemeldeten als Admin meldet.
 func TestScriptFollowsDecisions(t *testing.T) {
 	js := file(t, "app.js")
 	for _, bad := range []string{"localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "outerHTML",
@@ -177,6 +189,7 @@ func TestScriptFollowsDecisions(t *testing.T) {
 	}
 	for _, want := range []string{
 		`var USER_API = "gui/api/user";`,
+		`var USERS_API = "gui/api/users";`,
 		`method: "GET"`,
 		`redirect: "manual"`,
 		`credentials: "same-origin"`,
@@ -202,15 +215,146 @@ func TestScriptFollowsDecisions(t *testing.T) {
 		`Array.isArray(rights.dirs) ? rights.dirs : []`,
 		`return "vendor/" + String(name);`,
 		`return "dir " + String(dir) + "/";`,
+		// Die Liste nur für einen Admin, und erst, wenn der Hub ihn so meldet:
+		// So sieht ein anderer keine 403 in der Konsole.
+		`if (out.kind === "ok" && out.data.admin === true) {`,
+		`typeof data.viewer === "string" && data.admin === true && Array.isArray(data.users)`,
+		`document.getElementById("result-nav").hidden = data.admin !== true;`,
+		"Die Liste aller Accounts zeigt dir der Hub nicht",
+		`TEXT.you`, `"(du)"`, `names.join(", ")`, `TEXT.remembered + names.join(", ")`,
+		`open.addEventListener("click", function () { openUser(name); });`,
+		`back.addEventListener("click", function () { openList(true); });`,
+		// Nach dem Wechsel bekommt die Überschrift den Fokus.
+		`document.getElementById(view === "list" ? "list-title" : "result-title").focus();`,
 	} {
 		if !strings.Contains(js, want) {
 			t.Errorf("app.js ohne %s", want)
 		}
 	}
-	// Genau ein fetch, und der geht an den Eingang der Seite.
-	if n := strings.Count(js, "fetch("); n != 1 || !strings.Contains(js, "fetch(USER_API, {") {
-		t.Errorf("app.js: %d Aufrufe von fetch, erwartet einen an USER_API", n)
+	wantOneFetch(t, js)
+}
+
+// wantOneFetch hält fest, wohin die Seite fragt: genau ein fetch, in der
+// Hilfsfunktion apiGet, mit deren Parameter als Adresse und festen Angaben —
+// GET, keiner Umleitung folgen, nur dieselbe Herkunft, kein Cache, kein Body.
+// apiGet wird nur mit den beiden festen, relativen Konstanten gerufen,
+// USER_API (ohne Query oder mit ?name= und encodeURIComponent) und USERS_API,
+// und die Konstanten dienen zu nichts anderem. So fragt die Seite keine
+// beliebige Adresse, folgt keiner Umleitung und schickt nichts außer GET.
+func wantOneFetch(t *testing.T, js string) {
+	t.Helper()
+	// Ohne Kommentarzeilen: Ein Kommentar darf die Namen nennen.
+	code := regexp.MustCompile(`(?m)^\s*//.*$`).ReplaceAllString(js, "")
+
+	if n := strings.Count(code, "fetch"); n != 1 || strings.Count(code, "fetch(") != 1 {
+		t.Fatalf("app.js: fetch %d-mal, erwartet genau einen Aufruf", n)
 	}
+	def := strings.Index(code, "function apiGet(path, valid) {")
+	at := strings.Index(code, "return fetch(path, {")
+	if def < 0 || at < def || strings.Contains(code[def+len("function apiGet(path, valid) {"):at], "path") ||
+		regexp.MustCompile(`(?m)^\s*function `).MatchString(code[def+1:at]) {
+		t.Fatalf("app.js: der fetch steht nicht als return fetch(path, { direkt in apiGet(path, valid)")
+	}
+	if m := regexp.MustCompile(`\bpath\s*(=[^=]|\+=)`).FindString(code); m != "" {
+		t.Errorf("app.js weist path neu zu: %q", m)
+	}
+	opts, ok := argsOf(code, at+len("return fetch"))
+	if !ok {
+		t.Fatal("app.js: Ende des fetch nicht gefunden")
+	}
+	for _, want := range []string{`path, {`, `method: "GET"`, `redirect: "manual"`, `credentials: "same-origin"`,
+		`cache: "no-store"`, `referrerPolicy: "no-referrer"`, `signal: abort.signal`} {
+		if !strings.Contains(opts, want) {
+			t.Errorf("fetch ohne %s:\n%s", want, opts)
+		}
+	}
+	for _, bad := range []string{"body", "mode:", "keepalive", "integrity", "..."} {
+		if strings.Contains(opts, bad) {
+			t.Errorf("fetch mit %s", bad)
+		}
+	}
+	for _, key := range []string{"method:", "redirect:", "credentials:", "cache:"} {
+		if n := strings.Count(code, key); n != 1 {
+			t.Errorf("app.js: %s %d-mal, erwartet nur im fetch", key, n)
+		}
+	}
+
+	// apiGet: die Definition und genau diese drei Aufrufe, je einmal; nie als
+	// Wert weitergereicht.
+	want := map[string]int{
+		"path, valid":      1,
+		"USER_API, isUser": 1,
+		`USER_API + "?name=" + encodeURIComponent(name), isUser`: 1,
+		"USERS_API, isUsers": 1,
+	}
+	got := map[string]int{}
+	for i := strings.Index(code, "apiGet("); i >= 0; {
+		args, ok := argsOf(code, i+len("apiGet"))
+		if !ok {
+			t.Fatal("app.js: Ende eines Aufrufs von apiGet nicht gefunden")
+		}
+		got[args]++
+		next := strings.Index(code[i+1:], "apiGet(")
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("app.js: apiGet mit %v, erwartet %v", got, want)
+	}
+	if strings.Count(code, "apiGet") != strings.Count(code, "apiGet(") {
+		t.Error("app.js nennt apiGet ohne Aufruf")
+	}
+
+	// Die beiden Eingänge: feste, relative Konstanten, je einmal zugewiesen,
+	// außer in apiGet nirgends benutzt; kein anderer Pfad unter gui/.
+	for name, def := range map[string]string{"USER_API": `var USER_API = "gui/api/user";`, "USERS_API": `var USERS_API = "gui/api/users";`} {
+		if strings.Count(code, def) != 1 {
+			t.Errorf("app.js ohne %s", def)
+		}
+		uses := regexp.MustCompile(`\b`+name+`\b`).FindAllStringIndex(code, -1)
+		assigns := regexp.MustCompile(`\b`+name+`\s*(=[^=]|\+=)`).FindAllString(code, -1)
+		if wantUses := map[string]int{"USER_API": 3, "USERS_API": 2}[name]; len(uses) != wantUses || len(assigns) != 1 {
+			t.Errorf("app.js: %s %d-mal genannt, %d-mal zugewiesen", name, len(uses), len(assigns))
+		}
+	}
+	if paths := regexp.MustCompile(`"gui/[^"]*"`).FindAllString(code, -1); !reflect.DeepEqual(paths, []string{`"gui/api/user"`, `"gui/api/users"`}) {
+		t.Errorf("app.js: Pfade %q, erwartet nur die beiden Eingänge", paths)
+	}
+	if n := strings.Count(code, `"?name="`); n != 1 {
+		t.Errorf("app.js: ?name= %d-mal", n)
+	}
+}
+
+// argsOf liefert den Text zwischen der Klammer an code[open] und der
+// passenden schließenden, ohne beide; Klammern in Zeichenketten zählen nicht.
+func argsOf(code string, open int) (string, bool) {
+	if open >= len(code) || code[open] != '(' {
+		return "", false
+	}
+	depth, quote := 0, byte(0)
+	for i := open; i < len(code); i++ {
+		c := code[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 {
+				return code[open+1 : i], true
+			}
+		}
+	}
+	return "", false
 }
 
 // Das Stylesheet: hell und dunkel, schmal als Blöcke, die Tabelle scrollt
@@ -220,7 +364,8 @@ func TestScriptFollowsDecisions(t *testing.T) {
 func TestStyle(t *testing.T) {
 	css := file(t, "style.css")
 	for _, want := range []string{"@media (prefers-color-scheme: dark)", "@media (max-width: 48rem)", "overflow-x: auto",
-		"overflow-wrap: break-word", "content: attr(data-label)", "[hidden]", "system-ui", ".badge.locked", ".resting"} {
+		"overflow-wrap: break-word", "content: attr(data-label)", "[hidden]", "system-ui", ".badge.locked", ".resting",
+		".user-group", "button.user-name", ".account-list li", ".actions.nav"} {
 		if !strings.Contains(css, want) {
 			t.Errorf("style.css ohne %q", want)
 		}

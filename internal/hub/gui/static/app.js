@@ -1,22 +1,32 @@
 // Weboberfläche des Hubs: zeigt die Accounts des Users, mit dem der Browser
 // am Proxy angemeldet ist, mit ihren Collections und Rechten
-// (GET gui/api/user).
+// (GET gui/api/user). Einem Admin der Weboberfläche (der Hub meldet admin)
+// zeigt sie zuerst die Liste aller Accounts nach User (GET gui/api/users);
+// ein Klick auf einen User zeigt dessen Ansicht (gui/api/user?name=…),
+// „Alle Accounts“ führt zurück — innerhalb der Seite, die Adresse bleibt.
 //
 // Regeln dieser Datei:
 //   - Nur relative Pfade. Die Seite liegt an der Wurzel des Hub-Listeners,
 //     hinter einem Proxy unter dessen Präfix; das Binary kennt ihn nicht.
-//   - Die Seite fragt kein Token ab und zeigt keins: Wen sie zeigt, sagt der
-//     Hub (viewer, user) aus der Anmeldung des Proxys.
+//   - Sie fragt nur ihre beiden Eingänge (USER_API, USERS_API), über genau
+//     einen fetch in apiGet, immer per GET ohne Body.
+//   - Die Seite fragt kein Token ab und zeigt keins: Wen sie zeigt und ob
+//     der Angemeldete Admin ist, sagt der Hub (viewer, admin, user) aus der
+//     Anmeldung des Proxys.
 //   - Alles, was vom Hub kommt, wird per textContent gesetzt, nie als HTML.
 //   - Einer Umleitung folgt sie nicht: Sie kommt von der Anmeldung davor und
 //     heißt, dass die Anmeldung abgelaufen ist.
 //   - Sie setzt nicht voraus, dass der gezeigte User (user) der angemeldete
 //     (viewer) ist.
+//   - Sie liest die Adresse nicht, ändert sie nicht und legt nichts ab: Die
+//     Ansicht wechselt nur innerhalb der Seite.
 (function () {
   "use strict";
 
-  // Der Eingang der Seite, relativ zur Seite.
+  // Die Eingänge der Seite, relativ zur Seite: die Accounts eines Users und
+  // die Liste aller (nur für einen Admin der Weboberfläche).
   var USER_API = "gui/api/user";
+  var USERS_API = "gui/api/users";
   var TIMEOUT_MS = 15000;
 
   var TEXT = {
@@ -29,11 +39,24 @@
       "(klein geschrieben, a–z, 0–9, Punkt, Unterstrich und Bindestrich, nicht admin). " +
       "Accounts gehören zu einem User gleichen Namens.",
     forbidden: "Die Accounts dieses Users zeigt dir der Hub nicht — nur deine eigenen.",
+    listForbidden: "Die Liste aller Accounts zeigt dir der Hub nicht — nur einem Admin der " +
+      "Weboberfläche (Rolle kephalaion.admin am Proxy).",
     invalid: "Der Hub hat die Anfrage abgelehnt: ",
     internal: "Fehler am Hub. Die Einzelheit steht in seinem Log.",
     expired: "Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden.",
     unreachable: "Hub nicht erreichbar.",
     unexpected: "Hub nicht erreichbar: unerwartete Antwort",
+    loadingList: "Lade alle Accounts …",
+    loadingUser: "Lade die Accounts von ",
+    loadingEnd: " …",
+    listEmpty: "An diesem Hub gibt es noch keinen Account.",
+    listUsers: " User mit ",
+    listAccount: " Account",
+    listAccounts: " Accounts",
+    you: "(du)",
+    noCollections: "keine Collection",
+    remembered: "gemerkt: ",
+    lockedShort: "gesperrt",
     ownTitle: "Deine Accounts",
     otherTitle: "Accounts von ",
     ownEmpty: "Du hast an diesem Hub noch keinen Account.",
@@ -50,11 +73,21 @@
   var reload = document.getElementById("reload");
   var status = document.getElementById("status");
   var result = document.getElementById("result");
+  var list = document.getElementById("list");
+  var back = document.getElementById("back");
 
   function showMessage(text, kind) {
     message.textContent = text;
     message.className = "message " + kind;
     status.hidden = false;
+  }
+
+  // busy blendet die Ansichten aus und zeigt, was geladen wird.
+  function busy(text) {
+    result.hidden = true;
+    list.hidden = true;
+    reload.hidden = true;
+    showMessage(text, "info");
   }
 
   // readJSON liest den Body als JSON-Objekt, oder null — eine HTML-Seite
@@ -71,13 +104,23 @@
     });
   }
 
+  // isUser erkennt den Erfolg von gui/api/user: viewer, user und accounts.
+  function isUser(data) {
+    return typeof data.viewer === "string" && typeof data.user === "string" && Array.isArray(data.accounts);
+  }
+
+  // isUsers erkennt den Erfolg von gui/api/users: viewer, admin und users.
+  function isUsers(data) {
+    return typeof data.viewer === "string" && data.admin === true && Array.isArray(data.users);
+  }
+
   // outcome ordnet eine Antwort ein. Der Hub ist am JSON zu erkennen: eine
-  // Fehlerantwort trägt code, ein Erfolg viewer, user und accounts. Ohne
-  // diese Form kommt die Antwort von davor:
+  // Fehlerantwort trägt code, ein Erfolg die Form, die valid erkennt (isUser,
+  // isUsers). Ohne diese Form kommt die Antwort von davor:
   //   - eine Umleitung, 401 oder 403, oder eine Seite statt JSON — die
   //     Anmeldung an der Seite ist abgelaufen;
   //   - alles andere (502, 503 eines Proxys) — der Hub ist nicht erreichbar.
-  function outcome(resp, data) {
+  function outcome(resp, data, valid) {
     if (resp.type === "opaqueredirect") {
       return { kind: "expired" };
     }
@@ -96,8 +139,7 @@
       }
       return { kind: "internal" };
     }
-    if (resp.status === 200 && data && typeof data.viewer === "string" && typeof data.user === "string" &&
-        Array.isArray(data.accounts)) {
+    if (resp.status === 200 && data && valid(data)) {
       return { kind: "ok", data: data };
     }
     if (resp.status === 401 || resp.status === 403 || (resp.status >= 200 && resp.status < 400)) {
@@ -166,14 +208,14 @@
     if (labels.length === 0) {
       scopes.appendChild(text("span", "—", "no"));
     } else {
-      var list = document.createElement("ul");
-      list.className = resting ? "scopes resting" : "scopes";
+      var items = document.createElement("ul");
+      items.className = resting ? "scopes resting" : "scopes";
       labels.forEach(function (label) {
         var li = document.createElement("li");
         li.appendChild(text("code", label));
-        list.appendChild(li);
+        items.appendChild(li);
       });
-      scopes.appendChild(list);
+      scopes.appendChild(items);
     }
     tr.appendChild(scopes);
     return tr;
@@ -245,37 +287,119 @@
     return block;
   }
 
+  // showViewer nennt im Kopf, wer angemeldet ist.
+  function showViewer(viewer) {
+    document.getElementById("viewer").textContent = viewer;
+    document.getElementById("viewer-line").hidden = false;
+  }
+
   // showResult zeigt die Accounts von data.user. Ob das der angemeldete User
   // (data.viewer) ist, entscheidet nur Überschrift und Text — die Seite
-  // zeigt jede Antwort gleich.
+  // zeigt jede Antwort gleich. Einem Admin bietet sie „Alle Accounts“.
   function showResult(data) {
     var own = data.user === data.viewer;
-    document.getElementById("viewer").textContent = data.viewer;
-    document.getElementById("viewer-line").hidden = false;
+    showViewer(data.viewer);
+    document.getElementById("result-nav").hidden = data.admin !== true;
     document.getElementById("result-title").textContent = own ? TEXT.ownTitle : TEXT.otherTitle + data.user;
     document.getElementById("result-user").textContent = data.user;
 
-    var list = document.getElementById("accounts");
-    list.textContent = "";
+    var blocks = document.getElementById("accounts");
+    blocks.textContent = "";
     data.accounts.forEach(function (a) {
       if (a && typeof a === "object") {
-        list.appendChild(accountBlock(a));
+        blocks.appendChild(accountBlock(a));
       }
     });
     var empty = document.getElementById("result-empty");
     empty.textContent = own ? TEXT.ownEmpty : data.user + TEXT.otherEmpty;
-    empty.hidden = list.childElementCount !== 0;
+    empty.hidden = blocks.childElementCount !== 0;
 
     status.hidden = true;
+    list.hidden = true;
     result.hidden = false;
   }
 
-  function load() {
+  // listAccount baut die Zeile eines Accounts in der Liste: Name, Status und
+  // die Collections, durch Komma getrennt — bei einem gesperrten die
+  // gemerkten.
+  function listAccount(a) {
+    var locked = a.locked === true;
+    var li = document.createElement("li");
+    li.appendChild(text("span", String(a.name), "name"));
+    li.appendChild(text("span", locked ? TEXT.lockedShort : TEXT.active, locked ? "badge locked" : "badge"));
+    var names = (Array.isArray(a.collections) ? a.collections : []).map(String);
+    if (names.length === 0) {
+      li.appendChild(text("span", TEXT.noCollections, "collections no"));
+    } else if (locked) {
+      li.appendChild(text("span", TEXT.remembered + names.join(", "), "collections resting"));
+    } else {
+      li.appendChild(text("span", names.join(", "), "collections"));
+    }
+    return li;
+  }
+
+  // userGroup baut die Gruppe eines Users: sein Name als Knopf, der seine
+  // Ansicht öffnet, der eigene mit „(du)“, darunter seine Accounts.
+  function userGroup(name, accounts, own) {
+    var group = document.createElement("article");
+    group.className = "user-group";
+    var title = document.createElement("h3");
+    var open = text("button", name, "user-name");
+    open.type = "button";
+    open.addEventListener("click", function () { openUser(name); });
+    title.appendChild(open);
+    if (own) {
+      title.appendChild(text("span", TEXT.you, "you"));
+    }
+    group.appendChild(title);
+    var rows = document.createElement("ul");
+    rows.className = "account-list";
+    accounts.forEach(function (a) {
+      rows.appendChild(listAccount(a));
+    });
+    group.appendChild(rows);
+    return group;
+  }
+
+  // showList zeigt die Liste aller Accounts nach User, oben die Zahl der User
+  // und Accounts.
+  function showList(data) {
+    showViewer(data.viewer);
+    var groups = document.getElementById("users");
+    groups.textContent = "";
+    var users = 0;
+    var accounts = 0;
+    data.users.forEach(function (u) {
+      if (u && typeof u === "object" && typeof u.name === "string") {
+        var accs = (Array.isArray(u.accounts) ? u.accounts : []).filter(function (a) {
+          return a && typeof a === "object";
+        });
+        groups.appendChild(userGroup(u.name, accs, u.name === data.viewer));
+        users += 1;
+        accounts += accs.length;
+      }
+    });
+    document.getElementById("list-count").textContent = users + TEXT.listUsers + accounts +
+      (accounts === 1 ? TEXT.listAccount : TEXT.listAccounts);
+    var empty = document.getElementById("list-empty");
+    empty.textContent = TEXT.listEmpty;
+    empty.hidden = users !== 0;
+
+    status.hidden = true;
+    result.hidden = true;
+    list.hidden = false;
+  }
+
+  // apiGet fragt einen Eingang der Seite und ordnet die Antwort ein. Es ist
+  // der einzige fetch der Seite, und gerufen wird es nur mit den beiden
+  // festen Eingängen (loadUser, loadUsers): immer GET ohne Body, ohne einer
+  // Umleitung zu folgen. redirect "manual": Der Hub leitet nie um. Eine
+  // Umleitung kommt von der Anmeldung davor (authproxy ohne Sitzung: 302 zur
+  // Anmeldung).
+  function apiGet(path, valid) {
     var abort = new AbortController();
     var timer = window.setTimeout(function () { abort.abort(); }, TIMEOUT_MS);
-    // redirect "manual": Der Hub leitet nie um. Eine Umleitung kommt von der
-    // Anmeldung davor (authproxy ohne Sitzung: 302 zur Anmeldung).
-    return fetch(USER_API, {
+    return fetch(path, {
       method: "GET",
       headers: { "Accept": "application/json" },
       credentials: "same-origin",
@@ -284,7 +408,7 @@
       referrerPolicy: "no-referrer",
       signal: abort.signal
     }).then(function (resp) {
-      return readJSON(resp).then(function (data) { return outcome(resp, data); });
+      return readJSON(resp).then(function (data) { return outcome(resp, data, valid); });
     }).then(function (out) {
       window.clearTimeout(timer);
       return out;
@@ -294,11 +418,40 @@
     });
   }
 
-  function show(out) {
-    switch (out.kind) {
-      case "ok":
+  // loadUser lädt die Accounts des angemeldeten Users oder, mit name, die
+  // eines anderen (nur für einen Admin).
+  function loadUser(name) {
+    if (typeof name !== "string") {
+      return apiGet(USER_API, isUser);
+    }
+    return apiGet(USER_API + "?name=" + encodeURIComponent(name), isUser);
+  }
+
+  // loadUsers lädt die Liste aller Accounts (nur für einen Admin).
+  function loadUsers() {
+    return apiGet(USERS_API, isUsers);
+  }
+
+  // show zeigt den Ausgang einer Anfrage: bei Erfolg die Ansicht, die
+  // geladen wurde (view: "user" oder "list"), sonst die Meldung. nav sagt,
+  // dass ein Klick die Ansicht gewechselt hat: Dann bekommt ihre Überschrift
+  // den Fokus, und jede Meldung bietet „Seite neu laden“.
+  function show(out, view, nav) {
+    if (out.kind === "ok") {
+      if (view === "list") {
+        showList(out.data);
+      } else {
         showResult(out.data);
-        return;
+      }
+      if (nav) {
+        document.getElementById(view === "list" ? "list-title" : "result-title").focus();
+      }
+      return;
+    }
+    result.hidden = true;
+    list.hidden = true;
+    reload.hidden = !nav;
+    switch (out.kind) {
       case "unauthenticated":
         showMessage(TEXT.unauthenticated, "error");
         return;
@@ -306,7 +459,7 @@
         showMessage(TEXT.invalidUser, "error");
         return;
       case "forbidden":
-        showMessage(TEXT.forbidden, "error");
+        showMessage(view === "list" ? TEXT.listForbidden : TEXT.forbidden, "error");
         return;
       case "invalid":
         showMessage(TEXT.invalid + out.detail, "error");
@@ -330,8 +483,29 @@
     }
   }
 
-  reload.addEventListener("click", function () { window.location.reload(); });
+  // openList lädt die Liste aller Accounts und zeigt sie.
+  function openList(nav) {
+    busy(TEXT.loadingList);
+    loadUsers().then(function (out) { show(out, "list", nav); });
+  }
 
+  // openUser lädt die Accounts eines Users aus der Liste und zeigt sie.
+  function openUser(name) {
+    busy(TEXT.loadingUser + name + TEXT.loadingEnd);
+    loadUser(name).then(function (out) { show(out, "user", true); });
+  }
+
+  reload.addEventListener("click", function () { window.location.reload(); });
+  back.addEventListener("click", function () { openList(true); });
+
+  // Die Seite fragt zuerst nach dem angemeldeten User. Erst wenn der Hub ihn
+  // als Admin meldet, holt sie die Liste — so sieht ein anderer keine 403.
   showMessage(TEXT.loading, "info");
-  load().then(show);
+  loadUser().then(function (out) {
+    if (out.kind === "ok" && out.data.admin === true) {
+      openList(false);
+      return;
+    }
+    show(out, "user", false);
+  });
 }());

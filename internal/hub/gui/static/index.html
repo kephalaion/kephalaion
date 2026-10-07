@@ -28,7 +28,27 @@
     keine Accounts.</p></noscript>
   </section>
 
+  <!-- Nur für einen Admin der Weboberfläche: alle Accounts nach User. -->
+  <section id="list" aria-labelledby="list-title" hidden>
+    <h2 id="list-title" tabindex="-1">Alle Accounts</h2>
+    <p id="list-count" class="meta count"></p>
+    <p class="lead">Alle Accounts an diesem Hub, nach User geordnet, mit ihrem Status und ihren
+    Collections. Ein Klick auf einen User zeigt seine Accounts mit den Rechten, so wie er sie
+    selbst sieht. Du siehst die Liste als Admin der Weboberfläche (Rolle
+    <code>kephalaion.admin</code> am Proxy).</p>
+
+    <p id="list-empty" class="message info" hidden></p>
+    <div id="users"></div>
+
+    <p class="hint setup">Accounts und Rechte richtest du derzeit per Kommandozeile am Hub ein:
+    <code>kephalaion hub account add|grant|revoke|lock|unlock …</code>. Verwalten kann diese
+    Seite nichts.</p>
+  </section>
+
   <section id="result" aria-labelledby="result-title" hidden>
+    <div id="result-nav" class="actions nav" hidden>
+      <button type="button" id="back" class="quiet">Alle Accounts</button>
+    </div>
     <h2 id="result-title" tabindex="-1">Deine Accounts</h2>
     <p class="lead">Alle Accounts des Users <strong id="result-user"></strong> an diesem Hub,
     mit den Collections und Rechten. Die Seite kennt dich aus der Anmeldung am Proxy; sie
