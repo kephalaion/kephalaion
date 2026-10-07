@@ -429,25 +429,29 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
   wer den Rest zeigt, stellt eine Anmeldung davor — Begrüßung und Weboberfläche nennen die
   Version.
 - **Die Weboberfläche am Hub (entschieden am 2026-09-30, gebaut in Task 020; umgebaut nach der
-  Entscheidung des Nutzers vom 2026-10-05, Task 026).** Wer im Browser
-  `https://<name>/kephalaion/` öffnet und am Proxy angemeldet ist, sieht ohne weitere Eingabe
-  alle Accounts seines Users: Name, Beschreibung, Status (gesperrt: die Rechte ruhen) und je
-  Collection Beschreibung, read, write, supersede, die Scopes `vendor/<name>` und die
-  Verzeichnis-Scopes (`dir <pfad>/`), in Worten erklärt. Ein Token wird weder abgefragt noch
-  angezeigt noch übertragen; Hash und Token stehen in keiner Antwort. Verwalten kann die Seite
-  nichts; das bleibt vorerst in der Kommandozeile.
+  Entscheidung des Nutzers vom 2026-10-05, Task 026; Admin-Ansicht in Task 029).** Wer im
+  Browser `https://<name>/kephalaion/` öffnet und am Proxy angemeldet ist, sieht ohne weitere
+  Eingabe alle Accounts seines Users: Name, Beschreibung, Status (gesperrt: die Rechte ruhen)
+  und je Collection Beschreibung, read, write, supersede, die Scopes `vendor/<name>` und die
+  Verzeichnis-Scopes (`dir <pfad>/`), in Worten erklärt. Ein Admin der Weboberfläche sieht
+  zuerst die Accounts aller User (unten). Ein Token wird weder abgefragt noch angezeigt noch
+  übertragen; Hash und Token stehen in keiner Antwort. Verwalten kann die Seite nichts; das
+  bleibt vorerst in der Kommandozeile.
   - **Entscheidung des Nutzers (2026-10-05): Umbau komplett.** Bis Task 026 fragte die Seite
     Account und Account-Token ab und prüfte sie am Eingang `POST gui/api/whoami`; Abfrage und
     Eingang entfallen. Die Anmeldung des Proxys reicht, um zu sehen, worauf der eigene User
     Zugriff hat. Rotieren in der Oberfläche ist nicht gewollt. `store.CheckAccount` bleibt für
     `whoami` und `rotate` des Vertrags.
   - **Wo.** Die Seite liegt an der Wurzel des Hub-Listeners (`GET /` mit `text/html` in
-    `Accept`), ihre Teile unter `/gui/`: `gui/app.js`, `gui/style.css`, `gui/icon.svg` und der
-    Eingang `GET gui/api/user`. `/gui` und `/gui/` selbst und alles andere darunter sind 404.
+    `Accept`), ihre Teile unter `/gui/`: `gui/app.js`, `gui/style.css`, `gui/icon.svg` und die
+    Eingänge `GET gui/api/user` und `GET gui/api/users`. `/gui` und `/gui/` selbst und alles
+    andere darunter sind 404.
     Der Node-Listener (`/mcp`) bekommt nichts davon.
-  - **Wen sie zeigt.** Caddy entfernt für die ganze Site jedes `X-User` und `X-User-Email` des
-    Browsers (auch mit `_`), fragt unter `/kephalaion/*` authproxy per `forward_auth` und kopiert
-    dessen Header in die Anfrage an den Hub ([`installation.md`](installation.md)). Der Hub
+  - **Wen sie zeigt.** Caddy entfernt für die ganze Site jeden Header des Browsers, der mit
+    `X-User` beginnt — `X-User`, `X-User-Email`, `X-User-Roles` und jeden künftigen, auch mit
+    `_` (`request_header -X-User*`, `-X_User*`) —, fragt unter `/kephalaion/*` authproxy per
+    `forward_auth` und kopiert dessen Header in die Anfrage an den Hub (`copy_headers X-User
+    X-User-Email X-User-Roles`, [`installation.md`](installation.md)). Der Hub
     nimmt den angemeldeten User (**viewer**) allein aus genau einem `X-User`. Fehlt er, ist er
     leer oder steht er mehrfach da, liefert der Eingang keine Accounts (403
     `unauthenticated`, „keine Anmeldung des Proxys“); ist er am Hub kein gültiger User-Name
@@ -456,22 +460,51 @@ Transport `http` ohne TLS auf Loopback, zum Testen des HTTP-Wegs; zu einem ander
     Konvention, keine Verknüpfung; wer im authproxy fehlt, sieht die Seite nicht.
   - **Ein eigener Eingang**, kein Vorgang des Vertrags ([`vertrag.md`](vertrag.md) bleibt
     unberührt) und ohne Fassung, denn Seite und Eingang kommen aus demselben Binary: `GET
-    gui/api/user` (auch `HEAD`) nennt `viewer`, `user` und `accounts`. Er nimmt einen User als
-    Parameter (`name`, höchstens einmal); vorerst ist nur der eigene erlaubt, jeder andere —
-    auch ein leeres `name=`, das nicht als „ohne `name`“ gilt — ergibt 403 `forbidden`. Die
-    Seite setzt nicht voraus, dass der gezeigte User der angemeldete ist; eine Auswahl für
-    Admins kommt später ohne Umbau dazu (woher der Hub erfährt, wer Admin ist, ist offen,
-    „Offene Punkte“). Die Rechte kommen aus `AccountsOfUser`: ohne Sperre die lebenden
-    `SYSTEM:A:`-Zeilen, gesperrt die gemerkten. Ins Log kommen angemeldeter und angefragter
-    User, nie Token oder Hash.
-  - **Wem der Hub `X-User` glaubt**, entscheidet genau eine Stelle: ein Wert, den der Eingang
-    bekommt (`gui.Viewer`), gebaut an einer Stelle in `cmd/kephalaion` (`hubViewer`). Vorerst
-    glaubt der Hub jedem `X-User`. **Grenze:** Der Hub-Listener nimmt nur Anfragen an diesen
-    Rechner an, prüft aber nicht, dass `X-User` vom Proxy kommt — jeder Prozess auf dem Rechner
-    des Hubs kann ihn auf Loopback selbst setzen und Accounts und Rechte eines beliebigen Users
-    sehen (keine Tokens, keine Hashes). Ein geheimer Header, den nur der Proxy setzt, schließt
-    das; eigene Task direkt danach. Sie ändert den Viewer und den Ort, an dem er entsteht
-    (Konfiguration), nicht Eingang und Seite.
+    gui/api/user` (auch `HEAD`) nennt `viewer`, `admin`, `user` und `accounts`. Er nimmt einen
+    User als Parameter (`name`, höchstens einmal); wer nicht Admin ist, darf nur den eigenen,
+    jeder andere — auch ein leeres `name=`, das nicht als „ohne `name`“ gilt — ergibt 403
+    `forbidden`. Die Seite setzt nicht voraus, dass der gezeigte User der angemeldete ist. Die
+    Rechte kommen aus `AccountsOfUser`: ohne Sperre die lebenden `SYSTEM:A:`-Zeilen, gesperrt
+    die gemerkten. Ins Log kommen angemeldeter User, ob er Admin ist, und angefragter User, nie
+    Token oder Hash.
+  - **Admin der Weboberfläche (entschieden am 2026-10-05, gebaut in Task 029).** Admin ist,
+    wessen Anfrage einen gültigen **viewer** und genau einen `X-User-Roles` trägt, der unter
+    seinen durch Komma getrennten Einträgen genau `kephalaion.admin` enthält (Leerraum um einen
+    Eintrag zählt nicht, Groß- und Kleinschreibung zählt). Die Rolle vergibt der Nutzer im
+    Portal von authproxy; authproxy schickt `X-User-Roles` mit allen Rollen des Benutzers
+    (`authproxy.admin` zuerst), nur wenn er mindestens eine hat, und Caddy kopiert den Header
+    wie `X-User`. Andere Rollen machen niemanden zum Admin, auch `authproxy.admin` nicht. Das
+    entscheidet dieselbe Stelle wie den **viewer** (`gui.Viewer`, gebaut in `hubViewer`). Ein
+    Admin landet auf der Liste aller Accounts (`GET gui/api/users`, nur für Admins, sonst 403
+    `forbidden`; aus `store.Accounts`, ohne Hash): nach User gruppiert und sortiert, je Account
+    Status und Collections durch Komma getrennt (bei einem gesperrten die gemerkten), oben die
+    Zahl der User und Accounts, der eigene User mit „(du)“, darunter der Hinweis, dass man
+    Accounts und Rechte derzeit per Kommandozeile am Hub einrichtet. Ein Klick auf einen User
+    zeigt dessen Ansicht (`gui/api/user?name=<user>`; ein Admin darf jeden gültigen User-Namen
+    abfragen, ein ungültiger ist 400 `invalid`), „Alle Accounts“ führt zurück. Die Navigation
+    bleibt innerhalb der Seite: Die Adresse ändert sich nicht, die Zurück-Taste des Browsers
+    führt aus der Seite heraus (Entscheidung des Nutzers, kein `#user=…`). Die Seite holt die
+    Liste erst, wenn der Hub den **viewer** als Admin meldet (`admin` in der Antwort von
+    `gui/api/user`) — so sieht ein anderer keine 403 in seiner Konsole. User gibt es am Hub
+    nur über Accounts: Die Liste nennt nur User mit mindestens einem Account; ein Benutzer des
+    Portals ohne Account fehlt, ein User ohne Login am Portal erscheint.
+  - **Wem der Hub `X-User` und `X-User-Roles` glaubt**, entscheidet genau eine Stelle: ein
+    Wert, den die Eingänge bekommen (`gui.Viewer`), gebaut an einer Stelle in `cmd/kephalaion`
+    (`hubViewer`). Vorerst glaubt der Hub beiden Headern, wer immer sie setzt. **Grenze:** Der
+    Hub-Listener nimmt nur Anfragen an diesen Rechner an, prüft aber nicht, dass die Header vom
+    Proxy kommen. Caddy entfernt sie nur auf dem Weg von außen. Wer den Port des Hubs
+    (`127.0.0.1:7434`) erreicht, kann `X-User` und `X-User-Roles` selbst setzen und sieht dann
+    die Accounts und Rechte eines beliebigen Users oder, als Admin, alle auf einmal — keine
+    Tokens, keine Hashes. Den Port erreichen alle Benutzer und Prozesse auf dem Rechner des
+    Hubs, auch lokal laufende KIs und Container mit Host-Netz, und jeder SSH-Tunnel zu ihm (etwa
+    der eines Nodes, `ssh -N -L 7434:localhost:7434 …`). Entscheidung des Nutzers
+    (2026-10-06): Diese Grenze ist für die Admin-Ansicht hingenommen. Schließen soll sie die
+    **Absicherung des lokalen Zugriffs (Todo #17)**, eine eigene Task, auf einem von zwei
+    Wegen: (a) der Hub prüft eine signierte Bestätigung von authproxy (Ed25519, `aud=kephalaion`,
+    `exp` etwa 60 s, User und Rollen darin, nur der öffentliche Schlüssel in der config), oder
+    (b) die Weboberfläche bekommt einen eigenen Listener als Unix-Socket, den nur Caddy
+    erreicht. Sie ändert den Viewer und den Ort, an dem er entsteht, bei (b) dazu den Listener —
+    nicht Eingänge und Seite.
   - **Ohne Proxy** (Hub lokal, Browser auf `http://localhost:7434/`) setzt niemand `X-User`:
     Die Seite zeigt nur „keine Anmeldung des Proxys“. Bisher ging das mit Account-Token; der
     Wegfall ist gewollte Folge der Entscheidung oben. Lokal nennt `kephalaion hub account list
@@ -2374,10 +2407,13 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 - **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, seit Task 026
   mit allen Accounts des Users der Anmeldung des Proxys (`X-User`), ohne Token („Kommunikation“,
   „Die Weboberfläche am Hub“): die Seite an der Wurzel, ihre Teile unter `/gui/`, hinter der
-  Anmeldung des Proxys, nur mit relativen Pfaden — ohne `X-Forwarded-Prefix`. Offen bleibt die
-  Verwaltung in der Oberfläche (Accounts, Rechte, Nodes; vorerst die Kommandozeile); dass der
-  Hub `X-User` nur vom Proxy annimmt (geheimer Header, eigene Task); woher der Hub erfährt, wer
-  Admin ist und die Accounts anderer User sehen darf (Header von authproxy oder eigene Liste).
+  Anmeldung des Proxys, nur mit relativen Pfaden — ohne `X-Forwarded-Prefix`. Entschieden am
+  2026-10-05, gebaut in Task 029: Admin ist, wem authproxy die Rolle `kephalaion.admin` in
+  `X-User-Roles` schickt; er sieht die Accounts aller User. Offen bleibt die Verwaltung in der
+  Oberfläche (Accounts, Rechte, Nodes; vorerst die Kommandozeile) und die **Absicherung des
+  lokalen Zugriffs (Todo #17)**: dass der Hub `X-User` und `X-User-Roles` nur vom Proxy
+  annimmt — (a) signierte Bestätigung von authproxy oder (b) die Weboberfläche auf einem
+  eigenen Unix-Socket, den nur Caddy erreicht.
   Ob auch der Node (MCP, `/mcp` auf 7433) unter `/kephalaion/`
   erscheint, ist beantwortet (Task 023): ja, als genau `/kephalaion/mcp`, ohne Anmeldung des
   Proxys; ein Prozess mit beiden Rollen hat weiter zwei Listener.

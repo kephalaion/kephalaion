@@ -118,6 +118,12 @@ Ob es eine neue Version gibt, meldet auch das MCP-Werkzeug `whoami` (Feld `updat
 fragt GitHub dafür höchstens einmal am Tag. Ohne Anmeldung erlaubt die GitHub-API 60
 Anfragen je Stunde.
 
+**Weboberfläche hinter einem Proxy:** Vor dem Upgrade auf eine Fassung mit Admin-Ansicht
+(Task 029) muss der Proxy auch `X-User-Roles` des Browsers entfernen — eine Caddy-Vorlage aus
+der Zeit davor tut das nicht, und sonst macht sich jeder, der die Seite sehen darf, zum Admin.
+Anpassen und prüfen: [`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer
+Rechner“, „Upgrade von der alten Vorlage“.
+
 ## Einrichten
 
 Hub und Node werden je mit einem Aufruf eingerichtet — ohne Rückfragen, nie überschreibend:
@@ -526,6 +532,13 @@ Neues und Eigenes), Fremdes ändern (`supersede`) und die Scopes `vendor/<name>`
 <pfad>/`, mit einer kurzen Erklärung der Rechte. Verwalten kann sie nichts; Accounts, Rechte
 und Nodes bleiben in der Kommandozeile (`hub account …`).
 
+- **Admin-Ansicht** (seit Task 029): Wer am Proxy die Rolle `kephalaion.admin` hat (Header
+  `X-User-Roles`, unter seinen durch Komma getrennten Einträgen genau dieser; andere Rollen,
+  auch `authproxy.admin`, zählen nicht), landet auf der Liste aller Accounts, nach User
+  geordnet, je Account Status und Collections. Ein Klick auf einen User zeigt dessen Ansicht,
+  „Alle Accounts“ führt zurück — innerhalb der Seite, die Adresse bleibt. Darunter der Hinweis,
+  dass Accounts und Rechte derzeit per Kommandozeile am Hub eingerichtet werden. Eingang der
+  Liste: `GET gui/api/users`, nur für Admins, sonst 403.
 - **Kein Token:** Die Seite fragt kein Token ab, zeigt und überträgt keins. Wen sie zeigt,
   sagt die Anmeldung des Proxys im Header `X-User` (seit Task 026; vorher fragte sie Account
   und Account-Token ab). Wo das Token eines Accounts meist liegt, nennt sie nur:
@@ -534,12 +547,16 @@ und Nodes bleiben in der Kommandozeile (`hub account …`).
   „keine Anmeldung des Proxys“. Lokal nennt `kephalaion hub account list --user <user>` die
   Accounts; der Eingang der Seite antwortet auf `curl -H 'X-User: <user>'
   http://localhost:7434/gui/api/user` mit den Accounts, ohne `X-User` mit 403.
-- **Grenze:** Der Hub glaubt jedem `X-User`, der ihn auf Loopback erreicht — ein Prozess auf
-  seinem Rechner sieht so Accounts und Rechte eines beliebigen Users (keine Tokens).
+- **Grenze:** Der Hub glaubt jedem `X-User` und `X-User-Roles`, der ihn auf Loopback erreicht.
+  Wer den Port des Hubs erreicht — Benutzer und Prozesse auf seinem Rechner, auch lokal
+  laufende KIs und Container mit Host-Netz, und SSH-Tunnel zu ihm —, sieht so Accounts und
+  Rechte eines beliebigen Users oder, mit der Rolle, aller auf einmal (keine Tokens). Das
+  schließt erst die Absicherung des lokalen Zugriffs (Todo #17), eine eigene Task.
 - **`curl`** bekommt an der Wurzel weiter die Begrüßung (`text/plain`); die Seite kommt nur,
   wenn `Accept` `text/html` nennt: `curl -H 'Accept: text/html' http://localhost:7434/`.
-- **Nach außen** gehört die Seite hinter die Anmeldung eines Proxys, der `X-User` des Browsers
-  verwirft und den geprüften setzt; Seite und Eingang antworten nie 401 — siehe
+- **Nach außen** gehört die Seite hinter die Anmeldung eines Proxys, der `X-User` und
+  `X-User-Roles` des Browsers verwirft und die geprüften setzt; Seite und Eingänge antworten
+  nie 401 — siehe
   [`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“.
 
 ### Dokumente einspielen und abgleichen

@@ -446,16 +446,18 @@ https://9.141.8.157 {
   bekommt an derselben Stelle die Begrüßung), ihre Teile unter `/kephalaion/gui/…`. Seit Task
   026 zeigt sie dem am Proxy angemeldeten User alle seine Accounts mit ihren Rechten, ohne
   Token: Wen, sagt die Anmeldung davor (`forward_auth` auf einen Auth-Dienst, auf der VM
-  authproxy) im Header `X-User`. Vorlage wie auf der VM, zusätzlich zum Block oben:
+  authproxy) im Header `X-User`. Seit Task 029 sieht ein Admin der Weboberfläche — der
+  Auth-Dienst nennt im Header `X-User-Roles` unter seinen durch Komma getrennten Einträgen
+  genau `kephalaion.admin` — zuerst die Accounts aller User. Vorlage wie auf der VM, zusätzlich
+  zum Block oben:
 
   ```text
   https://<name> {
-      # X-User und X-User-Email setzt nur der Auth-Dienst: aus jeder Anfrage des Browsers
-      # weg, für die ganze Site, auch die Varianten mit _ (WSGI macht aus beiden HTTP_X_USER).
-      request_header -X-User
-      request_header -X_User
-      request_header -X-User-Email
-      request_header -X_User_Email
+      # X-User, X-User-Email und X-User-Roles setzt nur der Auth-Dienst: aus jeder Anfrage des
+      # Browsers weg, für die ganze Site. Mit * fällt jeder Header ab X-User weg, auch künftige;
+      # die Varianten mit _ auch (WSGI macht aus X-User und X_User dieselbe Variable).
+      request_header -X-User*
+      request_header -X_User*
 
       redir /kephalaion /kephalaion/ 308
 
@@ -467,7 +469,7 @@ https://9.141.8.157 {
           route {
               forward_auth 127.0.0.1:9091 {
                   uri /auth/check
-                  copy_headers X-User X-User-Email
+                  copy_headers X-User X-User-Email X-User-Roles
               }
               uri strip_prefix /kephalaion
               reverse_proxy localhost:7434 {
@@ -489,9 +491,26 @@ https://9.141.8.157 {
   Seite glaubt `X-User`. Ohne Sitzung antwortet dort der Auth-Dienst (authproxy: `GET` und
   `HEAD` 302 zur Anmeldung, sonst 401), nie das Binary — Proben gegen die Wurzel gehen nur auf
   dem Rechner des Hubs (unten).
+  - **Upgrade von der alten Vorlage (vor Task 029).** Die alte Vorlage entfernte nur `X-User`,
+    `X_User`, `X-User-Email` und `X_User_Email` — einen `X-User-Roles` des Browsers reicht sie
+    durch. **Vor dem Upgrade auf eine Fassung mit Admin-Ansicht das Caddyfile anpassen**
+    (`request_header -X-User*` und `-X_User*` wie oben, `copy_headers … X-User-Roles`), sonst
+    macht sich jeder, der die Seite sehen darf, mit einem selbst gesetzten
+    `X-User-Roles: kephalaion.admin` zum Admin und sieht die Accounts aller User. Kephalaion
+    selbst merkt das nicht und hat keinen Schalter dafür. Probe von außen, mit der Sitzung eines
+    Nicht-Admins **ganz ohne Rolle** (auch ohne `authproxy.admin`; sonst überschriebe
+    `copy_headers` den mitgeschickten Header ohnehin, und die Probe bewiese nichts) und genau
+    einem mitgeschickten Header: `curl -b 'authproxy=<sitzung>' -H 'X-User-Roles:
+    kephalaion.admin' https://<name>/kephalaion/gui/api/users` → 403 `forbidden`. Kommt die
+    Liste, entfernt der Proxy den Header nicht.
+  - **Andere Auth-Dienste.** Der Hub braucht vom Auth-Dienst genau einen Header `X-User` mit
+    dem Namen des Users und, für Admins, genau einen Header `X-User-Roles` mit dem Eintrag
+    `kephalaion.admin` (Einträge durch Komma getrennt; Leerraum um einen Eintrag zählt nicht,
+    Groß- und Kleinschreibung zählt; andere Rollen zählen nicht). Der Proxy muss beide aus der
+    Anfrage des Browsers entfernen und nur die des Auth-Dienstes durchreichen.
   - **Falle der Reihenfolge.** `request_header` gehört auf die Ebene der Site, wie oben: Dort
     führt Caddy es vor jedem `handle` aus, und auch die Blöcke ohne Anmeldung (Hub, MCP) reichen
-    nie einen mitgeschickten `X-User` weiter. In einem `handle` ohne `route` sortiert Caddy
+    nie einen mitgeschickten `X-User` oder `X-User-Roles` weiter. In einem `handle` ohne `route` sortiert Caddy
     `request_header` hinter `forward_auth` — es löscht dann den geprüften Namen wieder, und die
     Seite zeigt „keine Anmeldung des Proxys“.
   - **Eine Anmeldung.** Die des Proxys ist die einzige; die Seite fragt kein Token ab, zeigt
@@ -505,10 +524,17 @@ https://9.141.8.157 {
     „Deine Anmeldung an dieser Seite ist abgelaufen — Seite neu laden und neu anmelden“. Die 401
     des Vertrags (`/kephalaion/hub/v1/`, falsches Token eines Nodes) bleibt und zählt für
     fail2ban („Bekannte Grenze“).
-  - **Grenze lokaler Prozesse.** Der Hub glaubt jedem `X-User`, der ihn auf Loopback erreicht:
-    Ein Prozess auf dem Rechner des Hubs kann den Header selbst setzen und Accounts und Rechte
-    eines beliebigen Users sehen — keine Tokens, keine Hashes. Wer dort arbeitet, gilt als
-    vertrauenswürdig; ein geheimer Header, den nur der Proxy setzt, schließt das (eigene Task).
+  - **Grenze lokaler Prozesse.** Der Hub glaubt jedem `X-User` und `X-User-Roles`, der ihn auf
+    Loopback erreicht; Caddy entfernt die Header nur auf dem Weg von außen. Wer den Port des
+    Hubs (`localhost:7434`) erreicht, kann beide selbst setzen und sieht dann die Accounts und
+    Rechte eines beliebigen Users oder, als Admin, aller auf einmal — keine Tokens, keine
+    Hashes. Den Port erreichen alle Benutzer und Prozesse auf dem Rechner des Hubs, auch lokal
+    laufende KIs und Container mit Host-Netz, und jeder SSH-Tunnel zu ihm (etwa der eines
+    Nodes, `ssh -N -L 7434:localhost:7434 …`). Das ist hingenommen (Entscheidung vom
+    2026-10-06); schließen soll es die **Absicherung des lokalen Zugriffs (Todo #17)**, eine
+    eigene Task: (a) eine signierte Bestätigung des Auth-Dienstes (Ed25519, `aud=kephalaion`,
+    `exp` etwa 60 s) oder (b) die Weboberfläche auf einem eigenen Unix-Socket, den nur Caddy
+    erreicht.
   - **Ohne Proxy** (Browser auf `http://localhost:7434/`) setzt niemand `X-User`: Die Seite
     zeigt nur „keine Anmeldung des Proxys“. Lokal nennt `kephalaion hub account list --user
     <user>` die Accounts.
@@ -516,12 +542,16 @@ https://9.141.8.157 {
     und die Accounts dieses Users. Auf dem Rechner des Hubs: `curl -H 'Accept: text/html'
     http://localhost:7434/` → die Seite (HTML), `curl http://localhost:7434/` → weiter die
     Begrüßung, `curl -H 'X-User: <user>' http://localhost:7434/gui/api/user` → 200 mit den
-    Accounts, ohne `X-User` → 403 `unauthenticated` (keine 401). Von außen ohne Sitzung:
+    Accounts, ohne `X-User` → 403 `unauthenticated` (keine 401); `curl -H 'X-User: <user>' -H
+    'X-User-Roles: kephalaion.admin' http://localhost:7434/gui/api/users` → 200 mit der Liste
+    aller Accounts, ohne `X-User-Roles` → 403 `forbidden`. Von außen ohne Sitzung:
     `curl https://<name>/kephalaion/` und `…/kephalaion/gui/api/user` → 302 des Auth-Dienstes;
     `curl -H 'X-User: <user>' https://<name>/kephalaion/hub/gui/api/user` → 404 in
     Vertragsform (der Hub-Block erreicht den Eingang nicht). Im Log des Hubs (`journalctl -u
     kephalaion`) steht je Aufruf `hub GET /gui/api/user 200 … via=<adresse> viewer=<user>
-    user=<user>` — nie ein Token.
+    admin=nein user=<user>` bzw. `hub GET /gui/api/users 200 … viewer=<user> admin=ja` — nie
+    ein Token. Ob der Proxy einen `X-User-Roles` des Browsers entfernt, zeigt die Probe unter
+    „Upgrade von der alten Vorlage“.
 - `header_up Host {upstream_hostport}` schickt `Host: localhost:7434`; genau das verlangt der
   Hub (`vertrag.md`, „Host“). Ohne die Zeile antwortet er 403, und `node hub check` sagt es.
 - `request_body max_size 8MiB` liegt über den 7 MiB, die der Hub für einen Schreibvorgang
@@ -1134,6 +1164,12 @@ Binary über MCP niemand.
 Playbook lädt das neue Binary und startet den Dienst neu) oder ruft
 `sudo kephalaion upgrade && sudo systemctl restart kephalaion`.
 
+**Vor dem Upgrade auf eine Fassung mit Admin-Ansicht (Task 029)** prüft, wer die Weboberfläche
+hinter einem Proxy nach außen reicht, ob der Proxy auch `X-User-Roles` des Browsers entfernt.
+Eine Vorlage aus der Zeit davor tut das nicht; Kephalaion meldet es nicht. Wie man anpasst und
+prüft: „Hub für Nodes anderer Rechner“, Option Weboberfläche, „Upgrade von der alten
+Vorlage“.
+
 ## Ohne systemd
 
 Auf Systemen ohne systemd (Alpine mit OpenRC, schlanke Container, WSL ohne `systemd=true`)
@@ -1167,7 +1203,7 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`), `kephalaion:kephalaion`, `0700` |
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
-| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth` mit `copy_headers X-User X-User-Email` in `route`, dazu für die ganze Site `request_header -X-User`, `-X_User`, `-X-User-Email`, `-X_User_Email`; nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
+| Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth` mit `copy_headers X-User X-User-Email X-User-Roles` in `route`, dazu für die ganze Site `request_header -X-User*` und `-X_User*` (entfernt jeden Header ab `X-User` des Browsers, auch `X-User-Roles`; die alte Vorlage mit vier einzelnen Zeilen vor dem Upgrade auf die Admin-Ansicht anpassen); nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
 
 Reihenfolge und Regeln:
 

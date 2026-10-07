@@ -39,18 +39,21 @@ eingerichtet sind — und läuft, bis SIGINT oder SIGTERM ihn beendet.
   hub    an der Wurzel (/) für einen Browser (Accept mit text/html) die
          Weboberfläche: Sie zeigt dem am Proxy angemeldeten User (Header
          X-User) alle seine Accounts mit ihren Rechten, ohne Token; ihre Teile
-         liegen unter /gui/. Ohne Proxy setzt niemand X-User, die Seite zeigt
-         dann nur „keine Anmeldung des Proxys“ (die Accounts nennt kephalaion
-         hub account list --user <user>). Der Hub glaubt jedem X-User auf
-         Loopback: Ein Prozess dieses Rechners sieht so Accounts und Rechte
-         eines beliebigen Users, keine Tokens. Für alles andere (curl) dort
-         eine kurze Begrüßung mit der Version. Der Vertrag für Nodes unter
-         /hub: POST /hub/v1/whoami, /hub/v1/rotate, /hub/v1/sync und die
-         Schreibvorgänge /hub/v1/create, /hub/v1/write, /hub/v1/delete,
-         /hub/v1/rename — die Adresse eines Hub-Eintrags endet deshalb auf
-         /hub (http://localhost:7434/hub). /v1/… an der Wurzel antwortet 404
-         mit dem Hinweis auf /hub; eine Umleitung gibt es nie, auch nicht
-         hinter einem Proxy mit Präfix
+         liegen unter /gui/. Mit der Rolle kephalaion.admin im Header
+         X-User-Roles zeigt sie zuerst die Accounts aller User. Ohne Proxy
+         setzt niemand X-User; die Seite zeigt dann nur
+         „keine Anmeldung des Proxys“, die Accounts nennt dort
+         kephalaion hub account list --user <user>. Der Hub glaubt jedem
+         X-User und X-User-Roles auf Loopback: Wer seinen Port erreicht (jeder
+         Prozess dieses Rechners, ein SSH-Tunnel), sieht so Accounts und Rechte
+         eines beliebigen Users oder aller, keine Tokens. Für alles andere
+         (curl) dort eine kurze Begrüßung mit der Version. Der Vertrag für
+         Nodes unter /hub: POST /hub/v1/whoami, /hub/v1/rotate,
+         /hub/v1/sync und die Schreibvorgänge /hub/v1/create, /hub/v1/write,
+         /hub/v1/delete, /hub/v1/rename — die Adresse eines Hub-Eintrags
+         endet deshalb auf /hub (http://localhost:7434/hub).
+         /v1/… an der Wurzel antwortet 404 mit dem Hinweis auf /hub; eine
+         Umleitung gibt es nie, auch nicht hinter einem Proxy mit Präfix
   node   MCP für Clients unter /mcp: whoami, list, read und changes aus der
          Replica, create, write, delete und rename über den Hub — ist er
          nicht erreichbar, wird nichts gespeichert, gelesen wird weiter

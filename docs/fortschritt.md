@@ -1,12 +1,14 @@
 # Fortschritt
 
-Stand: 2026-10-06 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-10-07 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
 ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
 eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die Abnahme von 020;
 028 Etappen 1–6 ausgeführt, der User richtet seinen Account selbst ein — auf der VM eingespielt,
-die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
+die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers; 029 Etappen 1–5
+ausgeführt, die Admin-Ansicht der Weboberfläche — die Abnahme auf der VM ist Nacharbeit des
+Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -349,7 +351,43 @@ die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
     Auf der VM eingespielt am 2026-10-06 (dev 15f372c, Caddy und Jail; Proben mit Dummy-Token
     bestanden); Abnahme mit echtem Einrichtungstoken: siehe „Zu testen“.
 
+- **Task 029 — Weboberfläche: Admin-Ansicht aller Accounts** (2026-10-07, Etappen 1–5;
+  Entscheidungen des Nutzers vom 2026-10-05 und 2026-10-06, `konzept.md`, „Die Weboberfläche am
+  Hub“):
+  - Admin der Weboberfläche ist, wessen Anfrage einen gültigen `X-User` und genau einen
+    `X-User-Roles` mit dem Eintrag `kephalaion.admin` trägt (`gui.HeaderViewer`, liefert
+    `gui.Identity`; gebaut weiter nur in `hubViewer`); andere Rollen, auch `authproxy.admin`,
+    zählen nicht;
+  - `GET /gui/api/user` trägt `admin`; ein Admin darf jeden `name` abfragen (ungültig 400
+    `invalid`, ohne Account 200 mit leerer Liste), für alle anderen bleibt es bei 403
+    `forbidden`; neuer Eingang `GET /gui/api/users` (`gui.NewUsers`): nur für Admins, sonst 403,
+    alle Accounts nach User mit `locked` und den Namen der Collections (`store.Accounts`, ohne
+    Hash); Log `viewer=`, `admin=ja|nein`, bei `user` auch `user=`;
+  - die Seite: Ein Admin landet auf der Liste („Alle Accounts“, Zahl der User und Accounts,
+    eigener User mit „(du)“, Hinweis auf die Kommandozeile), ein Klick zeigt die Ansicht des
+    Users, „Alle Accounts“ führt zurück, die Überschrift bekommt den Fokus, die Adresse bleibt;
+    die Liste lädt sie erst, wenn der Hub `admin` meldet. Die Regel zu `fetch` in `page_test.go`
+    ist bewusst neu gefasst (`wantOneFetch`): genau ein `fetch` in `apiGet`, gerufen nur mit
+    `USER_API` (ohne Query oder `?name=` mit `encodeURIComponent`) und `USERS_API`, immer GET,
+    `redirect: "manual"`, `same-origin`, `no-store`;
+  - Durchlauf im Browser (Playwright, Stellvertreter, der `X-User*` entfernt und
+    `X-User-Roles` setzt): alle Proben bestanden, ohne Korrektur — Befund
+    `material/befunde/gui.md`;
+  - Doku: `begriffe.md` (`gui admin`, `gui/api/users`, `gui/api/user`, Abgrenzung zu `admin`),
+    `konzept.md` (Admin-Ansicht, größere Grenze, Absicherung des lokalen Zugriffs statt
+    geheimem Header), `installation.md` (Vorlage mit `request_header -X-User*` und `-X_User*`,
+    `copy_headers … X-User-Roles`, Hinweis zum Upgrade von der alten Vorlage samt Probe, andere
+    Auth-Dienste, Grenze, Tabelle), README („Weboberfläche“, „Upgrade“), Hilfe von `serve`;
+    Todo #17 angepasst;
+  - Tests: `internal/hub/gui` (Varianten der Rolle, Admin mit fremdem und ungültigem `name`,
+    Liste für Admin, Nicht-Admin und ohne Anmeldung, gesperrter Account, kein Hash, Log),
+    `TestServeHubListener`, `TestGUIBehindPrefix` (ein mitgeschickter `X-User-Roles` erreicht
+    den Hub nicht, je Schreibweise genau ein Header).
+
 ## In Arbeit
+
+- **Task 029 — Abnahme der Admin-Ansicht auf der VM:** Nacharbeit des Nutzers (Rolle im Portal
+  vergeben, Sitzungen), Schritte unter „Zu testen“.
 
 - **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM:** Nacharbeit des Nutzers,
   Schritte unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Stand 2026-10-06“.
@@ -385,13 +423,28 @@ die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
 - **Anleitung für neue Mitarbeiter** (Folgearbeit von Task 028, nicht Teil davon): den Teil
   für den Mitarbeiter in `squad-km-dev-setup/k-playbook-local/docs/manual/einrichtung-neue-mitarbeiter.md`
   auf `kephalaion node account setup` umstellen.
-- **Geheimer Header des Proxys** (Folge-Task von Task 026, direkt danach): Der Hub glaubt
-  vorerst jedem `X-User`, der ihn auf Loopback erreicht — jeder Prozess auf seinem Rechner sieht
-  so Accounts und Rechte eines beliebigen Users (keine Tokens). Ein Header mit einem Geheimnis,
-  das nur Caddy setzt (aus der config des Hubs), schließt das. Die Task ändert nur den Viewer
-  (`gui.HeaderViewer`) und die Stelle, an der er entsteht (`hubViewer` in `serve.go`), nicht
-  Eingang und Seite (`konzept.md`, „Die Weboberfläche am Hub“; `installation.md`, Option
+- **Absicherung des lokalen Zugriffs (Todo #17)** (Folge-Task nach Task 029; Entscheidung des
+  Nutzers vom 2026-10-06: die größere Grenze bis dahin hingenommen): Der Hub glaubt jedem
+  `X-User` und `X-User-Roles`, der ihn auf Loopback erreicht. Wer den Port erreicht —
+  Benutzer und Prozesse auf dem Rechner des Hubs, lokale KIs, Container mit Host-Netz,
+  SSH-Tunnel der Nodes —, sieht so Accounts und Rechte eines beliebigen Users oder, mit der
+  Rolle, aller (keine Tokens). Zwei Wege: (a) der Hub prüft eine signierte Bestätigung von
+  authproxy (Ed25519, `aud=kephalaion`, `exp` etwa 60 s, User und Rollen darin, nur der
+  öffentliche Schlüssel in der config) oder (b) die Weboberfläche auf einem eigenen Listener als
+  Unix-Socket, den nur Caddy erreicht. Die Task ändert den Viewer (`gui.HeaderViewer`) und die
+  Stelle, an der er entsteht (`hubViewer` in `serve.go`), bei (b) dazu den Listener — nicht
+  Eingänge und Seite (`konzept.md`, „Die Weboberfläche am Hub“; `installation.md`, Option
   Weboberfläche, „Grenze lokaler Prozesse“).
+- **Text des nächsten Release: Hinweis zum Upgrade** (vorgemerkt in Task 029): `release.yml`
+  schreibt nur den festen Text und die erzeugten Notizen und veröffentlicht sofort. Nach dem
+  nächsten Release kommt mit `gh release edit` dieser Hinweis dazu — **nur nach Rückfrage beim
+  Nutzer**, denn das Release ist öffentlich: „Weboberfläche hinter einem Proxy: Diese Fassung
+  kennt Admins der Weboberfläche (Rolle `kephalaion.admin` im Header `X-User-Roles`). Vor dem
+  Upgrade muss der Proxy auch einen `X-User-Roles` des Browsers entfernen; die Caddy-Vorlage
+  aus der Zeit davor tut das nicht (`request_header -X-User*` und `-X_User*` statt der vier
+  einzelnen Zeilen, `copy_headers X-User X-User-Email X-User-Roles`). Sonst macht sich jeder,
+  der die Seite sehen darf, zum Admin. Anpassen und prüfen: `docs/installation.md`, „Upgrade
+  von der alten Vorlage“.“
 
 - **Nach Task 016 und 021:** Die Sperre von `push` bleibt (entschieden am 2026-09-30); weitere
   Ziele nur als einzeln freigegebene Verzeichnisse — gebaut in Task 021 (`konzept.md`,
@@ -510,6 +563,34 @@ die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 029 — Abnahme der Admin-Ansicht auf der VM** (Nacharbeit des Nutzers: Er vergibt die
+  Rolle `kephalaion.admin` im Portal von authproxy und nimmt sie danach wieder weg, und er
+  stellt die Sitzungen bereit oder macht die Schritte im Browser selbst). Keine neue
+  Schemafassung. **Caddy vor dem Binary:** Erst wenn Caddy nachweislich jeden `X-User-Roles`
+  des Browsers entfernt, darf das Binary auf die VM (Stand: Etappe 6 der Task, `~/dev/vm/kephalaion/README.md`).
+  Keine der Proben erzeugt eine 401:
+  1. Ein Admin (Benutzer mit der Rolle, für kephalaion freigeschaltet, gültiger User am Hub)
+     öffnet `https://<name>/kephalaion/` → „Alle Accounts“, oben die Zahl der User und
+     Accounts, je User eine Gruppe (der eigene mit „(du)“), je Account Status und Collections;
+     Klick auf einen anderen User → „Accounts von <user>“ mit Rechten und Scopes; „Alle
+     Accounts“ → zurück zur Liste; die Adresse bleibt.
+  2. Ein Nicht-Admin (für kephalaion freigeschaltet, gültiger User am Hub, **ganz ohne Rolle**,
+     auch ohne `authproxy.admin`) → „Deine Accounts“, nur die eigenen, kein „Alle Accounts“;
+     in der Konsole keine 403.
+  3. Mit der Sitzung dieses Nicht-Admins und **genau einem** mitgeschickten Header: `curl -s -b
+     'authproxy=<sitzung>' -H 'X-User-Roles: kephalaion.admin'
+     https://<name>/kephalaion/gui/api/users` → 403 `forbidden` (ebenso `…/gui/api/user?name=<anderer>`).
+     Nur ohne jede Rolle beweist das, dass Caddy den Header entfernt (mit einer Rolle
+     überschriebe `copy_headers` ihn ohnehin; authproxy schickt `X-User-Roles` nur bei
+     mindestens einer Rolle). Im Journal `hub GET /gui/api/users 403 … viewer=<user>
+     admin=nein`.
+  4. Nach dem Wegnehmen der Rolle sieht der frühere Admin wieder nur die eigenen Accounts.
+  5. `journalctl -u kephalaion` → `… /gui/api/users 200 … viewer=<admin> admin=ja`, nirgends ein
+     Token; im Journal von Caddy keine 401 auf `/kephalaion/gui/…`.
+
+  Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter):
+  `material/befunde/gui.md`, Abschnitt vom 2026-10-07.
 
 - **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM** (Nacharbeit des Nutzers; ein
   Agent legt keinen Account an — die Ausgabe von `hub account add` brächte das Token in seinen
@@ -639,13 +720,12 @@ die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers)
   alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
   je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
   So lassen oder nur mit eingebundener Collection bzw. im Fokus fragen (`vscode.md`, „Offen“)?
-- **Admins in der Weboberfläche** (Task 026): Der Eingang `gui/api/user` nimmt einen User als
-  Parameter, vorerst nur den eigenen; die Seite ist für eine Auswahl gebaut. Offen, woher der
-  Hub erfährt, wer Admin ist und die Accounts anderer User sehen darf — ein Header von
-  authproxy oder eine eigene Liste am Hub (`konzept.md`, „Offene Punkte“, GUI).
+- **Admins in der Weboberfläche** (Task 026): **erledigt** — entschieden am 2026-10-05 (Header
+  `X-User-Roles` von authproxy, Rolle `kephalaion.admin`), gebaut in Task 029 (`konzept.md`,
+  „Die Weboberfläche am Hub“).
 - **Verwaltung in der Weboberfläche** (Accounts, Rechte, Nodes): vorerst die Kommandozeile;
-  eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (siehe
-  „Admins in der Weboberfläche“; `konzept.md`, „Offene Punkte“, GUI).
+  eine eigene Task, wenn sie kommen soll — samt der Frage, wer dort verwalten darf (etwa der
+  Admin der Weboberfläche aus Task 029; `konzept.md`, „Offene Punkte“, GUI).
 - **Anmeldung eines Accounts und Antwortzeit:** Der Hash wird immer in konstanter Zeit
   verglichen, aber ein bekannter Account kostet eine Abfrage mehr als ein unbekannter
   (`store.CheckAccount` liest die Rechte mit). Nicht gemessen; ob das zu ändern ist, zusammen
