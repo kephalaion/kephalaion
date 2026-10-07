@@ -381,10 +381,11 @@ const hubPath = "/hub"
 const guiPath = "/gui"
 
 // hubViewer ist die eine Stelle, an der entsteht, wem die Weboberfläche des
-// Hubs den angemeldeten User glaubt (gui.Viewer): vorerst X-User der
-// Anmeldung des Proxys ohne weitere Prüfung (gui.HeaderViewer). Ein geheimer
-// Header des Proxys aus der config kommt hier dazu (eigene Task); Eingang und
-// Seite bleiben dabei, wie sie sind.
+// Hubs den angemeldeten User glaubt und ob er Admin der Weboberfläche ist
+// (gui.Viewer): vorerst X-User und X-User-Roles der Anmeldung des Proxys
+// ohne weitere Prüfung (gui.HeaderViewer). Die Absicherung des lokalen
+// Zugriffs (Todo #17, eigene Task) kommt hier dazu; Eingänge und Seite
+// bleiben dabei, wie sie sind.
 func hubViewer() gui.Viewer { return gui.HeaderViewer }
 
 // newHubHandler ist der Hub-Listener ohne die Host-Prüfung (die legt
@@ -395,9 +396,11 @@ func hubViewer() gui.Viewer { return gui.HeaderViewer }
 //     kommt die Weboberfläche (internal/hub/gui), sonst eine kurze Begrüßung
 //     mit der Version (text/plain, für curl) — beide mit Vary: Accept.
 //   - Unter /gui/ die Teile der Seite: ihre Dateien (gui.Files: /gui/app.js,
-//     /gui/style.css, /gui/icon.svg) und ihr Eingang GET /gui/api/user, der
-//     die Accounts des angemeldeten Users nennt — wem er glaubt, sagt viewer;
-//     er ist kein Teil des Vertrags. /gui, /gui/ und alles andere darunter
+//     /gui/style.css, /gui/icon.svg) und ihre Eingänge GET /gui/api/user, der
+//     die Accounts des angemeldeten Users nennt (einem Admin der
+//     Weboberfläche die eines beliebigen), und GET /gui/api/users, die Liste
+//     aller Accounts nur für einen Admin — wem sie glauben, sagt viewer; sie
+//     sind kein Teil des Vertrags. /gui, /gui/ und alles andere darunter
 //     404.
 //   - An /hub und /hub/ ein kurzer Text ohne Version (diese Route liegt nach
 //     außen ohne Anmeldung), unter /hub/ der Handler des Vertrags, der
@@ -433,6 +436,7 @@ func newHubHandler(st hubstore.Store, viewer gui.Viewer) http.Handler {
 		mux.Handle(guiPath+"/"+name, gui.NewFile(name))
 	}
 	mux.Handle(guiPath+"/api/user", gui.NewUser(st, viewer))
+	mux.Handle(guiPath+"/api/users", gui.NewUsers(st, viewer))
 	mux.HandleFunc(guiPath, notFound)
 	mux.HandleFunc(guiPath+"/", notFound)
 	short := func(w http.ResponseWriter, r *http.Request) {

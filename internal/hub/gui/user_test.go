@@ -84,9 +84,27 @@ func (f *fixture) grant(t *testing.T, account, collection string, r contract.Rig
 // jeden Wert in users, und liefert Antwort und Body.
 func (f *fixture) do(t *testing.T, method, target string, users ...string) (*http.Response, string) {
 	t.Helper()
-	req := httptest.NewRequest(method, target, nil)
+	h := http.Header{}
 	for _, u := range users {
-		req.Header.Add(HeaderUser, u)
+		h.Add(HeaderUser, u)
+	}
+	return f.send(t, method, target, h)
+}
+
+// admin schickt eine Anfrage als user mit der Rolle des Admins der
+// Weboberfläche (X-User-Roles wie von authproxy, authproxy.admin zuerst).
+func (f *fixture) admin(t *testing.T, method, target, user string) (*http.Response, string) {
+	t.Helper()
+	return f.send(t, method, target, http.Header{HeaderUser: {user}, HeaderRoles: {"authproxy.admin," + RoleAdmin}})
+}
+
+// send schickt eine Anfrage mit den Headern h an den Eingang und liefert
+// Antwort und Body.
+func (f *fixture) send(t *testing.T, method, target string, h http.Header) (*http.Response, string) {
+	t.Helper()
+	req := httptest.NewRequest(method, target, nil)
+	for k, vals := range h {
+		req.Header[k] = append([]string(nil), vals...)
 	}
 	rec := httptest.NewRecorder()
 	f.srv.ServeHTTP(rec, req)
@@ -159,7 +177,7 @@ func TestUser(t *testing.T) {
 		}
 		// Die Form auf der Leitung: vendor und dirs als Liste, auch leer; read
 		// steht nicht eigens da, und weder Token noch Hash.
-		for _, w := range []string{`{"viewer":"kleist","user":"kleist","accounts":[{"name":"laptop","description":"Mein Laptop","locked":false,`,
+		for _, w := range []string{`{"viewer":"kleist","admin":false,"user":"kleist","accounts":[{"name":"laptop","description":"Mein Laptop","locked":false,`,
 			`"rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":["a/b","docs"]}`,
 			`"rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}`,
 			`{"name":"vm","description":"Auf der VM","locked":true,"collections":[{"name":"test",`} {
@@ -197,12 +215,12 @@ func TestUser(t *testing.T) {
 	// Ein Account ohne Collection: eine leere Liste, nicht null.
 	resp, body = f.do(t, http.MethodGet, "/gui/api/user", "carol")
 	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) !=
-		`{"viewer":"carol","user":"carol","accounts":[{"name":"carol","description":"","locked":false,"collections":[]}]}` {
+		`{"viewer":"carol","admin":false,"user":"carol","accounts":[{"name":"carol","description":"","locked":false,"collections":[]}]}` {
 		t.Errorf("ohne Collection: HTTP %d: %s", resp.StatusCode, body)
 	}
 	// Ein User ohne Account: eine leere Liste, 200.
 	resp, body = f.do(t, http.MethodGet, "/gui/api/user", "dora")
-	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"viewer":"dora","user":"dora","accounts":[]}` {
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"viewer":"dora","admin":false,"user":"dora","accounts":[]}` {
 		t.Errorf("ohne Account: HTTP %d: %s", resp.StatusCode, body)
 	}
 }
@@ -322,27 +340,94 @@ func TestHeaderViewer(t *testing.T) {
 		{"zwei", http.Header{"X-User": {"kleist", "carol"}}, "", false},
 		{"mit Unterstrich", http.Header{"X_user": {"kleist"}}, "", false},
 		{"nur E-Mail", http.Header{"X-User-Email": {"kleist@example.org"}}, "", false},
+		{"nur Rollen", http.Header{"X-User-Roles": {"kephalaion.admin"}}, "", false},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/gui/api/user", nil)
 		r.Header = c.header
-		if user, ok := HeaderViewer(r); user != c.user || ok != c.ok {
-			t.Errorf("%s: %q %v, erwartet %q %v", c.what, user, ok, c.user, c.ok)
+		if id, ok := HeaderViewer(r); id.User != c.user || ok != c.ok || id.Admin {
+			t.Errorf("%s: %+v %v, erwartet %q %v ohne Admin", c.what, id, ok, c.user, c.ok)
+		}
+	}
+}
+
+// Admin der Weboberfläche ist nur, wessen Anfrage einen gültigen X-User und
+// genau einen X-User-Roles trägt, der unter seinen durch Komma getrennten
+// Einträgen genau kephalaion.admin enthält; Leerraum um einen Eintrag zählt
+// nicht, Groß- und Kleinschreibung zählt. Andere Rollen, Teiltreffer, ein
+// zweiter Header und die Varianten mit _ zählen nicht.
+func TestHeaderViewerRoles(t *testing.T) {
+	for _, c := range []struct {
+		what  string
+		roles []string // Werte von X-User-Roles; nil: kein Header
+		admin bool
+	}{
+		{"ohne", nil, false},
+		{"allein", []string{"kephalaion.admin"}, true},
+		{"wie authproxy", []string{"authproxy.admin,kephalaion.admin"}, true},
+		{"vorn", []string{"kephalaion.admin,authproxy.admin"}, true},
+		{"mit Leerraum", []string{" authproxy.admin , 	kephalaion.admin "}, true},
+		{"leere Einträge", []string{",,kephalaion.admin,"}, true},
+		{"nur authproxy.admin", []string{"authproxy.admin"}, false},
+		{"andere Rolle", []string{"kephalaion.leser"}, false},
+		{"leer", []string{""}, false},
+		{"Teiltreffer hinten", []string{"kephalaion.admins"}, false},
+		{"Teiltreffer vorn", []string{"xkephalaion.admin"}, false},
+		{"ohne Präfix", []string{"admin"}, false},
+		{"groß", []string{"Kephalaion.Admin"}, false},
+		{"mit Leerraum innen", []string{"kephalaion. admin"}, false},
+		{"Semikolon", []string{"authproxy.admin;kephalaion.admin"}, false},
+		{"zwei Header", []string{"authproxy.admin", "kephalaion.admin"}, false},
+		{"zweimal derselbe", []string{"kephalaion.admin", "kephalaion.admin"}, false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/gui/api/users", nil)
+		r.Header = http.Header{"X-User": {"kleist"}}
+		if c.roles != nil {
+			r.Header[HeaderRoles] = c.roles
+		}
+		if id, ok := HeaderViewer(r); !ok || id.User != "kleist" || id.Admin != c.admin {
+			t.Errorf("%s: %+v %v, erwartet kleist mit Admin %v", c.what, id, ok, c.admin)
+		}
+	}
+	// Die Rolle unter einem anderen Namen zählt nicht, ohne X-User auch nicht.
+	for _, h := range []http.Header{
+		{"X-User": {"kleist"}, "X_user_roles": {"kephalaion.admin"}},
+		{"X-User": {"kleist"}, "X-User-Role": {"kephalaion.admin"}},
+		{"X-User": {"kleist"}, "X-Roles": {"kephalaion.admin"}},
+		{"X-User": {"kleist, kephalaion.admin"}},
+		{"X-User-Roles": {"kephalaion.admin"}},
+		{"X-User": {""}, "X-User-Roles": {"kephalaion.admin"}},
+		{"X-User": {"kleist", "carol"}, "X-User-Roles": {"kephalaion.admin"}},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/gui/api/users", nil)
+		r.Header = h
+		if id, _ := HeaderViewer(r); id.Admin {
+			t.Errorf("%v: Admin", h)
 		}
 	}
 }
 
 // Wem der Eingang glaubt, entscheidet allein der übergebene Viewer: Mit
-// einem eigenen zählt X-User nicht.
+// einem eigenen zählen X-User und X-User-Roles nicht.
 func TestUserViewer(t *testing.T) {
 	f := newFixture(t)
-	f.serve(func(*http.Request) (string, bool) { return "carol", true })
-	resp, body := f.do(t, http.MethodGet, "/gui/api/user", "kleist")
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, `{"viewer":"carol","user":"carol",`) {
+	f.serve(func(*http.Request) (Identity, bool) { return Identity{User: "carol"}, true })
+	resp, body := f.admin(t, http.MethodGet, "/gui/api/user", "kleist")
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, `{"viewer":"carol","admin":false,"user":"carol",`) {
 		t.Errorf("eigener Viewer: HTTP %d %s", resp.StatusCode, body)
 	}
-	resp, body = f.do(t, http.MethodGet, "/gui/api/user?name=kleist", "kleist")
+	resp, body = f.admin(t, http.MethodGet, "/gui/api/user?name=kleist", "kleist")
 	wantError(t, "eigener Viewer, name des Headers", resp, body, http.StatusForbidden, "forbidden")
-	f.serve(func(*http.Request) (string, bool) { return "", false })
+	f.serve(func(*http.Request) (Identity, bool) { return Identity{User: "carol", Admin: true}, true })
+	resp, body = f.do(t, http.MethodGet, "/gui/api/user?name=kleist")
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(body, `{"viewer":"carol","admin":true,"user":"kleist",`) {
+		t.Errorf("eigener Viewer mit Admin: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Ohne gültigen User zählt die Rolle nicht, auch wenn der Viewer sie
+	// meldet.
+	f.serve(func(*http.Request) (Identity, bool) { return Identity{User: "admin", Admin: true}, true })
+	resp, body = f.do(t, http.MethodGet, "/gui/api/user?name=kleist")
+	wantError(t, "Viewer mit ungültigem User und Admin", resp, body, http.StatusForbidden, "invalid_user")
+	f.serve(func(*http.Request) (Identity, bool) { return Identity{Admin: true}, false })
 	resp, body = f.do(t, http.MethodGet, "/gui/api/user", "kleist")
 	wantError(t, "Viewer ohne Anmeldung", resp, body, http.StatusForbidden, "unauthenticated")
 }
@@ -359,10 +444,10 @@ func TestUserLog(t *testing.T) {
 	f.do(t, http.MethodGet, "/gui/api/user?name="+f.tokens["laptop"], "kleist")
 	log := f.log.String()
 	for _, want := range []string{
-		"hub GET /gui/api/user 200 ", " viewer=kleist user=kleist\n",
-		"hub GET /gui/api/user 403 ", " viewer=kleist user=carol\n",
+		"hub GET /gui/api/user 200 ", " viewer=kleist admin=nein user=kleist\n",
+		"hub GET /gui/api/user 403 ", " viewer=kleist admin=nein user=carol\n",
 		" viewer=-\n", " viewer=(ungültig)\n",
-		"hub GET /gui/api/user 400 ", " viewer=kleist user=(ungültig)\n",
+		"hub GET /gui/api/user 400 ", " viewer=kleist admin=nein user=(ungültig)\n",
 	} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)
@@ -381,7 +466,14 @@ func TestUserLog(t *testing.T) {
 // failing ist ein Store, dessen Lesen scheitert.
 type failing struct {
 	store.Store
-	accounts, collections error
+	accounts, collections, all error
+}
+
+func (s failing) Accounts(ctx context.Context) ([]store.Account, error) {
+	if s.all != nil {
+		return nil, s.all
+	}
+	return s.Store.Accounts(ctx)
 }
 
 func (s failing) AccountsOfUser(ctx context.Context, user string) ([]store.Account, error) {
@@ -414,7 +506,7 @@ func TestUserStoreError(t *testing.T) {
 			t.Errorf("die Antwort nennt die Einzelheit: %s", body)
 		}
 		if log := f.log.String(); !strings.Contains(log, `error="database is locked (hub.db)"`) ||
-			!strings.Contains(log, "viewer=kleist user=kleist") {
+			!strings.Contains(log, "viewer=kleist admin=nein user=kleist") {
 			t.Errorf("Log:\n%s", log)
 		}
 	}

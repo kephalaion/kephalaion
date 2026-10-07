@@ -19,6 +19,7 @@ import (
 
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
+	"github.com/kephalaion/kephalaion/internal/hub/gui"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/loopback"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
@@ -448,20 +449,25 @@ const sessionCookie = "sitzung"
 
 // proxyLoginAt ist der Stellvertreter für Caddy mit authproxy wie auf der VM,
 // vor dem Hub-Listener von serve, unter prefix: Für die ganze Site entfernt
-// er X-User und X-User-Email des Browsers, auch mit _ (request_header);
-// unter <präfix>/hub/ reicht er ohne Anmeldung weiter; alles andere unter dem
-// Präfix nur mit Sitzung (forward_auth) — ohne Sitzung antwortet er wie
-// authproxy (GET und HEAD 302 zur Anmeldung, sonst 401 text/plain), mit
-// Sitzung setzt er X-User auf ihren User. Den Präfix nimmt er weg (uri
+// er jeden Header des Browsers, dessen Name mit X-User oder X_User beginnt,
+// gleich in welcher Schreibweise — X-User, X-User-Email, X-User-Roles und
+// alle künftigen (request_header -X-User* und -X_User*); unter <präfix>/hub/
+// reicht er ohne Anmeldung weiter; alles andere unter dem Präfix nur mit
+// Sitzung (forward_auth) — ohne Sitzung antwortet er wie authproxy (GET und
+// HEAD 302 zur Anmeldung, sonst 401 text/plain), mit Sitzung setzt er X-User
+// auf ihren User und, wie authproxy nur bei mindestens einer Rolle,
+// X-User-Roles auf roles[<user>] (copy_headers). Den Präfix nimmt er weg (uri
 // strip_prefix), Host setzt er auf den Upstream.
-func proxyLoginAt(t *testing.T, e *commEnv, prefix string) *httptest.Server {
+func proxyLoginAt(t *testing.T, e *commEnv, prefix string, roles map[string]string) *httptest.Server {
 	t.Helper()
 	hub := loopback.Guard(newHubHandler(hubStore(t, e.cfg), hubViewer()))
 	srv := httptest.NewUnstartedServer(nil)
 	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, h := range []string{"X-User", "X_User", "X-User-Email", "X_User_Email"} {
-			r.Header.Del(h)
+		for k := range r.Header {
+			if lk := strings.ToLower(k); strings.HasPrefix(lk, "x-user") || strings.HasPrefix(lk, "x_user") {
+				delete(r.Header, k)
+			}
 		}
 		p := r.URL.Path
 		if p != prefix && !strings.HasPrefix(p, prefix+"/") {
@@ -481,6 +487,9 @@ func proxyLoginAt(t *testing.T, e *commEnv, prefix string) *httptest.Server {
 			}
 			r.Header.Set("X-User", c.Value)
 			r.Header.Set("X-User-Email", c.Value+"@example.org")
+			if rs := roles[c.Value]; rs != "" {
+				r.Header.Set(gui.HeaderRoles, rs)
+			}
 		}
 		r.Host = "localhost:" + port
 		http.StripPrefix(prefix, hub).ServeHTTP(w, r)
@@ -502,6 +511,9 @@ func proxyLoginAt(t *testing.T, e *commEnv, prefix string) *httptest.Server {
 // Hub (302 bzw. 401 ohne JSON mit code), daran erkennt die Seite die
 // abgelaufene Anmeldung. Über den Hub-Block <präfix>/hub/… erreicht ein
 // X-User den Eingang nicht, auch nicht an einem Proxy, der ihn durchreicht.
+// Admin der Weboberfläche ist nur, wem der Proxy X-User-Roles mit
+// kephalaion.admin setzt: Ein X-User-Roles des Browsers erreicht den Hub
+// nicht, auch nicht mit _ oder in anderer Schreibweise.
 func TestGUIBehindPrefix(t *testing.T) {
 	e := newCommEnv(t)
 	const browser = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -579,7 +591,7 @@ func TestGUIBehindPrefix(t *testing.T) {
 		t.Errorf("gui/api/user löst sich zu %s auf, erwartet %s", rel("gui/api/user"), want)
 	}
 	kleist := map[string]string{"X-User": "kleist"}
-	const kleistAccounts = `{"viewer":"kleist","user":"kleist","accounts":[{"name":"bob","description":"","locked":false,"collections":[` +
+	const kleistAccounts = `{"viewer":"kleist","admin":false,"user":"kleist","accounts":[{"name":"bob","description":"","locked":false,"collections":[` +
 		`{"name":"privat","description":"","rights":{"write":false,"supersede":false,"vendor":[],"dirs":[]}},` +
 		`{"name":"team-x","description":"","rights":{"write":true,"supersede":false,"vendor":[],"dirs":[]}}]}]}`
 	resp, body := do(http.MethodGet, rel("gui/api/user"), "application/json", "", "", kleist)
@@ -624,7 +636,8 @@ func TestGUIBehindPrefix(t *testing.T) {
 
 	// Die VM: vor dem Rest steht die Anmeldung des Proxys. Mit Sitzung setzt
 	// er X-User — ein X-User des Browsers, auch mit _, kommt nicht durch.
-	login := proxyLoginAt(t, e, "/kephalaion")
+	login := proxyLoginAt(t, e, "/kephalaion", map[string]string{"carol": "authproxy.admin,kephalaion.admin",
+		"alice": "authproxy.admin"})
 	send := func(method, path, session, body string, header map[string]string) (*http.Response, string) {
 		t.Helper()
 		req, err := http.NewRequest(method, login.URL+path, strings.NewReader(body))
@@ -646,7 +659,9 @@ func TestGUIBehindPrefix(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		return resp, string(raw)
 	}
-	forged := map[string]string{"X-User": "alice", "X_User": "alice", "X-User-Email": "alice@example.org"}
+	forged := map[string]string{"X-User": "alice", "X_User": "alice", "X-User-Email": "alice@example.org",
+		"X-User-Roles": "kephalaion.admin", "X_User_Roles": "kephalaion.admin", "x-user-roles": "kephalaion.admin",
+		"X-USER-ROLES": "kephalaion.admin"}
 	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user", "kleist", "", forged); resp.StatusCode != 200 ||
 		strings.TrimSpace(body) != kleistAccounts {
 		t.Errorf("Eingang hinter der Anmeldung: HTTP %d %s", resp.StatusCode, body)
@@ -654,6 +669,48 @@ func TestGUIBehindPrefix(t *testing.T) {
 	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user?name=alice", "kleist", "", forged); resp.StatusCode != 403 ||
 		!strings.Contains(body, `"code":"forbidden"`) {
 		t.Errorf("fremder User hinter der Anmeldung: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Ein Nicht-Admin ganz ohne Rolle schickt X-User-Roles selbst mit: Der
+	// Proxy verwirft ihn, setzt keinen, und der Hub antwortet 403 — so belegt
+	// die 403, dass der mitgeschickte nicht ankommt (mit einer Rolle
+	// überschriebe copy_headers ihn ohnehin).
+	// Je Schreibweise genau ein Header: Zwei Werte machten schon den Hub
+	// misstrauisch, nicht erst den Proxy.
+	for _, h := range []map[string]string{forged, {"X-User-Roles": "kephalaion.admin"},
+		{"x-user-roles": "authproxy.admin,kephalaion.admin"}, {"X_User_Roles": "kephalaion.admin"}} {
+		if resp, body := send(http.MethodGet, "/kephalaion/gui/api/users", "kleist", "", h); resp.StatusCode != 403 ||
+			!strings.Contains(body, `"code":"forbidden"`) || strings.Contains(body, "users") {
+			t.Errorf("Liste, Nicht-Admin mit selbst gesetzter Rolle %v: HTTP %d %s", h, resp.StatusCode, body)
+		}
+		if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user?name=carol", "kleist", "", h); resp.StatusCode != 403 ||
+			!strings.Contains(body, `"code":"forbidden"`) {
+			t.Errorf("fremder User, Nicht-Admin mit selbst gesetzter Rolle %v: HTTP %d %s", h, resp.StatusCode, body)
+		}
+	}
+	// Nur authproxy.admin: kein Admin, auch mit selbst gesetzter Rolle.
+	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/users", "alice", "", forged); resp.StatusCode != 403 ||
+		!strings.Contains(body, `"code":"forbidden"`) {
+		t.Errorf("Liste mit authproxy.admin: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Der Admin der Weboberfläche: die Rolle vom Proxy, die Liste aller und
+	// jeder User.
+	const allAccounts = `{"viewer":"carol","admin":true,"users":[` +
+		`{"name":"alice","accounts":[{"name":"alice","locked":false,"collections":["team-x"]}]},` +
+		`{"name":"carol","accounts":[{"name":"carol","locked":false,"collections":["team-x"]}]},` +
+		`{"name":"kleist","accounts":[{"name":"bob","locked":false,"collections":["privat","team-x"]}]}]}`
+	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/users", "carol", "", nil); resp.StatusCode != 200 ||
+		strings.TrimSpace(body) != allAccounts {
+		t.Errorf("Liste, Admin: HTTP %d %s", resp.StatusCode, body)
+	}
+	if resp, body := send(http.MethodGet, "/kephalaion/gui/api/user?name=kleist", "carol", "", nil); resp.StatusCode != 200 ||
+		strings.TrimSpace(body) != strings.Replace(kleistAccounts, `{"viewer":"kleist","admin":false,`, `{"viewer":"carol","admin":true,`, 1) {
+		t.Errorf("fremder User, Admin: HTTP %d %s", resp.StatusCode, body)
+	}
+	// Am offenen Proxy, der alles durchreicht, glaubte der Hub die Rolle des
+	// Aufrufers: Deshalb muss der Proxy sie verwerfen.
+	if resp, body := do(http.MethodGet, rel("gui/api/users"), "application/json", "", "", map[string]string{"X-User": "kleist",
+		"X-User-Roles": "kephalaion.admin"}); resp.StatusCode != 200 || !strings.Contains(body, `"viewer":"kleist","admin":true,`) {
+		t.Errorf("Liste am offenen Proxy: HTTP %d %s", resp.StatusCode, body)
 	}
 	if resp, page := send(http.MethodGet, "/kephalaion/", "kleist", "", map[string]string{"Accept": browser}); resp.StatusCode != 200 ||
 		!strings.Contains(page, "<html") {
@@ -669,6 +726,7 @@ func TestGUIBehindPrefix(t *testing.T) {
 		{http.MethodGet, "/kephalaion/gui/api/user", http.StatusFound},
 		{http.MethodHead, "/kephalaion/gui/api/user", http.StatusFound},
 		{http.MethodPost, "/kephalaion/gui/api/user", http.StatusUnauthorized},
+		{http.MethodGet, "/kephalaion/gui/api/users", http.StatusFound},
 	} {
 		resp, body := send(c.method, c.path, "", "", forged)
 		if resp.StatusCode != c.status || strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
@@ -687,8 +745,8 @@ func TestGUIBehindPrefix(t *testing.T) {
 		!strings.Contains(body, `"node":"laptop-gui"`) {
 		t.Errorf("Hub-Weg neben der Anmeldung: HTTP %d %s", resp.StatusCode, body)
 	}
-	for _, path := range []string{"/kephalaion/hub/gui/api/user", "/kephalaion/hub/../gui/api/user"} {
-		if resp, body := send(http.MethodGet, path, "", "", kleist); resp.StatusCode != 404 || strings.Contains(body, "accounts") {
+	for _, path := range []string{"/kephalaion/hub/gui/api/user", "/kephalaion/hub/../gui/api/user", "/kephalaion/hub/gui/api/users"} {
+		if resp, body := send(http.MethodGet, path, "", "", forged); resp.StatusCode != 404 || strings.Contains(body, "accounts") {
 			t.Errorf("%s ohne Sitzung mit X-User: HTTP %d %s", path, resp.StatusCode, body)
 		}
 	}

@@ -1,14 +1,16 @@
 // Package gui ist die Weboberfläche des Hubs: die Seite, die der Hub-Listener
-// einem Browser an seiner Wurzel liefert, ihre Dateien unter /gui/ und ihr
-// Eingang GET /gui/api/user. Die Seite zeigt dem über die Anmeldung des
-// Proxys angemeldeten User alle seine Accounts mit ihren Rechten. Ein Token
-// fragt sie nicht ab: Sie glaubt dem User, den die Anmeldung des Proxys
-// nennt (Viewer), und liest nur; verwalten kann sie nichts.
+// einem Browser an seiner Wurzel liefert, ihre Dateien unter /gui/ und ihre
+// Eingänge GET /gui/api/user und GET /gui/api/users. Die Seite zeigt dem über
+// die Anmeldung des Proxys angemeldeten User alle seine Accounts mit ihren
+// Rechten, einem Admin der Weboberfläche (gui admin, docs/begriffe.md) dazu
+// die Accounts aller User. Ein Token fragt sie nicht ab: Sie glaubt dem User
+// und der Rolle, die die Anmeldung des Proxys nennt (Viewer), und liest nur;
+// verwalten kann sie nichts.
 //
-// Der Eingang ist kein Teil des Vertrags (docs/vertrag.md) und trägt keine
-// Fassung: Seite und Eingang kommen aus demselben Binary. Keine Antwort des
-// Eingangs ist eine 401 — fail2ban zählt jede 401 im Log des Proxys —, eine
-// fehlende Anmeldung ist 403.
+// Die Eingänge sind kein Teil des Vertrags (docs/vertrag.md) und tragen keine
+// Fassung: Seite und Eingänge kommen aus demselben Binary. Keine Antwort
+// eines Eingangs ist eine 401 — fail2ban zählt jede 401 im Log des Proxys —,
+// eine fehlende Anmeldung ist 403.
 //
 // Das Paket gehört zur Hub-Seite und kennt den Node nicht. Wo die Teile am
 // Listener liegen und welcher Viewer gilt, ordnet cmd/kephalaion
@@ -20,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/hub/store"
@@ -31,34 +34,72 @@ import (
 // und kopiert ihn per forward_auth aus der Antwort von authproxy.
 const HeaderUser = "X-User"
 
-// Viewer entscheidet, wem der Hub den angemeldeten User einer Anfrage glaubt:
-// Er liefert den Namen, den die Anmeldung des Proxys nennt, und ok false,
-// wenn die Anfrage keinen trägt — dann zeigt der Eingang nichts. Ob der Name
-// ein gültiger User ist, prüft der Eingang (store.CheckUser), nicht der
-// Viewer.
+// HeaderRoles ist der Header, in dem die Anmeldung des Proxys die Rollen des
+// angemeldeten Users nennt, durch Komma getrennt (authproxy:
+// authproxy.admin zuerst, danach die der Dienste). Caddy entfernt ihn aus
+// der Anfrage des Browsers und kopiert ihn wie HeaderUser; authproxy setzt
+// ihn nur, wenn der User mindestens eine Rolle hat.
+const HeaderRoles = "X-User-Roles"
+
+// RoleAdmin ist der Eintrag in HeaderRoles, der einen User zum Admin der
+// Weboberfläche macht (gui admin). Nur genau dieser Eintrag zählt, auch
+// authproxy.admin nicht.
+const RoleAdmin = "kephalaion.admin"
+
+// Identity ist, wen die Anmeldung des Proxys nennt: den angemeldeten User
+// (viewer) und ob er Admin der Weboberfläche ist (gui admin).
+type Identity struct {
+	User  string
+	Admin bool
+}
+
+// Viewer entscheidet, wem der Hub den angemeldeten User einer Anfrage glaubt
+// und ob er Admin der Weboberfläche ist: Er liefert, was die Anmeldung des
+// Proxys nennt, und ok false, wenn die Anfrage keinen User trägt — dann
+// zeigen die Eingänge nichts. Ob der Name ein gültiger User ist, prüft der
+// Eingang (store.CheckUser), nicht der Viewer; ohne gültigen User zählt auch
+// die Rolle nicht.
 //
 // Das ist die eine Stelle dieser Entscheidung: cmd/kephalaion baut den Wert
-// genau einmal und gibt ihn dem Eingang; Tests geben ihren eigenen. Wer sie
-// ändert (der geheime Header des Proxys, eine eigene Task), ändert den
-// Viewer und die Stelle, an der er entsteht — nicht den Eingang und nicht
-// die Seite.
-type Viewer func(r *http.Request) (user string, ok bool)
+// genau einmal und gibt ihn den Eingängen; Tests geben ihren eigenen. Wer sie
+// ändert (die Absicherung des lokalen Zugriffs, Todo #17, eine eigene Task),
+// ändert den Viewer und die Stelle, an der er entsteht — nicht die Eingänge
+// und nicht die Seite.
+type Viewer func(r *http.Request) (id Identity, ok bool)
 
 // HeaderViewer ist der Viewer ohne weitere Prüfung: der Wert von genau einem
 // X-User. Fehlt der Header, ist er leer oder steht er mehrfach da, ist
-// niemand angemeldet (ok false) — mehrere Werte wählt er nicht aus.
+// niemand angemeldet (ok false) — mehrere Werte wählt er nicht aus. Admin
+// ist der User, wenn die Anfrage genau einen X-User-Roles trägt, der unter
+// seinen durch Komma getrennten Einträgen genau RoleAdmin enthält: Leerraum
+// um einen Eintrag zählt nicht, Groß- und Kleinschreibung zählt; zweimal der
+// Header oder ein Teiltreffer (kephalaion.admins) ist kein Admin.
 //
 // Grenze: Der Hub-Listener nimmt nur Anfragen an diesen Rechner an (serve
-// lauscht auf Loopback, loopback.Guard), prüft aber nicht, dass X-User vom
-// Proxy kommt. Jeder Prozess auf dem Rechner des Hubs kann ihn selbst setzen
-// und sieht dann Accounts und Rechte eines beliebigen Users — keine Tokens,
-// keine Hashes.
-func HeaderViewer(r *http.Request) (string, bool) {
+// lauscht auf Loopback, loopback.Guard), prüft aber nicht, dass X-User und
+// X-User-Roles vom Proxy kommen. Jeder Prozess auf dem Rechner des Hubs und
+// jeder Tunnel zu seinem Port kann sie selbst setzen und sieht dann Accounts
+// und Rechte eines beliebigen Users oder aller — keine Tokens, keine Hashes.
+func HeaderViewer(r *http.Request) (Identity, bool) {
 	vals := r.Header.Values(HeaderUser)
 	if len(vals) != 1 || vals[0] == "" {
-		return "", false
+		return Identity{}, false
 	}
-	return vals[0], true
+	return Identity{User: vals[0], Admin: adminRole(r.Header.Values(HeaderRoles))}, true
+}
+
+// adminRole sagt, ob die Werte von X-User-Roles genau einen Header bilden,
+// der den Eintrag RoleAdmin enthält.
+func adminRole(vals []string) bool {
+	if len(vals) != 1 {
+		return false
+	}
+	for _, role := range strings.Split(vals[0], ",") {
+		if strings.TrimSpace(role) == RoleAdmin {
+			return true
+		}
+	}
+	return false
 }
 
 // Codes der Fehlerantworten; die Wörter des Vertrags, wo es sie gibt.
@@ -70,18 +111,22 @@ const (
 	codeInternal        = "internal"
 )
 
-// Die festen Meldungen des Eingangs. Keine nennt den Namen aus der Anfrage.
+// Die festen Meldungen der Eingänge. Keine nennt den Namen aus der Anfrage.
 const (
 	msgUnauthenticated = "Keine Anmeldung des Proxys: Die Anfrage nennt keinen angemeldeten User."
 	msgInvalidUser     = "Dieser Name ist am Hub kein gültiger User."
 	msgForbidden       = "Nur die eigenen Accounts: Einen anderen User zeigt der Hub nicht."
+	msgInvalidName     = "name ist kein gültiger User-Name."
+	msgUsersForbidden  = "Nur für Admins der Weboberfläche: Die Accounts aller User zeigt der Hub nicht."
 )
 
-// UserResponse ist die Antwort des Eingangs: wer angemeldet ist (Viewer),
-// wessen Accounts es sind (User) und die Accounts nach Name. Viewer und User
-// sind vorerst immer gleich; die Seite verlässt sich nicht darauf.
+// UserResponse ist die Antwort des Eingangs: wer angemeldet ist (Viewer), ob
+// er Admin der Weboberfläche ist (Admin), wessen Accounts es sind (User) und
+// die Accounts nach Name. Viewer und User sind nur für einen Admin
+// verschieden; die Seite verlässt sich nicht darauf.
 type UserResponse struct {
 	Viewer   string        `json:"viewer"`
+	Admin    bool          `json:"admin"`
 	User     string        `json:"user"`
 	Accounts []UserAccount `json:"accounts"`
 }
@@ -126,41 +171,35 @@ type errorBody struct {
 // ohne Account-Token, das der Eingang weder braucht noch kennt.
 //
 //   - Nur GET und HEAD, sonst 405 mit Allow: GET, HEAD.
-//   - Der angemeldete User kommt allein von viewer. Nennt die Anfrage keinen:
-//     403 unauthenticated; nennt sie einen, der am Hub kein gültiger User ist
-//     (store.CheckUser, etwa admin): 403 invalid_user — beide mit fester
-//     Meldung. Nie 401.
+//   - Der angemeldete User und seine Rolle kommen allein von viewer (siehe
+//     identify): ohne User 403 unauthenticated, mit ungültigem 403
+//     invalid_user. Nie 401.
 //   - Die Query trägt höchstens einen name, sonst 400 invalid (ebenso eine
 //     Query, die sich nicht lesen lässt). Ohne name gilt der angemeldete
-//     User; ein anderer name 403 forbidden — vorerst sieht jeder nur sich
-//     selbst. Ein leeres name= ist nicht „ohne name“: Ein angegebener name
-//     gilt wörtlich, und leer ist nicht der eigene, also 403. So zeigt der
-//     Eingang nie still den eigenen User, wenn ein Aufrufer einen anderen
-//     meinte und der Wert unterwegs verloren ging.
+//     User. Ein anderer name ist 403 forbidden, außer für einen Admin der
+//     Weboberfläche: Er darf jeden User abfragen; ist name kein gültiger
+//     User-Name (store.CheckUser), 400 invalid. Ein leeres name= ist nicht
+//     „ohne name“: Ein angegebener name gilt wörtlich, und leer ist nicht der
+//     eigene, also 403 (für einen Admin 400). So zeigt der Eingang nie still
+//     den eigenen User, wenn ein Aufrufer einen anderen meinte und der Wert
+//     unterwegs verloren ging.
 //   - Ein User ohne Account: accounts ist eine leere Liste, 200.
 //   - Ein Fehler des Stores 500 internal, die Einzelheit nur im Log.
 //
-// Ins Log kommen der angemeldete User (viewer) und der angefragte (user),
-// über reqlog.Note (maskiert, wenn ein Name der Namensregel nicht folgt) —
-// nie ein Token und nie ein Hash.
+// Ins Log kommen der angemeldete User (viewer), ob er Admin ist (admin) und
+// der angefragte User (user), über reqlog.Note (maskiert, wenn ein Name der
+// Namensregel nicht folgt) — nie ein Token und nie ein Hash.
 func NewUser(st store.Store, viewer Viewer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			writeError(w, r, http.StatusMethodNotAllowed, codeInvalid, "nur GET")
+		if !readMethod(w, r) {
 			return
 		}
-		me, ok := viewer(r)
-		reqlog.Note(ctx, "viewer", me)
+		id, ok := identify(w, r, viewer)
 		if !ok {
-			writeError(w, r, http.StatusForbidden, codeUnauthenticated, msgUnauthenticated)
 			return
 		}
-		if store.CheckUser(me) != nil {
-			writeError(w, r, http.StatusForbidden, codeInvalidUser, msgInvalidUser)
-			return
-		}
+		me := id.User
 		query, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, codeInvalid, "Query nicht lesbar")
@@ -177,8 +216,14 @@ func NewUser(st store.Store, viewer Viewer) http.Handler {
 		}
 		reqlog.Note(ctx, "user", user)
 		if user != me {
-			writeError(w, r, http.StatusForbidden, codeForbidden, msgForbidden)
-			return
+			if !id.Admin {
+				writeError(w, r, http.StatusForbidden, codeForbidden, msgForbidden)
+				return
+			}
+			if store.CheckUser(user) != nil {
+				writeError(w, r, http.StatusBadRequest, codeInvalid, msgInvalidName)
+				return
+			}
 		}
 		accounts, err := st.AccountsOfUser(ctx, user)
 		if err != nil {
@@ -190,20 +235,57 @@ func NewUser(st store.Store, viewer Viewer) http.Handler {
 			internalError(w, r, err)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, userResponse(me, user, accounts, colls))
+		writeJSON(w, r, http.StatusOK, userResponse(id, user, accounts, colls))
 	})
+}
+
+// readMethod lässt nur GET und HEAD durch; alles andere beantwortet es mit
+// 405 und Allow: GET, HEAD — vor der Anmeldung.
+func readMethod(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	w.Header().Set("Allow", "GET, HEAD")
+	writeError(w, r, http.StatusMethodNotAllowed, codeInvalid, "nur GET")
+	return false
+}
+
+// identify fragt viewer, wer angemeldet ist, und vermerkt den User im Log
+// (viewer). Nennt die Anfrage keinen: 403 unauthenticated; nennt sie einen,
+// der am Hub kein gültiger User ist (store.CheckUser, etwa admin): 403
+// invalid_user — beide mit fester Meldung, und ok false. Erst für einen
+// gültigen User zählt die Rolle; sie steht dann als admin=ja oder admin=nein
+// im Log.
+func identify(w http.ResponseWriter, r *http.Request, viewer Viewer) (Identity, bool) {
+	ctx := r.Context()
+	id, ok := viewer(r)
+	reqlog.Note(ctx, "viewer", id.User)
+	if !ok {
+		writeError(w, r, http.StatusForbidden, codeUnauthenticated, msgUnauthenticated)
+		return Identity{}, false
+	}
+	if store.CheckUser(id.User) != nil {
+		writeError(w, r, http.StatusForbidden, codeInvalidUser, msgInvalidUser)
+		return Identity{}, false
+	}
+	admin := "nein"
+	if id.Admin {
+		admin = "ja"
+	}
+	reqlog.Note(ctx, "admin", admin)
+	return id, true
 }
 
 // userResponse baut die Antwort: die Accounts (vom Store nach Name) mit ihren
 // Rechten (nach Collection), die Beschreibungen der Collections aus colls.
 // Vom Account kommen nur Name, Beschreibung, Sperre und Rechte — nie sein
 // Hash.
-func userResponse(viewer, user string, accounts []store.Account, colls []store.Collection) UserResponse {
+func userResponse(viewer Identity, user string, accounts []store.Account, colls []store.Collection) UserResponse {
 	desc := make(map[string]string, len(colls))
 	for _, c := range colls {
 		desc[c.Name] = c.Description
 	}
-	out := UserResponse{Viewer: viewer, User: user, Accounts: make([]UserAccount, 0, len(accounts))}
+	out := UserResponse{Viewer: viewer.User, Admin: viewer.Admin, User: user, Accounts: make([]UserAccount, 0, len(accounts))}
 	for _, acc := range accounts {
 		a := UserAccount{Name: acc.Name, Description: acc.Description, Locked: acc.Locked,
 			Collections: make([]UserCollection, 0, len(acc.Rights))}
@@ -232,7 +314,7 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg st
 }
 
 // writeJSON schreibt v als JSON; nichts davon gehört in einen Cache, denn
-// die Antwort hängt am angemeldeten User.
+// die Antwort hängt am angemeldeten User und seiner Rolle.
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")

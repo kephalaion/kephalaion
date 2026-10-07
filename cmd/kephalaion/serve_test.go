@@ -293,6 +293,13 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodGet, "/gui/api/user", 403, guiJSON, []string{`"code":"unauthenticated"`, "Keine Anmeldung des Proxys"}, nil, browser},
 		{http.MethodHead, "/gui/api/user", 403, guiJSON, nil, []string{"code"}, ""},
 		{http.MethodPost, "/gui/api/user", 405, guiJSON, []string{`"code":"invalid"`, "nur GET"}, nil, ""},
+		// Die Liste aller Accounts: nur für einen Admin der Weboberfläche,
+		// ohne Anmeldung 403 wie der Eingang des Users.
+		{http.MethodGet, "/gui/api/users", 403, guiJSON, []string{`"code":"unauthenticated"`, "Keine Anmeldung des Proxys"}, []string{"users"}, browser},
+		{http.MethodHead, "/gui/api/users", 403, guiJSON, nil, []string{"code"}, ""},
+		{http.MethodPost, "/gui/api/users", 405, guiJSON, []string{`"code":"invalid"`, "nur GET"}, nil, ""},
+		{http.MethodGet, "/gui/api/users/", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
+		{http.MethodGet, "/gui/api/userlist", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
 		// Der Eingang mit Account und Token gibt es nicht mehr.
 		{http.MethodPost, "/gui/api/whoami", 404, plain, []string{"unbekannter Pfad /gui/api/whoami"}, []string{`"code"`}, ""},
 		{http.MethodGet, "/gui/api/whoami", 404, plain, []string{"unbekannter Pfad /gui/api/whoami"}, []string{`"code"`}, ""},
@@ -307,6 +314,7 @@ func TestServeHubListener(t *testing.T) {
 		{http.MethodGet, "/gui//api/user", 404, plain, []string{"unbekannter Pfad"}, []string{`"code"`}, ""},
 		// Unter /hub/ liegt allein der Vertrag: Dort ist kein Eingang der Seite.
 		{http.MethodGet, "/hub/gui/api/user", 404, jsonType, []string{`"code":"invalid"`}, []string{"accounts"}, ""},
+		{http.MethodGet, "/hub/gui/api/users", 404, jsonType, []string{`"code":"invalid"`}, []string{"users"}, ""},
 		{http.MethodGet, "/hub/../gui/api/user", 404, plain, []string{"unbekannter Pfad"}, []string{"accounts"}, ""},
 		{http.MethodGet, "/gui/static/app.js", 404, plain, []string{"unbekannter Pfad"}, nil, ""},
 		{http.MethodGet, "/gui//app.js", 404, plain, []string{"unbekannter Pfad"}, []string{"strict"}, ""},
@@ -401,12 +409,13 @@ func TestServeHubListener(t *testing.T) {
 	// Eingangs.
 	for _, c := range []struct{ method, path, accept string }{
 		{http.MethodGet, "/", ""}, {http.MethodGet, "/", browser}, {http.MethodGet, "/gui/app.js", ""},
-		{http.MethodGet, "/gui/api/user", ""},
+		{http.MethodGet, "/gui/api/user", ""}, {http.MethodGet, "/gui/api/users", ""},
 	} {
 		req, _ := http.NewRequest(c.method, base+c.path, strings.NewReader("{}"))
 		req.Host = "evil.example:80"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(gui.HeaderUser, "kleist")
+		req.Header.Set(gui.HeaderRoles, gui.RoleAdmin)
 		if c.accept != "" {
 			req.Header.Set("Accept", c.accept)
 		}
@@ -448,8 +457,10 @@ func TestServeHubListener(t *testing.T) {
 	}
 	// Der Eingang der Seite über serve: Mit X-User nennt er die Accounts
 	// dieses Users — auch den gesperrten, und ohne Token oder Hash —, ohne
-	// X-User 403 unauthenticated, für einen fremden User 403 forbidden. Das
-	// Log nennt angemeldeten und angefragten User.
+	// X-User 403 unauthenticated, für einen fremden User 403 forbidden; mit
+	// der Rolle kephalaion.admin in X-User-Roles auch die eines fremden Users
+	// und unter gui/api/users die Liste aller. Das Log nennt angemeldeten
+	// User, ob er Admin ist, und den angefragten User.
 	cc := "--config=" + cfgPath
 	runT(t, "hub", "collection", "add", "test", cc, "--description", "Zum Probieren").want(t, 0)
 	ra := runT(t, "hub", "account", "add", "bob", "--user", "kleist", cc)
@@ -460,12 +471,14 @@ func TestServeHubListener(t *testing.T) {
 	runT(t, "hub", "account", "grant", "bob-vm", "test", "--dir", "docs", cc).want(t, 0)
 	runT(t, "hub", "account", "lock", "bob-vm", cc).want(t, 0)
 	runT(t, "hub", "account", "add", "carol", cc).want(t, 0)
-	user := func(query string, users ...string) (int, string) {
+	api := func(target string, h http.Header) (int, string) {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodGet, base+"/gui/api/user"+query, nil)
+		req, _ := http.NewRequest(http.MethodGet, base+target, nil)
 		req.Header.Set("Accept", "application/json")
-		for _, u := range users {
-			req.Header.Add(gui.HeaderUser, u)
+		for k, vals := range h {
+			for _, v := range vals {
+				req.Header.Add(k, v)
+			}
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -478,14 +491,19 @@ func TestServeHubListener(t *testing.T) {
 		}
 		return resp.StatusCode, strings.TrimSpace(string(body))
 	}
-	if code, body := user("", "kleist"); code != 200 || body != `{"viewer":"kleist","user":"kleist","accounts":[`+
+	user := func(query string, users ...string) (int, string) {
+		t.Helper()
+		return api("/gui/api/user"+query, http.Header{gui.HeaderUser: users})
+	}
+	admin := http.Header{gui.HeaderUser: {"kleist"}, gui.HeaderRoles: {"authproxy.admin,kephalaion.admin"}}
+	if code, body := user("", "kleist"); code != 200 || body != `{"viewer":"kleist","admin":false,"user":"kleist","accounts":[`+
 		`{"name":"bob","description":"","locked":false,"collections":[{"name":"test","description":"Zum Probieren",`+
 		`"rights":{"write":true,"supersede":false,"vendor":["k-playbook"],"dirs":[]}}]},`+
 		`{"name":"bob-vm","description":"Auf der VM","locked":true,"collections":[{"name":"test","description":"Zum Probieren",`+
 		`"rights":{"write":false,"supersede":false,"vendor":[],"dirs":["docs"]}}]}]}` {
 		t.Errorf("Eingang der Seite: HTTP %d %s", code, body)
 	}
-	if code, body := user("?name=kleist", "kleist"); code != 200 || !strings.HasPrefix(body, `{"viewer":"kleist","user":"kleist",`) {
+	if code, body := user("?name=kleist", "kleist"); code != 200 || !strings.HasPrefix(body, `{"viewer":"kleist","admin":false,"user":"kleist",`) {
 		t.Errorf("Eingang der Seite mit eigenem name: HTTP %d %s", code, body)
 	}
 	if code, body := user(""); code != 403 || body != `{"code":"unauthenticated","message":"Keine Anmeldung des Proxys: `+
@@ -500,6 +518,25 @@ func TestServeHubListener(t *testing.T) {
 	}
 	if code, body := user("?name=a&name=b", "kleist"); code != 400 || !strings.Contains(body, `"code":"invalid"`) {
 		t.Errorf("Eingang der Seite mit zwei name: HTTP %d %s", code, body)
+	}
+	// Ein Admin der Weboberfläche: jeder User, und die Liste aller.
+	if code, body := api("/gui/api/user?name=carol", admin); code != 200 || body != `{"viewer":"kleist","admin":true,"user":"carol",`+
+		`"accounts":[{"name":"carol","description":"","locked":false,"collections":[]}]}` {
+		t.Errorf("Eingang der Seite, Admin, fremder User: HTTP %d %s", code, body)
+	}
+	if code, body := api("/gui/api/user?name=Carol", admin); code != 400 || !strings.Contains(body, `"code":"invalid"`) {
+		t.Errorf("Eingang der Seite, Admin, ungültiger name: HTTP %d %s", code, body)
+	}
+	if code, body := api("/gui/api/users", admin); code != 200 || body != `{"viewer":"kleist","admin":true,"users":[`+
+		`{"name":"carol","accounts":[{"name":"carol","locked":false,"collections":[]}]},`+
+		`{"name":"kleist","accounts":[{"name":"bob","locked":false,"collections":["test"]},`+
+		`{"name":"bob-vm","locked":true,"collections":["test"]}]}]}` {
+		t.Errorf("Liste, Admin: HTTP %d %s", code, body)
+	}
+	for _, h := range []http.Header{{gui.HeaderUser: {"kleist"}}, {gui.HeaderUser: {"kleist"}, gui.HeaderRoles: {"authproxy.admin"}}} {
+		if code, body := api("/gui/api/users", h); code != 403 || !strings.Contains(body, `"code":"forbidden"`) || strings.Contains(body, "carol") {
+			t.Errorf("Liste ohne Rolle %v: HTTP %d %s", h, code, body)
+		}
 	}
 	// Ein Eintrag mit alter Adresse (ohne /hub): check nennt den Hinweis des
 	// Hubs und sagt, was fehlt; mit /hub ist der Hub erreichbar.
@@ -521,8 +558,9 @@ func TestServeHubListener(t *testing.T) {
 		t.Errorf("Log ohne die Zeilen der Wurzel:\n%s", log)
 	}
 	for _, want := range []string{"hub GET /gui/app.js 200", "hub GET /gui 404", "hub GET /gui/api/user 200 ",
-		" viewer=kleist user=kleist\n", "hub GET /gui/api/user 403 ", " viewer=-\n", " viewer=kleist user=carol\n",
-		"hub GET /gui/api/user 400 ", "hub POST /gui/api/whoami 404 "} {
+		" viewer=kleist admin=nein user=kleist\n", "hub GET /gui/api/user 403 ", " viewer=-\n", " viewer=kleist admin=nein user=carol\n",
+		"hub GET /gui/api/user 400 ", "hub POST /gui/api/whoami 404 ", " viewer=kleist admin=ja user=carol\n",
+		"hub GET /gui/api/users 200 ", " viewer=kleist admin=ja\n", "hub GET /gui/api/users 403 ", " viewer=kleist admin=nein\n"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("Log ohne %q:\n%s", want, log)
 		}
