@@ -6,9 +6,9 @@ WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 E
 ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
 eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die Abnahme von 020;
 028 Etappen 1–6 ausgeführt, der User richtet seinen Account selbst ein — auf der VM eingespielt,
-die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers; 029 Etappen 1–5
-ausgeführt, die Admin-Ansicht der Weboberfläche — die Abnahme auf der VM ist Nacharbeit des
-Nutzers)
+die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers; 029 Etappen 1–6
+ausgeführt, die Admin-Ansicht der Weboberfläche — auf der VM eingespielt, die Abnahme mit
+eigenen Sitzungen ist Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -351,7 +351,7 @@ Nutzers)
     Auf der VM eingespielt am 2026-10-06 (dev 15f372c, Caddy und Jail; Proben mit Dummy-Token
     bestanden); Abnahme mit echtem Einrichtungstoken: siehe „Zu testen“.
 
-- **Task 029 — Weboberfläche: Admin-Ansicht aller Accounts** (2026-10-07, Etappen 1–5;
+- **Task 029 — Weboberfläche: Admin-Ansicht aller Accounts** (2026-10-07, Etappen 1–6;
   Entscheidungen des Nutzers vom 2026-10-05 und 2026-10-06, `konzept.md`, „Die Weboberfläche am
   Hub“):
   - Admin der Weboberfläche ist, wessen Anfrage einen gültigen `X-User` und genau einen
@@ -383,11 +383,17 @@ Nutzers)
     Liste für Admin, Nicht-Admin und ohne Anmeldung, gesperrter Account, kein Hash, Log),
     `TestServeHubListener`, `TestGUIBehindPrefix` (ein mitgeschickter `X-User-Roles` erreicht
     den Hub nicht, je Schreibweise genau ein Header).
+    Auf der VM eingespielt am 2026-10-07 (dev c77af6f), nachdem Caddy (läuft wie das Caddyfile
+    im Repo, `X-User*` fällt vor jedem `handle` weg) und authproxy (schickt `X-User-Roles`)
+    geprüft waren; mit Probenutzern von außen belegt: Ein selbst gesetzter `X-User-Roles`
+    erreicht den Hub nicht (`~/dev/vm/kephalaion/README.md`, „Stand 2026-10-07“; Befund
+    `benutzer-und-tokens-gui.md`). Abnahme mit eigenen Sitzungen: siehe „Zu testen“.
 
 ## In Arbeit
 
-- **Task 029 — Abnahme der Admin-Ansicht auf der VM:** Nacharbeit des Nutzers (Rolle im Portal
-  vergeben, Sitzungen), Schritte unter „Zu testen“.
+- **Task 029 — Abnahme der Admin-Ansicht auf der VM:** eingespielt am 2026-10-07 und von der KI
+  mit Probenutzern geprüft; offen die Abnahme mit eigenen Sitzungen (Rolle im Portal vergeben),
+  Schritte unter „Zu testen“.
 
 - **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM:** Nacharbeit des Nutzers,
   Schritte unter „Zu testen“ und in `~/dev/vm/kephalaion/README.md`, „Stand 2026-10-06“.
@@ -567,17 +573,20 @@ Nutzers)
 - **Task 029 — Abnahme der Admin-Ansicht auf der VM** (Nacharbeit des Nutzers: Er vergibt die
   Rolle `kephalaion.admin` im Portal von authproxy und nimmt sie danach wieder weg, und er
   stellt die Sitzungen bereit oder macht die Schritte im Browser selbst). Keine neue
-  Schemafassung. **Caddy vor dem Binary:** Erst wenn Caddy nachweislich jeden `X-User-Roles`
-  des Browsers entfernt, darf das Binary auf die VM (Stand: Etappe 6 der Task, `~/dev/vm/kephalaion/README.md`).
-  Keine der Proben erzeugt eine 401:
+  Schemafassung. Eingespielt am 2026-10-07 (dev c77af6f) — erst nachdem Caddy geprüft war:
+  Die laufende Konfiguration entfernt `X-User*` und `X_User*` vor jedem `handle`, und
+  `copy_headers` löscht `X-User-Roles` zusätzlich (`~/dev/vm/kephalaion/README.md`, „Stand
+  2026-10-07“). authproxy schickt `X-User-Roles` (geprüft mit Probenutzer). Rollen auf der VM
+  zu diesem Zeitpunkt: `kamran` und `gabriel` `authproxy.admin`, `sebastian` keine,
+  `kephalaion.admin` niemand. Keine der Proben erzeugt eine 401:
   1. Ein Admin (Benutzer mit der Rolle, für kephalaion freigeschaltet, gültiger User am Hub)
      öffnet `https://<name>/kephalaion/` → „Alle Accounts“, oben die Zahl der User und
      Accounts, je User eine Gruppe (der eigene mit „(du)“), je Account Status und Collections;
      Klick auf einen anderen User → „Accounts von <user>“ mit Rechten und Scopes; „Alle
      Accounts“ → zurück zur Liste; die Adresse bleibt.
   2. Ein Nicht-Admin (für kephalaion freigeschaltet, gültiger User am Hub, **ganz ohne Rolle**,
-     auch ohne `authproxy.admin`) → „Deine Accounts“, nur die eigenen, kein „Alle Accounts“;
-     in der Konsole keine 403.
+     auch ohne `authproxy.admin` — derzeit nur `sebastian`) → „Deine Accounts“, nur die
+     eigenen, kein „Alle Accounts“; in der Konsole keine 403.
   3. Mit der Sitzung dieses Nicht-Admins und **genau einem** mitgeschickten Header: `curl -s -b
      'authproxy=<sitzung>' -H 'X-User-Roles: kephalaion.admin'
      https://<name>/kephalaion/gui/api/users` → 403 `forbidden` (ebenso `…/gui/api/user?name=<anderer>`).
@@ -591,6 +600,13 @@ Nutzers)
 
   Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter):
   `material/befunde/gui.md`, Abschnitt vom 2026-10-07.
+
+  **Von der KI geprüft am 2026-10-07** (Probenutzer `probe029a` mit `kephalaion.admin` und
+  `probe029n` ohne Rolle, danach gelöscht): Admin → Liste 200, fremder User 200, ungültiger
+  `name` 400; Nicht-Admin → eigene Ansicht, Liste 403, mit je genau einem selbst gesetzten
+  `X-User-Roles` (auch `x-user-roles`, `X_User_Roles`) 403, auch aus der WSL von außen;
+  ohne Sitzung 302, über den Hub-Block 404; keine 401, kein Header im Log von Caddy. Damit sind
+  3 und 5 sinngemäß belegt; **offen sind 1, 2 und 4** mit echten Benutzern und Sitzungen.
 
 - **Task 028 — Abnahme mit echtem Einrichtungstoken auf der VM** (Nacharbeit des Nutzers; ein
   Agent legt keinen Account an — die Ausgabe von `hub account add` brächte das Token in seinen
