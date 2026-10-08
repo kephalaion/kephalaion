@@ -330,6 +330,15 @@ Ausführlich: [`konzept.md`](konzept.md).
   und Header-Paaren wie `node mcp headers`; das Token setzt sie erst beim Start des Servers ein
   (`resolveMcpServerDefinition`), nie in die gemeldete Definition, die VS Code zwischenspeichert.
   `false` schaltet das ab.
+- **used hub** (genutzter Hub) — aus Sicht eines Clients der Erweiterung für VS Code (Task 030):
+  ein Hub-Eintrag des Nodes, für den der Client ein Header-Paar hat — lokal jeder Hub mit
+  Token-Datei unter `tokens/<hub>/`, an eine entfernte **kephalaion.nodeUrl** nur die in
+  **kephalaion.hubs** gewählten —, dazu jeder Hub, den `whoami` mit `login` `ok` oder `invalid`
+  meldet (der Node hat ein Paar gesehen). Ein Node bedient viele Hubs, ein Client nutzt davon
+  einige: Die Statusleiste nennt nur die genutzten und warnt nur über sie (`invalid`, `missing`
+  trotz Token-Datei, Fehler im Abgleich, mehrere Accounts ohne Wahl) — und wenn kein Hub genutzt
+  ist. Ein Hub ohne Token des Clients ist `missing` und kein Fehler; Tooltip und „Kephalaion:
+  Status anzeigen“ führen ihn als „nicht genutzt“. Regel `hubStatus` in `vscode/rules.js`.
 
 ## Daten
 

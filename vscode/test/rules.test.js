@@ -4,7 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint } = require('../rules');
+const { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint, hubStatus } = require('../rules');
 
 test('nodeUrl: lokal, Proxy, host.docker.internal', () => {
   assert.deepStrictEqual(parseNodeUrl('http://127.0.0.1:7433'), { endpoint: 'http://127.0.0.1:7433/mcp', remote: false });
@@ -102,4 +102,73 @@ test('Version: der Hinweis nennt das CLI des Editors', () => {
   assert.match(versionHint('v0.4.0', '0.3.0', 'VSCodium'), /--code codium“/);
   assert.match(versionHint('v0.4.0', '0.3.0', 'Visual Studio Code - Insiders'), /--code code-insiders“/);
   assert.match(versionHint('v0.4.0', '0.3.0', undefined), /„kephalaion vscode install“/);
+});
+
+// Die Statusleiste (Task 030): Ein Node bedient viele Hubs, ein Client nutzt davon einige — nur
+// genutzte Hubs warnen. Die Fälle folgen dem Wegwerf-Node aus dem Befund vscode-betrieb.md
+// (2026-10-08): zwei Einträge auf denselben Hub, Token-Datei nur für einen.
+test('Statusleiste: ein Hub ohne Token des Clients ist missing und keine Warnung', () => {
+  const synced = { last_success: '2026-10-08T15:39:58Z', revision: 1 };
+  const ok = { hub: 't030a', login: 'ok', node: 'n030-local', account: 'acc030', user: 'u030', sync: synced };
+  const miss = { hub: 't030b', login: 'missing', node: 'n030-http', sync: synced };
+  assert.deepStrictEqual(hubStatus([ok, miss], { t030a: { account: 'acc030' } }, []), {
+    hubs: [{ hub: 't030a', used: true }, { hub: 't030b', used: false, note: 'nicht genutzt — kein Token' }],
+    used: ['t030a'],
+    warning: undefined,
+  });
+  // missing trotz Token-Datei: die Datei ist leer oder nicht lesbar (readCredentials liefert
+  // token '', das Paar geht nicht hinaus) — Warnung, die Meldung nennt die Datei.
+  let st = hubStatus([ok, miss], { t030a: { account: 'acc030' }, t030b: { account: 'acc030', token: '' } }, []);
+  assert.deepStrictEqual(st.used, ['t030a', 't030b']);
+  assert.strictEqual(st.hubs[1].warning, 'Token-Datei tokens/t030b/acc030.token leer oder nicht lesbar');
+  assert.strictEqual(st.warning, 't030b: Token-Datei tokens/t030b/acc030.token leer oder nicht lesbar');
+  // missing mit „Replica nicht lesbar“: ein Abgleichfehler, nicht die Datei.
+  const unreadable = { ...miss, sync: { last_success: synced.last_success, last_error: 'Replica nicht lesbar' } };
+  st = hubStatus([ok, unreadable], { t030a: { account: 'acc030' }, t030b: { account: 'acc030', token: '' } }, []);
+  assert.strictEqual(st.hubs[1].warning, 'Abgleich: Replica nicht lesbar');
+  // Derselbe Hub ohne Token des Clients: nicht genutzt, auch mit diesem Fehler keine Warnung.
+  st = hubStatus([ok, unreadable], { t030a: { account: 'acc030' } }, []);
+  assert.strictEqual(st.warning, undefined);
+  assert.strictEqual(st.hubs[1].note, 'nicht genutzt — kein Token');
+});
+
+test('Statusleiste: invalid, Abgleichfehler, ohne Wahl, kein genutzter Hub', () => {
+  const synced = { last_success: '2026-10-08T15:39:58Z', revision: 1 };
+  const ok = { hub: 'a', login: 'ok', node: 'n', account: 'x', user: 'u', sync: synced };
+  // invalid ist immer genutzt (der Node hat ein Paar gesehen), auch ohne Eintrag in credentials.
+  let st = hubStatus([{ hub: 'a', login: 'invalid', node: 'n', sync: synced }], {}, []);
+  assert.deepStrictEqual(st.used, ['a']);
+  assert.strictEqual(st.warning, 'a: Anmeldung ungültig');
+  // invalid mit never_synced liegt nicht am Token (docs/vscode.md, „Status und Auswahl“).
+  st = hubStatus([{ hub: 'a', login: 'invalid', node: 'n', sync: { never_synced: true } }], { a: { account: 'x' } }, []);
+  assert.match(st.hubs[0].warning, /^noch nie abgeglichen/);
+  // Ein Fehler im Abgleich warnt nur am genutzten Hub; am nicht genutzten bleibt er dem Tooltip.
+  const failed = { last_success: synced.last_success, revision: 1, last_error: 'Hub nicht erreichbar', last_error_at: '2026-10-08T16:00:00Z' };
+  st = hubStatus([{ ...ok, sync: failed }, { hub: 'b', login: 'missing', node: 'n', sync: failed }], { a: { account: 'x' } }, []);
+  assert.strictEqual(st.hubs[0].warning, 'Abgleich: Hub nicht erreichbar');
+  assert.strictEqual(st.hubs[1].warning, undefined);
+  assert.strictEqual(st.warning, 'a: Abgleich: Hub nicht erreichbar');
+  // Mehrere Gründe an einem Hub, mehrere Hubs.
+  st = hubStatus([{ ...ok, login: 'invalid', sync: failed }, { ...ok, hub: 'b' }], { a: { account: 'x' }, b: { account: 'x' } }, ['b']);
+  assert.strictEqual(st.warning, 'a: Abgleich: Hub nicht erreichbar, Anmeldung ungültig; b: mehrere Accounts, keiner gewählt');
+  // Kein genutzter Hub: alle missing ohne Token — und gar kein Hub.
+  const miss = (hub) => ({ hub, login: 'missing', node: 'n', sync: synced });
+  st = hubStatus([miss('a'), miss('b')], {}, []);
+  assert.deepStrictEqual(st.used, []);
+  assert.match(st.warning, /^kein genutzter Hub/);
+  assert.match(hubStatus([], {}, []).warning, /^kein genutzter Hub/);
+});
+
+test('Statusleiste: entfernte nodeUrl, ein Hub des Nodes nicht gewählt — neutral', () => {
+  // Wie readCredentials: nur die Hubs aus selectHubs bekommen einen Eintrag.
+  const sel = selectHubs(['vm', 'eigen'], ['vm'], true);
+  const creds = Object.fromEntries(sel.hubs.map((h) => [h, { account: 'kamran' }]));
+  const hubs = [
+    { hub: 'eigen', login: 'missing', node: 'vm-node', sync: { last_success: '2026-10-08T15:00:00Z', revision: 3 } },
+    { hub: 'vm', login: 'ok', node: 'vm-node', account: 'kamran', user: 'k', sync: { last_success: '2026-10-08T15:00:00Z', revision: 41 } },
+  ];
+  const st = hubStatus(hubs, creds, []);
+  assert.strictEqual(st.warning, undefined);
+  assert.deepStrictEqual(st.used, ['vm']);
+  assert.strictEqual(st.hubs[0].note, 'nicht genutzt — kein Token');
 });

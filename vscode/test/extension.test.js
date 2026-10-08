@@ -28,6 +28,8 @@ const settings = {};
 const logs = [];
 let provider;
 let fsProvider;
+let statusItem;
+const registered = {};
 const disposables = [];
 
 class Disposable {
@@ -54,11 +56,20 @@ const vscode = {
   },
   window: {
     createOutputChannel: () => ({ appendLine: (l) => logs.push(l), show: () => {}, dispose: () => {} }),
-    createStatusBarItem: () => ({ show: () => {}, dispose: () => {} }),
+    createStatusBarItem: () => {
+      statusItem = { show: () => {}, dispose: () => {} };
+      return statusItem;
+    },
     showWarningMessage: () => {},
     showQuickPick: async () => undefined,
   },
-  commands: { registerCommand: noop, executeCommand: () => {} },
+  commands: {
+    registerCommand: (id, fn) => {
+      registered[id] = fn;
+      return new Disposable();
+    },
+    executeCommand: () => {},
+  },
   lm: {
     registerMcpServerDefinitionProvider: (id, p) => {
       provider = p;
@@ -326,4 +337,45 @@ test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => 
   } finally {
     settings.accounts = {};
   }
+});
+
+// Task 030: Die Statusleiste warnt nur über genutzte Hubs. Das whoami des Wegwerf-Nodes aus dem
+// Befund vscode-betrieb.md (2026-10-08): zwei Einträge auf denselben Hub, Token-Datei nur für
+// t030a — neutral; eine leere Token-Datei für t030b ist missing trotz Token-Datei — gelb.
+test('Statusleiste: Hub ohne Token des Clients neutral, leere Token-Datei gelb', async () => {
+  putToken('t030a', 'acc030', TOKEN_A);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433' });
+  const sync = { last_success: '2026-10-08T15:39:58Z', revision: 1 };
+  reply = (p) => p.name === 'whoami' && {
+    content: [{ type: 'text', text: '' }],
+    structuredContent: {
+      version: 'dev',
+      hubs: [
+        { hub: 't030a', login: 'ok', node: 'n030-local', account: 'acc030', user: 'u030', sync,
+          collections: [{ collection: 't030coll', address: 't030a:t030coll', rights: ['read', 'write'], dirs: [] }] },
+        { hub: 't030b', login: 'missing', node: 'n030-http', sync },
+      ],
+      unknown_hubs: [],
+    },
+  };
+  start();
+  await settle();
+  assert.strictEqual(statusItem.text, '$(database) Keph t030a');
+  assert.strictEqual(statusItem.backgroundColor, undefined);
+  logs.length = 0;
+  await registered['kephalaion.showStatus']();
+  assert.ok(logs.includes('Hub t030a (Node n030-local): Anmeldung ok, Account acc030, User u030'), logs.join('\n'));
+  assert.ok(logs.includes('Hub t030b (Node n030-http): nicht genutzt — kein Token'), logs.join('\n'));
+  assert.ok(!logs.some((l) => l.includes('Warnung')), logs.join('\n'));
+  // Leere Token-Datei für t030b: das Paar geht nicht hinaus, der Node meldet weiter missing.
+  stop();
+  putToken('t030b', 'acc030', '');
+  start();
+  await settle();
+  assert.strictEqual(statusItem.text, '$(warning) Keph t030a t030b');
+  assert.ok(statusItem.backgroundColor);
+  logs.length = 0;
+  await registered['kephalaion.showStatus']();
+  assert.ok(logs.includes('  Warnung: Token-Datei tokens/t030b/acc030.token leer oder nicht lesbar'), logs.join('\n'));
+  fs.rmSync(path.join(tokens, 't030b'), { recursive: true, force: true });
 });

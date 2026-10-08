@@ -171,6 +171,59 @@ function versionHint(nodeVersion, extVersion, appName) {
   return `Erweiterung ${e} passt nicht zum Node ${n} — im Terminal „${cmd}“, danach „Developer: Reload Window“.`;
 }
 
+// Der feste Satz, mit dem whoami eine Replica meldet, die sich nicht lesen lässt
+// (mcpnode.ReplicaUnreadable): login missing heißt dann Abgleichfehler, nicht fehlendes Token.
+const REPLICA_UNREADABLE = 'Replica nicht lesbar';
+
+const NOT_USED = 'nicht genutzt — kein Token';
+const NO_USED_HUB = 'kein genutzter Hub — für keinen Hub dieses Nodes liegt eine Token-Datei unter tokens/<hub>/; '
+  + 'an eine entfernte nodeUrl zählen nur die gewählten (kephalaion.hubs)';
+
+// Was die Statusleiste aus den Hubs von whoami macht (docs/vscode.md, „Status und Auswahl“;
+// docs/begriffe.md, „used hub“). Ein Node bedient viele Hubs, ein Client nutzt davon einige:
+// genutzt ist ein Hub mit Eintrag in credentials (die Hubs aus hubSelection, je mit account)
+// oder einer, den der Node als ok oder invalid meldet — er hat ein Paar gesehen. Nur genutzte
+// Hubs warnen: invalid, missing trotz Token-Datei (leer oder nicht lesbar; mit „Replica nicht
+// lesbar“ ein Abgleichfehler), ein Fehler im Abgleich, mehrere Accounts ohne Wahl (unchosen).
+// Ein Hub ohne Token des Clients ist missing und kein Fehler, auch nicht mit Abgleichfehler.
+// Liefert je Hub { hub, used, warning | note }, used (die genutzten Aliase, Reihenfolge von
+// whoami) und warning, die Gesamtwarnung — undefined heißt neutral; kein genutzter Hub warnt.
+function hubStatus(hubs, credentials, unchosen) {
+  const creds = credentials || {};
+  const unchosenSet = new Set(unchosen || []);
+  const out = [];
+  const used = [];
+  const reasons = [];
+  for (const h of hubs || []) {
+    const sync = h.sync || {};
+    const c = creds[h.hub];
+    const entry = { hub: h.hub, used: Boolean(c) || h.login === 'ok' || h.login === 'invalid' };
+    if (!entry.used) {
+      entry.note = NOT_USED;
+      out.push(entry);
+      continue;
+    }
+    used.push(h.hub);
+    const why = [];
+    if (sync.last_error) why.push(`Abgleich: ${sync.last_error}`);
+    if (h.login === 'invalid') {
+      why.push(sync.never_synced ? 'noch nie abgeglichen, die Anmeldung lässt sich noch nicht prüfen' : 'Anmeldung ungültig');
+    } else if (h.login === 'missing' && sync.last_error !== REPLICA_UNREADABLE) {
+      why.push(c && c.account ? `Token-Datei tokens/${h.hub}/${c.account}.token leer oder nicht lesbar` : 'keine Zugangsdaten angekommen');
+    }
+    if (unchosenSet.has(h.hub)) why.push('mehrere Accounts, keiner gewählt');
+    if (why.length) {
+      entry.warning = why.join(', ');
+      reasons.push(`${h.hub}: ${entry.warning}`);
+    }
+    out.push(entry);
+  }
+  let warning;
+  if (!used.length) warning = NO_USED_HUB;
+  else if (reasons.length) warning = reasons.join('; ');
+  return { hubs: out, used, warning };
+}
+
 module.exports = {
-  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, PROXY_HINT,
+  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, PROXY_HINT,
 };

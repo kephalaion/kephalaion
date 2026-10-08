@@ -434,6 +434,12 @@ class Status {
     return Object.entries(this.node.credentials()).filter(([, c]) => c.how === 'first').map(([h]) => h);
   }
 
+  // Die Regel der Statusleiste auf den Hubs von whoami (rules.hubStatus): genutzt sind die Hubs
+  // mit Zugangsdaten, nur sie warnen; Tooltip und summary() lesen beide hieraus.
+  status() {
+    return rules.hubStatus(this.hubs(), this.node.credentials(), this.unchosen());
+  }
+
   // Dasselbe wie der Tooltip, als Text — für „Kephalaion: Status anzeigen“.
   summary() {
     const lines = [`Kephalaion — Node ${nodeUrl() || '(keine Adresse)'}`];
@@ -446,16 +452,20 @@ class Status {
       return lines;
     }
     lines.push(`Version Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}`);
-    for (const h of this.hubs()) {
-      let l = `Hub ${h.hub} (Node ${h.node}): Anmeldung ${h.login}`;
+    const st = this.status();
+    if (!st.used.length) lines.push(`Warnung: ${st.warning}`);
+    this.hubs().forEach((h, i) => {
+      const s = st.hubs[i];
+      let l = `Hub ${h.hub} (Node ${h.node}): ${s.used ? `Anmeldung ${h.login}` : s.note}`;
       if (h.login === 'ok') l += `, Account ${h.account}, User ${h.user}`;
       lines.push(l);
+      if (s.warning) lines.push(`  Warnung: ${s.warning}`);
       if (this.accountNote(h.hub)) lines.push(`  ${this.accountNote(h.hub)}`);
       for (const c of h.collections || []) lines.push(`  ${c.address}: ${c.rights.join(', ')}`);
       const sy = h.sync;
       lines.push(sy.never_synced ? '  noch nie abgeglichen' : `  abgeglichen ${sy.last_success}, Revision ${sy.revision}`);
       if (sy.last_error) lines.push(`  letzter Fehler ${sy.last_error_at}: ${sy.last_error}`);
-    }
+    });
     if ((this.who.unknown_hubs || []).length) lines.push(`Token-Verzeichnisse ohne Hub am Node: ${this.who.unknown_hubs.join(', ')}`);
     return lines;
   }
@@ -474,25 +484,27 @@ class Status {
       it.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       return;
     }
-    const hubs = this.hubs();
-    const unchosen = this.unchosen();
-    const bad = hubs.filter((h) => h.login !== 'ok' || h.sync.last_error || unchosen.includes(h.hub));
-    it.text = `${bad.length ? '$(warning)' : '$(database)'} Keph ${hubs.map((h) => h.hub).join(' ')}`;
-    it.backgroundColor = bad.length ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    // Die Leiste nennt nur die genutzten Hubs; gelb nur, was dieser Client beheben muss.
+    const st = this.status();
+    it.text = st.used.length ? `${st.warning ? '$(warning)' : '$(database)'} Keph ${st.used.join(' ')}` : '$(warning) Keph: kein genutzter Hub';
+    it.backgroundColor = st.warning ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
 
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**Kephalaion** — Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}\n\n`);
-    for (const h of hubs) {
-      md.appendMarkdown(`**${h.hub}** (Node ${h.node}): Anmeldung \`${h.login}\``);
+    if (!st.used.length) md.appendMarkdown(`${st.warning}\n\n`);
+    this.hubs().forEach((h, i) => {
+      const s = st.hubs[i];
+      md.appendMarkdown(`**${h.hub}** (Node ${h.node}): ${s.used ? `Anmeldung \`${h.login}\`` : s.note}`);
       if (h.login === 'ok') md.appendMarkdown(`, Account ${h.account}, User ${h.user}`);
       md.appendMarkdown('\n\n');
+      if (s.warning) md.appendMarkdown(`Warnung: ${s.warning}\n\n`);
       if (this.accountNote(h.hub)) md.appendMarkdown(`${this.accountNote(h.hub)}\n\n`);
       for (const c of h.collections || []) md.appendMarkdown(`- \`${c.address}\` — ${c.rights.join(', ')}\n`);
-      const s = h.sync;
-      if (s.never_synced) md.appendMarkdown('\nnoch nie abgeglichen\n\n');
-      else md.appendMarkdown(`\nabgeglichen ${s.last_success}, Revision ${s.revision}\n\n`);
-      if (s.last_error) md.appendMarkdown(`letzter Fehler ${s.last_error_at}: ${s.last_error}\n\n`);
-    }
+      const sy = h.sync;
+      if (sy.never_synced) md.appendMarkdown('\nnoch nie abgeglichen\n\n');
+      else md.appendMarkdown(`\nabgeglichen ${sy.last_success}, Revision ${sy.revision}\n\n`);
+      if (sy.last_error) md.appendMarkdown(`letzter Fehler ${sy.last_error_at}: ${sy.last_error}\n\n`);
+    });
     if ((this.who.unknown_hubs || []).length) {
       md.appendMarkdown(`Token-Verzeichnisse ohne Hub am Node: ${this.who.unknown_hubs.join(', ')}\n`);
     }
