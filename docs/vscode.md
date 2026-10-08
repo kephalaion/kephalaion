@@ -119,14 +119,36 @@ und deren Benachrichtigungen brauchen eine Sitzung.
 
 ## Status und Auswahl
 
-- **Statusleiste:** etwa `Keph ✓ team` bzw. `Keph ⚠ offline`. Tooltip: Account je Hub,
-  letzter Abgleich, Revision, Version von Node und Erweiterung — mit Warnung, wenn sie
-  verschieden sind. Quelle ist `whoami`, dasselbe Werkzeug, das die KI benutzt: je Hub
-  `login` (`ok`, `invalid`, `missing`) und `sync` (`last_success`, `revision`, `last_error`,
-  `never_synced`). Ist `login` `invalid` und `sync.never_synced` gesetzt, liegt es nicht am
-  Token, sondern der Node hat den Hub noch nie abgeglichen. `unknown_hubs` nennt Header zu
-  Aliasen, die der Node nicht kennt — ein Hinweis auf eine falsch eingerichtete
-  Erweiterung.
+- **Statusleiste:** `Keph <hub …>` mit den genutzten Hubs, gelb mit Warnsymbol, wenn etwas
+  zu beheben ist. Tooltip: Account je Hub, letzter Abgleich, Revision, Version von Node und
+  Erweiterung — mit Hinweis, wenn sie verschieden sind. Quelle ist `whoami`, dasselbe
+  Werkzeug, das die KI benutzt: je Hub `login` (`ok`, `invalid`, `missing`) und `sync`
+  (`last_success`, `revision`, `last_error`, `never_synced`). Ist `login` `invalid` und
+  `sync.never_synced` gesetzt, liegt es nicht am Token, sondern der Node hat den Hub noch nie
+  abgeglichen. `unknown_hubs` nennt Header zu Aliasen, die der Node nicht kennt — ein Hinweis
+  auf eine falsch eingerichtete Erweiterung.
+- **Wann gelb (Task 030):** Ein Node bedient viele Hubs, ein Hub viele Collections; ein Client
+  nutzt davon nur einige. Die Leiste zeigt, ob **das, was dieser Client nutzt**, in Ordnung
+  ist — nicht, ob er an jedem Hub des Nodes angemeldet ist. Genutzt (**used hub**,
+  [`begriffe.md`](begriffe.md)) ist ein Hub, für den die Erweiterung ein Header-Paar hat —
+  lokal jeder mit Token-Datei unter `tokens/<hub>/`, an eine entfernte `nodeUrl` nur die in
+  `kephalaion.hubs` gewählten — oder den der Node als `ok` oder `invalid` meldet. Gelb ist nur,
+  was der Client beheben muss: `invalid`; `missing` **trotz** Token-Datei (die Datei ist leer
+  oder nicht lesbar, das Paar geht nicht hinaus — die Meldung nennt die Datei); ein Fehler im
+  Abgleich eines genutzten Hubs (auch „Replica nicht lesbar“, das `whoami` als `missing` mit
+  `last_error` meldet); mehrere Accounts ohne Wahl; wie bisher Node nicht erreichbar und die
+  verdeckte Antwort (`hidden`) — und kein einziger genutzter Hub. **Nicht gelb** ist ein Hub
+  des Nodes, für den der Client kein Token hat: Er ist `missing` ohne Fehlversuch, ein
+  normaler Zustand an einem geteilten Node (die VM: ein Node, mehrere Hubs, viele Clients in
+  DevContainern). Die Leiste nennt ihn nicht; Tooltip und „Kephalaion: Status anzeigen“ führen
+  ihn als „nicht genutzt — kein Token“, auch mit seinem Abgleichfehler. Die Regel ist
+  `hubStatus` in [`vscode/rules.js`](../vscode/rules.js) (Tests in
+  `vscode/test/rules.test.js`); `render()` und `summary()` nehmen beide sie. Belegt am
+  2026-10-08 an einem Wegwerf-Node mit zwei Einträgen auf denselben Hub und Token-Datei nur
+  für einen: `whoami` mit dem einen Paar meldet `ok` neben `missing` (Befund
+  `material/befunde/vscode-betrieb.md`). Bis dahin färbte jeder Hub mit `login` ≠ `ok` die
+  Leiste gelb — eine Annahme der ersten Fassung (2026-09-26: ein Node je User mit nur eigenen
+  Hubs, `missing` hieß „Token vergessen“).
 - **Klick darauf:** ein kleines Menü — neu verbinden, Token setzen, Collection einbinden,
   Log anzeigen (Output-Channel „Kephalaion“ mit den Aufrufen und Fehlern).
 - **Node nicht erreichbar:** Dann scheitert auch das Lesen, weil die Erweiterung die Replica
@@ -255,6 +277,9 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
 Statusleiste gelb (der zweite Hub der VM, `vmhttp`, ohne Anmeldung — erwartet), `whoami` in
 Copilot über den Node der VM (Node `vm-node`, Hub `vm` angemeldet), 0-mal `login=invalid`, kein
 Token im Log des Proxys und in den Daten von VS Code; danach beide Einstellungen wieder entfernt.
+*Protokoll von damals:* `vmhttp` ist am 2026-10-08 von der VM entfernt, und seit Task 030 wäre
+das Gelb auch mit `vmhttp` nicht mehr erwartet — ein Hub ohne Token des Clients ist keine
+Warnung („Status und Auswahl“, „Wann gelb“).
 
 ## `read` mit `content` (Task 024, 0.0.8)
 

@@ -761,10 +761,13 @@ im Container; wie sie dort einen Node erreicht, ist noch nicht gebaut
   Alias des Hubs, der Dateiname der Account. Liegen an einem Hub mehrere, wählt man einen
   mit „Kephalaion: Account wählen“; die Wahl steht in der Einstellung `kephalaion.accounts`,
   je Rechner. Ohne Wahl nimmt sie den ersten nach Namen und zeigt die Statusleiste gelb.
-- **Statusleiste:** `Keph <hub>`, der Tooltip zeigt, was `whoami` liefert — Version, je Hub
-  Anmeldung, Account, User, Collections mit Rechten und Stand des Abgleichs. Gelb, wenn der
-  Node nicht erreichbar ist, eine Anmeldung nicht gilt oder kein Account gewählt ist;
-  abgefragt alle 30 s.
+- **Statusleiste:** `Keph <hub>` mit den Hubs, die dieser Client nutzt (Token-Datei unter
+  `tokens/<hub>/`); der Tooltip zeigt, was `whoami` liefert — Version, je Hub Anmeldung,
+  Account, User, Collections mit Rechten und Stand des Abgleichs. Gelb, wenn der Node nicht
+  erreichbar ist, eine Anmeldung nicht gilt, der Abgleich eines genutzten Hubs scheitert, kein
+  Account gewählt ist oder kein Hub genutzt wird. Ein Hub des Nodes, für den der Client kein
+  Token hat, ist kein Fehler und steht nur im Tooltip als „nicht genutzt“ — ein Node bedient
+  viele Hubs, ein Client nutzt davon einige. Abgefragt alle 30 s.
 - **Menü** per Klick auf die Statusleiste: Status anzeigen (dasselbe als Text im Output
   „Kephalaion“), neu verbinden, Account wählen, Collection einbinden, Log.
 - **„Kephalaion: Collection einbinden“** bietet die lesbaren Collections zur Auswahl an und

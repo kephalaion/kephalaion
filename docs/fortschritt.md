@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-10-07 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-10-08 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
 ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
@@ -8,7 +8,9 @@ eingespielt und abgenommen bis auf die Ansicht mit eigener Sitzung; ersetzt die 
 028 Etappen 1–6 ausgeführt, der User richtet seinen Account selbst ein — auf der VM eingespielt,
 die Abnahme mit echtem Einrichtungstoken ist Nacharbeit des Nutzers; 029 Etappen 1–6
 ausgeführt, die Admin-Ansicht der Weboberfläche — auf der VM eingespielt, die Abnahme mit
-eigenen Sitzungen ist Nacharbeit des Nutzers)
+eigenen Sitzungen ist Nacharbeit des Nutzers; 030 Etappen 1–2 ausgeführt, die Statusleiste
+der Erweiterung warnt nur über genutzte Hubs — die Abnahme in der WSL mit einem Wegwerf-Node
+ist Nacharbeit des Nutzers)
 
 ## So wird diese Datei aktualisiert
 
@@ -391,6 +393,11 @@ eigenen Sitzungen ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 030 — Abnahme der Statusleiste in der WSL:** gebaut am 2026-10-08 (Etappe 1, belegt
+  am Wegwerf-Node mit zwei Einträgen auf denselben Hub; Befund `vscode-betrieb.md`), Doku
+  nachgezogen (Etappe 2); offen die Abnahme durch den Nutzer in der WSL mit einem Wegwerf-Node
+  und im DevContainer der VM, Schritte unter „Zu testen“.
+
 - **Task 029 — Abnahme der Admin-Ansicht auf der VM:** eingespielt am 2026-10-07 und von der KI
   mit Probenutzern geprüft; offen die Abnahme mit eigenen Sitzungen (Rolle im Portal vergeben),
   Schritte unter „Zu testen“.
@@ -569,6 +576,38 @@ eigenen Sitzungen ist Nacharbeit des Nutzers)
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 030 — Abnahme der Statusleiste in der WSL** (Nacharbeit des Nutzers; die Erweiterung
+  liest `~/.config/kephalaion/tokens/` des Nutzers — deshalb Aliase, die der WSL-Node nicht
+  kennt, nicht `vm`). Lokal in der WSL `make vscode-install`, dann „Developer: Reload Window“.
+  Ein Wegwerf-Hub und -Node mit zwei Einträgen `<a>` (`local`) und `<b>` (`http`) auf denselben
+  Hub wie in Etappe 1 (Befund `material/befunde/vscode-betrieb.md`, 2026-10-08):
+  1. In einem Temp-Verzeichnis, jedes Kommando mit `--config <tmp>/config.yaml`: `hub init --db
+     sqlite:///<tmp>/hub.db --listen 127.0.0.1:17434`, `hub collection add <c>`, `hub node add
+     <na>` und `hub node add <nb>` (Token je in eine Datei, `umask 077`), `hub node grant <na>
+     <c>` und `… <nb> <c>`, `hub account add <acc>` (Einrichtungstoken in eine Datei), `hub
+     account grant <acc> <c> --write`; `node init --db sqlite:///<tmp>/node.db --listen
+     127.0.0.1:17433`, `node hub add <a> --node <na> --transport local --token-stdin < <datei>`,
+     `node hub add <b> --node <nb> --transport http --address http://127.0.0.1:17434/hub
+     --token-stdin < <datei>`, `node collection add <a>:<c>` und `<b>:<c>`; dann `kephalaion
+     serve --config <tmp>/config.yaml` in einem zweiten Terminal (gleicht beide Einträge beim
+     Start ab, Log „Abgleich <a>: 1 Zeile, Revision 1“ und ebenso `<b>`).
+  2. Token-Datei nur für `<a>`: das Einrichtungstoken nach
+     `~/.config/kephalaion/tokens/<a>/<acc>.token` (`0600`; am Node gilt es vor dem Rotieren).
+     In VS Code `kephalaion.nodeUrl` auf `http://127.0.0.1:17433` → Statusleiste `Keph <a>`
+     neutral (Datenbanksymbol, nicht gelb); Tooltip bzw. „Kephalaion: Status anzeigen“ nennen
+     `<a>` mit Anmeldung `ok` und `<b>` als „nicht genutzt — kein Token“ (`vm` steht dort nur
+     unter „Token-Verzeichnisse ohne Hub am Node“, auch nicht gelb).
+  3. Leere Token-Datei für `<b>`: `mkdir -p ~/.config/kephalaion/tokens/<b> && install -m 600
+     /dev/null ~/.config/kephalaion/tokens/<b>/<acc>.token` → nach dem nächsten `whoami` (bis
+     30 s) gelb, `Keph <a> <b>`, im Tooltip „Warnung: Token-Datei tokens/<b>/<acc>.token leer
+     oder nicht lesbar“.
+  4. Danach `kephalaion.nodeUrl` wieder entfernen, `serve` beenden, `tokens/<a>/` und
+     `tokens/<b>/` und das Temp-Verzeichnis löschen; die Leiste zeigt wieder `Keph vm`.
+
+  Im DevContainer der VM nur: `Keph vm` weiterhin neutral — mit dem ausgerollten Binary
+  (`KEPHALAION_BIN=<pfad>` in `~/dev/vm/local.mk`, `make deploy ROLE=kephalaion`, dann
+  `kephalaion vscode install` im Container) oder mit dem nächsten Release.
 
 - **Task 029 — Abnahme der Admin-Ansicht auf der VM** (Nacharbeit des Nutzers: Er vergibt die
   Rolle `kephalaion.admin` im Portal von authproxy und nimmt sie danach wieder weg, und er
