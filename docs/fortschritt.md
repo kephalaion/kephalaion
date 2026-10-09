@@ -577,6 +577,39 @@ ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 025 — Fehlversuche fälschungssicher, Abnahme mit VS Code und `rotate`** (Nacharbeit des
+  Nutzers; braucht die Fenster und Token-Dateien des Nutzers. Auf der VM ist alles ausgerollt und
+  ohne VS Code belegt: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“, T1–T10;
+  Befund `material/befunde/mcp-von-aussen.md`, 2026-10-09). Die eigene Adresse muss auf der
+  Allowlist stehen (`~/dev/vm/ansible/roles/fail2ban/files/fail2ban/allowlist`; Adresse von außen
+  gegen die Liste prüfen) — gezählt wird an den Zeilen im Journal von Caddy, nicht an
+  `fail2ban-client status`:
+  1. **Mehrere Fenster, ein Dummy-Token:** lokal in der WSL `make vscode-install`, „Developer:
+     Reload Window“ in allen Fenstern. In einem eigenen Token-Verzeichnis (`XDG_CONFIG_HOME` auf
+     ein Temp-Verzeichnis mit `tokens/vm/probe.token`, Inhalt ein Dummy wie
+     `keph_` + 43 Zeichen; den Extension Host damit starten, etwa `XDG_CONFIG_HOME=… code .` in
+     zwei bis vier Fenstern) `kephalaion.nodeUrl` auf
+     `https://kplaybook-89d61defe0.germanywestcentral.cloudapp.azure.com/kephalaion` und
+     `kephalaion.hubs` auf `["vm"]`, dazu eine wiederhergestellte `keph://vm/test`-Einbindung in
+     einem Fenster. Erwartet: über alle Fenster genau eine Anfrage beim Start (die Probe), die
+     Statusleiste `$(warning) Keph vm` mit Tooltip „pausiert — Anmeldung ungültig (1 Fehlversuch),
+     nächste Probe in 1 min …“, die Ordner als „nicht verfügbar“ (nicht gelöscht); nach 1 min die
+     zweite Probe, danach keine bis 10 min; im Log „Kephalaion“ nur Wechsel des Stands. Auf der VM
+     `ssh devvm-admin 'sudo journalctl -u caddy -o cat --since "-10min"' | grep -c
+     '"keph_login":"invalid"'` → höchstens 4 in 10 min (erwartet 2), `fail2ban-client status
+     kephalaion-mcp` ohne Sperre. Die Pausendatei
+     `$XDG_STATE_HOME/kephalaion/vscode-pause.json` (sonst `~/.local/state/kephalaion/`) nennt
+     das Paar ohne Token. Danach Einstellungen und Temp-Verzeichnis entfernen.
+  2. **`rotate` mit entfernter `nodeUrl`:** mit dem echten Token `kamran-wsl` in der WSL
+     `kephalaion.nodeUrl` auf die VM, ein zweiter Hub ist nicht nötig. `kephalaion node account
+     rotate vm kamran-wsl` (rotiert am Hub der VM; die Replica des VM-Nodes ist bis zu 30 s alt).
+     Erwartet: die Erweiterung erkennt das neue Token (Kennung der Token-Datei) und probt sofort —
+     der Node der VM weist es gegen die alte Zeile ab, stößt den Abgleich an und nimmt es ab dem
+     nächsten Abgleich (Sekunden, nicht 30 s) an; über alle Fenster höchstens 2–3 Zeilen
+     `"keph_login":"invalid"` im Journal von Caddy, danach `ok`; eine Sitzung von Claude Code
+     gleich danach ebenso höchstens 2–3; keine Sperre. Eine laufende MCP-Sitzung mit dem alten
+     Token zählt je Werkzeugaufruf einen Fehlversuch (dokumentierte Grenze) — sie neu verbinden.
+     Danach `kephalaion.nodeUrl` wieder leeren.
 - **Task 030 — Abnahme der Statusleiste in der WSL** (Nacharbeit des Nutzers; die Erweiterung
   liest `~/.config/kephalaion/tokens/` des Nutzers — deshalb Aliase, die der WSL-Node nicht
   kennt, nicht `vm`). Lokal in der WSL `make vscode-install`, dann „Developer: Reload Window“.
