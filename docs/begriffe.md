@@ -353,6 +353,51 @@ Ausführlich: [`konzept.md`](konzept.md).
   trotz Token-Datei, Fehler im Abgleich, mehrere Accounts ohne Wahl) — und wenn kein Hub genutzt
   ist. Ein Hub ohne Token des Clients ist `missing` und kein Fehler; Tooltip und „Kephalaion:
   Status anzeigen“ führen ihn als „nicht genutzt“. Regel `hubStatus` in `vscode/rules.js`.
+- **probe** (Probe, Task 025) — ein `whoami` der Erweiterung für VS Code an eine entfernte
+  **kephalaion.nodeUrl**, das klärt, welche Paare gelten, bevor etwas anderes hinausgeht
+  (Schranke): Vor jeder anderen Anfrage an die Adresse geht genau eine Probe mit den aktuellen
+  Paaren; `stat`, `readDirectory`, `readFile`, `changes`, die Schreibvorgänge und der Start des
+  MCP-Servers warten auf ihr Ergebnis — ein gemeinsames, keine zweite. Neu geprobt wird, wenn sich
+  ein Paar ändert (Token-Datei, Wahl des Accounts, **kephalaion.hubs**, `nodeUrl`, „Neu
+  verbinden“ — sofort, zählt ins **budget**, wartet nicht darauf), sonst für ein **paused pair**
+  nach wachsender Pause (1, 2, 4, 8, 16, 30 min, danach alle 30 min) und nur, wenn das Budget es
+  erlaubt. Zur selben Zeit probt nur ein Fenster des Rechners (Sperrdatei neben der **pause
+  file**, nach 30 s verwaist); die anderen übernehmen das Ergebnis aus der Datei. Lokal keine
+  Probe. Modul `vscode/pause.js`.
+- **paused pair** (pausiertes Paar, Task 025) — ein Header-Paar (Hub, Account) der Erweiterung an
+  einer entfernten Adresse, das als ungültig erkannt ist: Es geht nicht mehr mit — weder in
+  Anfragen der Erweiterung noch beim Start des MCP-Servers für Copilot —, bis eine **probe** es
+  klärt; die übrigen Paare arbeiten weiter, ein Aufruf des Dateisystems für den Hub scheitert ohne
+  Anfrage als `Unavailable`, und ein laufender MCP-Server behält seine Header. Erkannt wird
+  „ungültig“ an der Antwort selbst: `whoami` mit `hidden` (alle geschickten Paare) oder `login`
+  `invalid` je Hub; `changes`, das alle eben noch lesbaren Collections eines Hubs als `dropped`
+  meldet (fällt nur eine weg, ist das kein Fehlversuch); eine 401 des Proxys (alle Paare der
+  Adresse). Grenze: Verliert der Account alle Collections eines Hubs, sieht das aus wie ein
+  ungültiges Paar — bis zur nächsten Probe. Die Statusleiste zeigt es gelb mit dem Grund
+  „pausiert“ (`hubStatus`), mit nächster Probe, Zahl der Fehlversuche, Schwelle der Jail und
+  Abhilfe.
+- **budget** (Budget, Task 025) — je entfernter Adresse die Zeiten der Fehlversuche der letzten
+  10 min (`findtime` der Jail), über alle Paare und alle Fenster des Rechners, in der **pause
+  file**: jede Anfrage mit mindestens einem ungültigen Paar, wie der Node sie zählt — Proben wie
+  der Übergang gültig → ungültig im Betrieb, auch Anfragen anderer Fenster, die vor dem Vermerk
+  schon unterwegs waren. Proben von selbst nur, wenn weniger als 2 darin stehen; die übrigen 2 der
+  4 bleiben für einen Übergang samt Anfragen unterwegs — nach einer früheren Sperre reichen der
+  Jail schon 5. Ohne Zutun des Nutzers so über alle Fenster höchstens 4 Fehlversuche in 10 min;
+  darüber nur, wenn im Betrieb binnen 10 min mehrere Paare ungültig werden oder beim Übergang
+  schon mehr als 2 Anfragen zugleich unterwegs sind.
+- **pause file** (Pausendatei, Task 025) — die Datei, in der alle Extension Hosts eines Rechners
+  Pause und **budget** teilen: `$XDG_STATE_HOME/kephalaion/vscode-pause.json` (sonst
+  `~/.local/state/kephalaion/`, [`konzept.md`](konzept.md), „Orte nach XDG“), unabhängig von
+  Profil, Ausgabe (Insiders) und Fenster — nicht `globalStorageUri`, das daran hängt. Je **paused
+  pair** Adresse des Nodes, Hub, Account, die Kennung der Token-Datei (Größe und Zeit, ohne
+  Inhalt), Zahl der Fehlversuche und Zeit der nächsten Probe; je Adresse das Budget. Kein Token
+  und kein Hash. Atomar geschrieben (neue Datei, `rename`, `0600`); vor jeder Anfrage übernimmt
+  ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); ist sie kaputt oder fehlt sie,
+  gelten Schranke und Sperrdatei trotzdem. Nach einer gültigen Antwort ist die Pause des Paars
+  weg, die Zeiten im Budget bleiben, bis sie 10 min alt sind. Grenze: ein Stand je Benutzer und
+  Betriebssystem, auf dem die Token-Dateien liegen — Fenster unter Windows und in der WSL
+  desselben Rechners teilen ihn nicht (dieselbe Adresse nach außen), haben aber ohnehin eigene
+  Token-Dateien.
 
 ## Daten
 

@@ -4,7 +4,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint, hubStatus } = require('../rules');
+const {
+  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint, hubStatus, whoamiOutcome, droppedHubs,
+} = require('../rules');
 
 test('nodeUrl: lokal, Proxy, host.docker.internal', () => {
   assert.deepStrictEqual(parseNodeUrl('http://127.0.0.1:7433'), { endpoint: 'http://127.0.0.1:7433/mcp', remote: false });
@@ -171,4 +173,58 @@ test('Statusleiste: entfernte nodeUrl, ein Hub des Nodes nicht gewählt — neut
   assert.strictEqual(st.warning, undefined);
   assert.deepStrictEqual(st.used, ['vm']);
   assert.strictEqual(st.hubs[0].note, 'nicht genutzt — kein Token');
+});
+
+// Task 025: Ein pausiertes Paar geht nicht hinaus, der Node meldet den Hub als missing — der
+// Grund ist „pausiert“ mit nächster Probe, Fehlversuchen, Schwelle der Jail und Abhilfe, nicht
+// „Token-Datei leer“. Ein pausierter Hub ohne Antwort des Nodes (alle Paare pausiert) steht
+// trotzdem als genutzt in der Liste.
+test('Statusleiste: pausiertes Paar — eigener Grund, auch ohne Antwort des Nodes', () => {
+  const now = 1_700_000_000_000;
+  const sync = { last_success: '2026-10-09T10:00:00Z', revision: 3 };
+  const hubs = [
+    { hub: 'vm', login: 'missing', node: 'vm-node', sync },
+    { hub: 'eigen', login: 'ok', node: 'n', account: 'kp', user: 'u', sync },
+  ];
+  const creds = { vm: { account: 'kamran', token: 'x' }, eigen: { account: 'kp', token: 'y' } };
+  const paused = { vm: { account: 'kamran', failures: 2, nextProbe: now + 3 * 60 * 1000 } };
+  const st = hubStatus(hubs, creds, [], paused, now);
+  assert.deepStrictEqual(st.used, ['vm', 'eigen']);
+  assert.match(st.hubs[0].warning, /^pausiert — Anmeldung ungültig \(2 Fehlversuche\), nächste Probe in 3 min; die Jail/);
+  assert.match(st.hubs[0].warning, /10 in 10 min \(nach einer früheren Sperre 5\)\. Abhilfe: Token-Datei erneuern; nach rotate/);
+  assert.ok(!st.hubs[0].warning.includes('leer oder nicht lesbar'));
+  assert.strictEqual(st.hubs[1].warning, undefined);
+  assert.match(st.warning, /^vm: pausiert/);
+  // Keine Antwort des Nodes: Der pausierte Hub steht trotzdem da, genutzt und gelb.
+  const alone = hubStatus([], creds, [], { vm: { account: 'kamran', failures: 1, nextProbe: now - 1 } }, now);
+  assert.deepStrictEqual(alone.used, ['vm']);
+  assert.deepStrictEqual(alone.hubs, [{ hub: 'vm', used: true, warning: alone.hubs[0].warning }]);
+  assert.match(alone.hubs[0].warning, /\(1 Fehlversuch\), nächste Probe jetzt;/);
+  // Ohne Pause wie bisher.
+  assert.match(hubStatus(hubs, creds, [], {}, now).hubs[0].warning, /Token-Datei tokens\/vm\/kamran\.token leer/);
+});
+
+// Task 025, Erkennen: hidden heißt alle geschickten Paare ungültig; sonst login je Hub, nur für
+// geschickte Hubs.
+test('whoami: was die Antwort über die geschickten Paare sagt', () => {
+  assert.deepStrictEqual(whoamiOutcome({ hidden: true, hubs: [] }, ['vm', 'eigen']), { invalid: ['eigen', 'vm'], ok: [] });
+  const who = { hubs: [{ hub: 'vm', login: 'invalid' }, { hub: 'eigen', login: 'ok' }, { hub: 'andere', login: 'missing' },
+    { hub: 'fremd', login: 'invalid' }] };
+  assert.deepStrictEqual(whoamiOutcome(who, ['vm', 'eigen', 'andere']), { invalid: ['vm'], ok: ['eigen'] });
+  assert.deepStrictEqual(whoamiOutcome(who, []), { invalid: [], ok: [] });
+  assert.deepStrictEqual(whoamiOutcome(undefined, ['vm']), { invalid: [], ok: [] });
+  // Noch nie abgeglichen ist invalid: Der Node zählt es als Fehlversuch.
+  assert.deepStrictEqual(whoamiOutcome({ hubs: [{ hub: 'vm', login: 'invalid', sync: { never_synced: true } }] }, ['vm']),
+    { invalid: ['vm'], ok: [] });
+});
+
+// Task 025, Erkennen an changes: Ein Hub, der eben noch lesbar war und es gar nicht mehr ist —
+// alle seine Collections dropped. Fällt nur eine weg, ist das ein entzogenes Recht.
+test('changes: ein Hub, dessen Collections alle dropped sind', () => {
+  const readable = { vm: ['vm:test', 'vm:wissen'], eigen: ['eigen:notizen'], leer: [] };
+  assert.deepStrictEqual(droppedHubs(['vm:test', 'vm:wissen'], readable), ['vm']);
+  assert.deepStrictEqual(droppedHubs(['vm:test'], readable), []);
+  assert.deepStrictEqual(droppedHubs([{ address: 'eigen:notizen' }, 'vm:wissen', 'vm:test'], readable), ['eigen', 'vm']);
+  assert.deepStrictEqual(droppedHubs([], readable), []);
+  assert.deepStrictEqual(droppedHubs(undefined, readable), []);
 });

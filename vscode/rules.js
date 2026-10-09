@@ -5,6 +5,8 @@
 
 'use strict';
 
+const { pauseWarning } = require('./pause');
+
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const DOCKER_HOST = 'host.docker.internal';
 const HUB_ALIAS = /^[a-z0-9][a-z0-9._-]{0,62}$/;
@@ -184,20 +186,29 @@ const NO_USED_HUB = 'kein genutzter Hub — für keinen Hub dieses Nodes liegt e
 // genutzt ist ein Hub mit Eintrag in credentials (die Hubs aus hubSelection, je mit account)
 // oder einer, den der Node als ok oder invalid meldet — er hat ein Paar gesehen. Nur genutzte
 // Hubs warnen: invalid, missing trotz Token-Datei (leer oder nicht lesbar; mit „Replica nicht
-// lesbar“ ein Abgleichfehler), ein Fehler im Abgleich, mehrere Accounts ohne Wahl (unchosen).
+// lesbar“ ein Abgleichfehler), ein Fehler im Abgleich, mehrere Accounts ohne Wahl (unchosen),
+// und ein pausiertes Paar (paused: { hub: { account, failures, nextProbe } }, Task 025) — es
+// geht nicht hinaus, der Node meldet den Hub deshalb als missing; der Grund ist „pausiert“ mit
+// nächster Probe, Fehlversuchen, Schwelle der Jail und Abhilfe. Ein pausierter Hub, den whoami
+// nicht nennt (alle Paare pausiert: keine Anfrage), steht trotzdem als genutzt in der Liste.
 // Ein Hub ohne Token des Clients ist missing und kein Fehler, auch nicht mit Abgleichfehler.
 // Liefert je Hub { hub, used, warning | note }, used (die genutzten Aliase, Reihenfolge von
 // whoami) und warning, die Gesamtwarnung — undefined heißt neutral; kein genutzter Hub warnt.
-function hubStatus(hubs, credentials, unchosen) {
+function hubStatus(hubs, credentials, unchosen, paused, now) {
   const creds = credentials || {};
   const unchosenSet = new Set(unchosen || []);
+  const pausedMap = paused || {};
+  const at = Number.isFinite(now) ? now : Date.now();
   const out = [];
   const used = [];
   const reasons = [];
+  const seen = new Set();
   for (const h of hubs || []) {
+    seen.add(h.hub);
     const sync = h.sync || {};
     const c = creds[h.hub];
-    const entry = { hub: h.hub, used: Boolean(c) || h.login === 'ok' || h.login === 'invalid' };
+    const p = pausedMap[h.hub];
+    const entry = { hub: h.hub, used: Boolean(c) || Boolean(p) || h.login === 'ok' || h.login === 'invalid' };
     if (!entry.used) {
       entry.note = NOT_USED;
       out.push(entry);
@@ -206,7 +217,9 @@ function hubStatus(hubs, credentials, unchosen) {
     used.push(h.hub);
     const why = [];
     if (sync.last_error) why.push(`Abgleich: ${sync.last_error}`);
-    if (h.login === 'invalid') {
+    if (p) {
+      why.push(pauseWarning(p, at));
+    } else if (h.login === 'invalid') {
       why.push(sync.never_synced ? 'noch nie abgeglichen, die Anmeldung lässt sich noch nicht prüfen' : 'Anmeldung ungültig');
     } else if (h.login === 'missing' && sync.last_error !== REPLICA_UNREADABLE) {
       why.push(c && c.account ? `Token-Datei tokens/${h.hub}/${c.account}.token leer oder nicht lesbar` : 'keine Zugangsdaten angekommen');
@@ -218,12 +231,50 @@ function hubStatus(hubs, credentials, unchosen) {
     }
     out.push(entry);
   }
+  for (const [hub, p] of Object.entries(pausedMap)) {
+    if (seen.has(hub)) continue;
+    used.push(hub);
+    const entry = { hub, used: true, warning: pauseWarning(p, at) };
+    reasons.push(`${hub}: ${entry.warning}`);
+    out.push(entry);
+  }
   let warning;
   if (!used.length) warning = NO_USED_HUB;
   else if (reasons.length) warning = reasons.join('; ');
   return { hubs: out, used, warning };
 }
 
+// Was die Antwort von whoami über die geschickten Paare sagt (sentHubs, Task 025): hidden heißt
+// alle geschickten ungültig; sonst je Hub login invalid (auch „noch nie abgeglichen“ — der Node
+// zählt es als Fehlversuch) oder ok. { invalid: [hubs], ok: [hubs] }; nur geschickte Hubs.
+function whoamiOutcome(who, sentHubs) {
+  const sent = new Set(sentHubs || []);
+  if (!who || !sent.size) return { invalid: [], ok: [] };
+  if (who.hidden) return { invalid: [...sent].sort(), ok: [] };
+  const invalid = [];
+  const ok = [];
+  for (const h of who.hubs || []) {
+    if (!sent.has(h.hub)) continue;
+    if (h.login === 'invalid') invalid.push(h.hub);
+    else if (h.login === 'ok') ok.push(h.hub);
+  }
+  return { invalid: invalid.sort(), ok: ok.sort() };
+}
+
+// Hubs, die eben noch lesbar waren und es gar nicht mehr sind (Task 025): alle ihre lesbaren
+// Collections (readable: { hub: [adressen] }, aus dem letzten whoami) stehen in dropped von
+// changes — ein ungültiges Paar macht alle unlesbar. Fällt nur eine weg und andere bleiben, ist
+// das ein entzogenes Recht, kein Fehlversuch; ein Hub ohne lesbare Collection zählt nicht.
+function droppedHubs(dropped, readable) {
+  const gone = new Set((dropped || []).map((d) => String(d && d.address !== undefined ? d.address : d)));
+  const out = [];
+  for (const [hub, addrs] of Object.entries(readable || {})) {
+    if (addrs.length && addrs.every((a) => gone.has(a))) out.push(hub);
+  }
+  return out.sort();
+}
+
 module.exports = {
-  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, PROXY_HINT,
+  parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, whoamiOutcome,
+  droppedHubs, PROXY_HINT,
 };

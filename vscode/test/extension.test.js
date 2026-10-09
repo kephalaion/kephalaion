@@ -1,6 +1,7 @@
 // Die Erweiterung mit einem Ersatz für vscode und für fetch (Task 023): Welche Header-Paare gehen
 // an welche nodeUrl, im FileSystemProvider (whoami beim Start) und im MCP-Server für Copilot?
-// Kein Netz, Dummy-Tokens in einem temporären HOME.
+// Dazu Schranke und Pause an einer entfernten nodeUrl (Task 025; die Zeitfolgen prüft
+// pause.test.js). Kein Netz, Dummy-Tokens in einem temporären HOME, die Pausendatei darunter.
 
 'use strict';
 
@@ -9,10 +10,13 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const Module = require('module');
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'keph-ext-'));
 process.env.XDG_CONFIG_HOME = path.join(home, 'config');
+process.env.XDG_STATE_HOME = path.join(home, 'state');
+const pauseFile = path.join(home, 'state', 'kephalaion', 'vscode-pause.json');
 process.env.KEPHALAION_CONFIG = path.join(home, 'config', 'kephalaion', 'config.yaml');
 const tokens = path.join(home, 'config', 'kephalaion', 'tokens');
 const TOKEN_A = `keph_${'A'.repeat(43)}`;
@@ -43,6 +47,18 @@ class Disposable {
 }
 
 const noop = () => new Disposable();
+
+// FileSystemError wie in VS Code: ein Fehler mit code.
+class FileSystemError extends Error {
+  constructor(message, code = 'Unknown') {
+    super(typeof message === 'string' ? message : String(message && message.path || ''));
+    this.code = code;
+  }
+}
+for (const code of ['FileNotFound', 'FileExists', 'FileNotADirectory', 'FileIsADirectory', 'NoPermissions', 'Unavailable']) {
+  FileSystemError[code] = (m) => new FileSystemError(m, code);
+}
+
 const vscode = {
   workspace: {
     getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d), update: async () => {} }),
@@ -96,7 +112,7 @@ const vscode = {
   FileChangeType: { Changed: 1, Created: 2, Deleted: 3 },
   FileType: { File: 1, Directory: 2 },
   FilePermission: { Readonly: 1 },
-  FileSystemError: {},
+  FileSystemError,
   QuickPickItemKind: { Separator: -1 },
   ConfigurationTarget: { Global: 1 },
   Uri: { parse: (s) => ({ toString: () => s, s }), from: (o) => o },
@@ -113,23 +129,43 @@ Module._load = function (request, ...rest) {
   return load.call(this, request, ...rest);
 };
 
-// fetch: merkt sich Adresse, Header und redirect; antwortet mit reply, wenn das ein Ergebnis für
-// den Aufruf liefert, sonst wie ein Node über einen Proxy ohne gültige Anmeldung.
+// Die Hubs der Header-Paare einer Anfrage, nach Alias.
+function hubsOf(headers) {
+  return Object.keys(headers || {}).filter((h) => h.startsWith('X-Keph-Token-')).map((h) => h.slice(13)).sort();
+}
+
+// Die verdeckte Antwort: über einen Proxy ohne gültige Anmeldung.
+const HIDDEN = { content: [{ type: 'text', text: '' }], structuredContent: { hidden: true, hubs: [], unknown_hubs: [] } };
+
+// Ein Node, an dem jedes geschickte Paar gilt (whoami); sonst eine leere Struktur.
+function validNode(params, headers) {
+  if (params.name !== 'whoami') return { content: [{ type: 'text', text: '' }], structuredContent: {} };
+  const hubs = hubsOf(headers).map((hub) => ({ hub, login: 'ok', node: 'n', account: headers[`X-Keph-Account-${hub}`],
+    user: 'u', sync: { last_success: '2026-10-09T10:00:00Z', revision: 1 }, collections: [] }));
+  return { content: [{ type: 'text', text: '' }], structuredContent: { version: 'dev', hubs, unknown_hubs: [] } };
+}
+
+// fetch: merkt sich Adresse, Header und redirect; antwortet mit reply(params, headers), wenn das
+// ein Ergebnis für den Aufruf liefert (oder eine Response), sonst wie ein Node, an dem jedes Paar
+// gilt.
 const calls = [];
 let reply = null;
 globalThis.fetch = async (url, opts) => {
   calls.push({ url, headers: opts.headers, redirect: opts.redirect });
   const { params } = JSON.parse(opts.body);
-  const result = (reply && reply(params)) ||
-    { content: [{ type: 'text', text: '' }], structuredContent: { hidden: true, hubs: [], unknown_hubs: [] } };
+  const r = reply && reply(params, opts.headers);
+  if (r instanceof Response) return r;
+  const result = r || validNode(params, opts.headers);
   return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }),
     { status: 200, headers: { 'content-type': 'application/json' } });
 };
 
 const ext = require('../extension');
 
+// Jeder Test beginnt ohne Pausen: eine frische Pausendatei.
 function start() {
   calls.length = 0;
+  fs.rmSync(path.dirname(pauseFile), { recursive: true, force: true });
   const context = { subscriptions: [], extension: { packageJSON: { version: 'test' } } };
   ext.activate(context);
   disposables.push(...context.subscriptions);
@@ -137,11 +173,6 @@ function start() {
 
 function stop() {
   for (const d of disposables.splice(0)) d.dispose();
-}
-
-// Die Hubs der Header-Paare einer Anfrage, nach Alias.
-function hubsOf(headers) {
-  return Object.keys(headers || {}).filter((h) => h.startsWith('X-Keph-Token-')).map((h) => h.slice(13)).sort();
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 50));
@@ -166,10 +197,10 @@ test('entfernte nodeUrl: nur die gewählten Hubs, auch nach einem neuen Hub unte
   const [def] = provider.provideMcpServerDefinitions();
   assert.strictEqual(def.uri.s, 'https://node.example.org/kephalaion/mcp');
   assert.deepStrictEqual(Object.keys(def.headers), [], 'die gemeldete Definition trägt keine Header');
-  assert.deepStrictEqual(hubsOf(provider.resolveMcpServerDefinition(def).headers), ['vm']);
+  assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(def)).headers), ['vm']);
   // Ein Hub kommt hinzu: die Paare bleiben.
   putToken('neu', 'x', TOKEN_B);
-  assert.deepStrictEqual(hubsOf(provider.resolveMcpServerDefinition(def).headers), ['vm']);
+  assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(def)).headers), ['vm']);
   stop();
   start();
   await settle();
@@ -265,7 +296,7 @@ test('MCP-Server: gemeldete Definition ohne Header, die Paare erst beim Start', 
   assert.deepStrictEqual(def.headers, {}, 'die gemeldete Definition trägt keine Header');
   assert.strictEqual(def.version, 'eigen=kp,vm=kamran');
   for (const t of [TOKEN_A, TOKEN_B]) assert.ok(!JSON.stringify(defs).includes(t), 'Token in der Definition');
-  const started = provider.resolveMcpServerDefinition(def);
+  const started = await provider.resolveMcpServerDefinition(def);
   assert.deepStrictEqual(started.headers, {
     'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B,
     'X-Keph-Account-vm': 'kamran', 'X-Keph-Token-vm': TOKEN_A,
@@ -295,7 +326,7 @@ test('MCP-Server: bei Trace nicht gemeldet und nicht gestartet', async () => {
     vscode.env.logLevel = vscode.LogLevel.Trace;
     assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
     assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
-    assert.strictEqual(provider.resolveMcpServerDefinition(def), undefined);
+    assert.strictEqual(await provider.resolveMcpServerDefinition(def), undefined);
     assert.deepStrictEqual(def.headers, {}, 'bei Trace keine Header eingesetzt');
     assert.strictEqual(warnings.length, 1, warnings.join('\n'));
     assert.match(warnings[0], /Trace/);
@@ -303,7 +334,7 @@ test('MCP-Server: bei Trace nicht gemeldet und nicht gestartet', async () => {
     assert.ok(!logs.join('\n').includes(TOKEN_A), 'Token im Log');
     vscode.env.logLevel = logLevel;
     const [again] = provider.provideMcpServerDefinitions();
-    assert.deepStrictEqual(hubsOf(provider.resolveMcpServerDefinition(again).headers), ['vm']);
+    assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(again)).headers), ['vm']);
   } finally {
     vscode.window.showWarningMessage = showWarningMessage;
     vscode.env.logLevel = logLevel;
@@ -324,13 +355,13 @@ test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => 
     await settle();
     const [def] = provider.provideMcpServerDefinitions();
     assert.strictEqual(def.version, 'eigen=kp');
-    const { headers } = provider.resolveMcpServerDefinition(def);
+    const { headers } = await provider.resolveMcpServerDefinition(def);
     assert.deepStrictEqual(headers, { 'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B });
     assert.ok(logs.some((l) => l.includes('Hub vm: mehrere Accounts (alice, bob), keiner gewählt')), logs.join('\n'));
     settings.accounts = { vm: 'bob' };
     const [chosen] = provider.provideMcpServerDefinitions();
     assert.strictEqual(chosen.version, 'eigen=kp,vm=bob');
-    assert.deepStrictEqual(provider.resolveMcpServerDefinition(chosen).headers, {
+    assert.deepStrictEqual((await provider.resolveMcpServerDefinition(chosen)).headers, {
       'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B,
       'X-Keph-Account-vm': 'bob', 'X-Keph-Token-vm': TOKEN_B,
     });
@@ -378,4 +409,172 @@ test('Statusleiste: Hub ohne Token des Clients neutral, leere Token-Datei gelb',
   await registered['kephalaion.showStatus']();
   assert.ok(logs.includes('  Warnung: Token-Datei tokens/t030b/acc030.token leer oder nicht lesbar'), logs.join('\n'));
   fs.rmSync(path.join(tokens, 't030b'), { recursive: true, force: true });
+});
+
+// --- Schranke und Pause an einer entfernten nodeUrl (Task 025; docs/vscode.md, „Fehlversuche“) ---
+
+const REMOTE = 'https://node.example.org/kephalaion';
+// whoami eines Nodes über den Proxy mit den Hub-Einträgen all, an dem nur die Paare der Hubs in
+// valid gelten: je Eintrag ok, invalid oder missing (kein Paar geschickt) — wie der Node; ohne
+// gültiges Paar verdeckt.
+function proxyNode(valid, all = valid) {
+  return (params, headers) => {
+    if (params.name !== 'whoami') return null;
+    const sent = hubsOf(headers);
+    if (!sent.some((h) => valid.includes(h))) return HIDDEN;
+    const sync = { last_success: '2026-10-09T10:00:00Z', revision: 1 };
+    const hubs = all.map((hub) => {
+      if (!sent.includes(hub)) return { hub, login: 'missing', node: 'n', sync };
+      if (!valid.includes(hub)) return { hub, login: 'invalid', node: 'n', sync };
+      return { hub, login: 'ok', node: 'n', account: headers[`X-Keph-Account-${hub}`], user: 'u', sync,
+        collections: [{ collection: 'test', address: `${hub}:test`, rights: ['read'], dirs: [] }] };
+    });
+    return { content: [{ type: 'text', text: '' }], structuredContent: { version: 'dev', hubs, unknown_hubs: [] } };
+  };
+}
+
+async function rejects(p, code) {
+  try {
+    await p;
+  } catch (e) {
+    assert.strictEqual(e.code, code, e.message);
+    return e;
+  }
+  assert.fail(`kein ${code}`);
+  return undefined;
+}
+
+// Beim Start mit ungültigem Paar und wiederhergestellten Ordnern geht genau eine Anfrage mit
+// dem Paar hinaus (die Probe); whoami, changes, stat, readDirectory und readFile warten darauf und
+// scheitern als Unavailable — nicht FileNotFound. Die Leiste zeigt „pausiert“; weder Datei noch
+// Log nennen ein Token oder seinen Hash.
+test('Schranke: Start mit ungültigem Paar — genau eine Anfrage, Dateisystem Unavailable', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: REMOTE, hubs: ['vm'], accounts: {} });
+  reply = proxyNode([]);
+  logs.length = 0;
+  try {
+    start();
+    const uri = { authority: 'vm', path: '/test', toString: () => 'keph://vm/test' };
+    const pending = [fsProvider.stat(uri), fsProvider.readDirectory(uri), fsProvider.readFile({ ...uri, path: '/test/a.md' })];
+    for (const p of pending) await rejects(p, 'Unavailable');
+    await settle();
+    assert.strictEqual(calls.length, 1, `${calls.length} Anfragen an den Node`);
+    assert.deepStrictEqual(hubsOf(calls[0].headers), ['vm']);
+    assert.strictEqual(statusItem.text, '$(warning) Keph vm');
+    assert.ok(statusItem.backgroundColor);
+    await rejects(fsProvider.stat(uri), 'Unavailable');
+    await fsProvider.pollChanges();
+    assert.strictEqual(calls.length, 1, 'eine weitere Anfrage trotz Pause');
+    logs.length = 0;
+    await registered['kephalaion.showStatus']();
+    assert.ok(logs.some((l) => l.startsWith('Node nicht gefragt (alle Paare pausiert, 1 Fehlversuche in 10 min)')), logs.join('\n'));
+    assert.ok(logs.some((l) => /Warnung: pausiert — Anmeldung ungültig \(1 Fehlversuch\), nächste Probe in 1 min/.test(l)),
+      logs.join('\n'));
+    assert.strictEqual(calls.length, 1, 'showStatus fragte trotz Pause');
+    const file = fs.readFileSync(pauseFile, 'utf8');
+    assert.ok(!file.includes(TOKEN_A) && !file.includes(crypto.createHash('sha256').update(TOKEN_A).digest('hex')));
+    assert.ok(!logs.join('\n').includes(TOKEN_A));
+    // Der MCP-Server für Copilot: ohne das pausierte Paar.
+    const [def] = provider.provideMcpServerDefinitions();
+    assert.deepStrictEqual((await provider.resolveMcpServerDefinition(def)).headers, {});
+    assert.strictEqual(calls.length, 1);
+  } finally {
+    reply = null;
+  }
+});
+
+// Zwei Hubs, einer ungültig: Nach der Probe geht nur das gültige Paar mit; Aufrufe für den
+// anderen Hub scheitern ohne Anfrage, der MCP-Server bekommt nur das gültige Paar.
+test('Pause je Paar: zwei Hubs, einer ungültig — nur das gültige Paar, der andere ohne Anfrage', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putToken('eigen', 'kp', TOKEN_B);
+  Object.assign(settings, { nodeUrl: REMOTE, hubs: ['vm', 'eigen'], accounts: {} });
+  reply = proxyNode(['vm'], ['vm', 'eigen']);
+  try {
+    start();
+    await settle();
+    assert.ok(calls.length >= 2, `${calls.length} Anfragen`);
+    assert.deepStrictEqual(hubsOf(calls[0].headers), ['eigen', 'vm'], 'die Probe mit beiden Paaren');
+    for (const c of calls.slice(1)) assert.deepStrictEqual(hubsOf(c.headers), ['vm'], 'das ungültige Paar ging noch einmal mit');
+    assert.strictEqual(statusItem.text, '$(warning) Keph vm eigen');
+    const n = calls.length;
+    await rejects(fsProvider.stat({ authority: 'eigen', path: '/test', toString: () => 'keph://eigen/test' }), 'Unavailable');
+    assert.strictEqual(calls.length, n, 'Anfrage für den pausierten Hub');
+    reply = (p, h) => (p.name === 'read' ? { content: [], structuredContent: { kind: 'directory', name: '', writable: false } }
+      : proxyNode(['vm'], ['vm', 'eigen'])(p, h));
+    await fsProvider.stat({ authority: 'vm', path: '/test', toString: () => 'keph://vm/test' });
+    assert.strictEqual(calls.length, n + 1);
+    assert.deepStrictEqual(hubsOf(calls[n].headers), ['vm']);
+    const [def] = provider.provideMcpServerDefinitions();
+    assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(def)).headers), ['vm']);
+    logs.length = 0;
+    await registered['kephalaion.showStatus']();
+    assert.ok(logs.some((l) => l.includes('Hub eigen (Node n): Anmeldung missing')), logs.join('\n'));
+    assert.ok(logs.some((l) => l.includes('Warnung: pausiert — Anmeldung ungültig (1 Fehlversuch)')), logs.join('\n'));
+    assert.ok(!logs.some((l) => l.includes('leer oder nicht lesbar')), logs.join('\n'));
+  } finally {
+    reply = null;
+  }
+});
+
+// Lokal bleibt alles: keine Probe vorab, keine Pause, keine Pausendatei — auch mit ungültigem Paar.
+test('lokale nodeUrl: ohne Probe und Pause, auch mit ungültigem Paar', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  reply = () => HIDDEN;
+  try {
+    start();
+    await settle();
+    assert.ok(calls.length >= 2, `${calls.length} Anfragen (whoami und changes gehen beide hinaus)`);
+    for (const c of calls) assert.deepStrictEqual(hubsOf(c.headers), ['vm']);
+    assert.ok(!fs.existsSync(pauseFile), 'Pausendatei lokal');
+    assert.strictEqual(statusItem.text, '$(warning) Keph: nicht angemeldet');
+  } finally {
+    reply = null;
+  }
+});
+
+// Erkennen im Betrieb: Eine 401 des Proxys pausiert alle Paare der Adresse; danach geht nichts mehr
+// hinaus. Ein Hub, dessen Collections changes alle als dropped meldet, ist ungültig geworden.
+test('Erkennen: 401 des Proxys und dropped in changes pausieren das Paar', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: REMOTE, hubs: ['vm'], accounts: {} });
+  reply = proxyNode(['vm']);
+  try {
+    start();
+    await settle();
+    const n = calls.length;
+    assert.ok(n >= 2);
+    reply = () => new Response('auth', { status: 401, headers: { 'content-type': 'text/plain' } });
+    await fsProvider.pollChanges();
+    assert.strictEqual(calls.length, n + 1);
+    await fsProvider.pollChanges();
+    assert.strictEqual(calls.length, n + 1, 'nach der 401 ging noch eine Anfrage hinaus');
+    assert.strictEqual(statusItem.text, '$(warning) Keph vm');
+  } finally {
+    reply = null;
+  }
+  // dropped: die eben noch lesbare Collection vm:test fällt weg — das Paar ist ungültig.
+  stop();
+  const cursor = { changes: [], cursor: 'c1', more: false };
+  reply = (p, h) => (p.name === 'changes' ? { content: [], structuredContent: cursor } : proxyNode(['vm'])(p, h));
+  try {
+    start();
+    await settle();
+    await fsProvider.pollChanges();
+    const n = calls.length;
+    cursor.dropped = ['vm:test'];
+    await fsProvider.pollChanges();
+    assert.strictEqual(calls.length, n + 1);
+    assert.strictEqual(statusItem.text, '$(warning) Keph vm');
+    await fsProvider.pollChanges();
+    assert.strictEqual(calls.length, n + 1, 'nach dropped ging noch eine Anfrage hinaus');
+  } finally {
+    reply = null;
+  }
 });

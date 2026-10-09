@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const rules = require('./rules');
+const pause = require('./pause');
 
 const SCHEME = 'keph';
 const POLL_MS = 30000;
@@ -124,14 +125,24 @@ function readCredentials(log) {
     } else if (chosen[hub]) {
       log(`Hub ${hub}: gewählter Account ${chosen[hub]} hat keine Token-Datei, nehme ${account}`);
     }
+    const file = path.join(base, hub, `${account}.token`);
     let token = '';
     try {
-      token = fs.readFileSync(path.join(base, hub, `${account}.token`), 'utf8').split('\n')[0].trim();
+      token = fs.readFileSync(file, 'utf8').split('\n')[0].trim();
     } catch (e) {
       log(`Hub ${hub}: Token-Datei ${account}.token nicht lesbar: ${e.message}`);
     }
+    // Die Kennung der Token-Datei (Größe und Zeit, ohne Inhalt) für die Pausendatei: Ändert sie
+    // sich, ist das Paar neu zu proben (pause.js).
+    let tokenId = '-';
+    try {
+      const st = fs.statSync(file);
+      tokenId = `${st.size}:${st.mtimeMs}`;
+    } catch {
+      // bleibt '-'
+    }
     const missing = how === 'first' && chosen[hub] ? chosen[hub] : undefined;
-    creds[hub] = { account, token, accounts, how, missing };
+    creds[hub] = { account, token, tokenId, accounts, how, missing };
   }
   return creds;
 }
@@ -166,13 +177,18 @@ function mcpLogins() {
   return out;
 }
 
-// Die Header-Paare für den Start des Servers, aus den Token-Dateien. Meldungen nennen nie ein
-// Token.
-function mcpHeaders(log) {
+// Die Header-Paare für den Start des Servers, aus den Token-Dateien; ein pausiertes Paar (paused:
+// { hub: … }, Task 025) fehlt. Meldungen nennen nie ein Token.
+function mcpHeaders(log, paused) {
   const base = path.join(configDir(), 'tokens');
   const { logins, skipped } = mcpLogins();
   for (const s of skipped) log(`MCP-Server: Hub ${s}`);
-  return rules.mcpHeaders(logins,
+  const active = logins.filter((l) => {
+    if (!paused || !paused[l.hub]) return true;
+    log(`MCP-Server: Hub ${l.hub}: Paar ${l.account} pausiert (Anmeldung ungültig), nicht an den Server`);
+    return false;
+  });
+  return rules.mcpHeaders(active,
     (hub, account) => fs.readFileSync(path.join(base, hub, `${account}.token`), 'utf8').split('\n')[0].trim(), log);
 }
 
@@ -196,8 +212,9 @@ function mcpState() {
 }
 
 class McpProvider {
-  constructor(log) {
+  constructor(log, node) {
     this.log = log;
+    this.node = node;
     this._changed = new vscode.EventEmitter();
     this.onDidChangeMcpServerDefinitions = this._changed.event;
     this._state = mcpState();
@@ -242,9 +259,12 @@ class McpProvider {
     return [new vscode.McpHttpServerDefinition(MCP_LABEL, vscode.Uri.parse(url), {}, version)];
   }
 
-  resolveMcpServerDefinition(server) {
+  // Beim Start des Servers: An eine entfernte Adresse erst nach der Probe (Schranke, pause.js),
+  // ohne die pausierten Paare. Ein laufender Server behält seine Header.
+  async resolveMcpServerDefinition(server) {
     if (!mcpEnabled() || traceLogging()) return undefined;
-    server.headers = mcpHeaders(this.log);
+    await this.node.ready();
+    server.headers = mcpHeaders(this.log, this.node.paused());
     const hubs = Object.keys(server.headers).filter((h) => h.startsWith('X-Keph-Account-'))
       .map((h) => `${h.slice('X-Keph-Account-'.length)}=${server.headers[h]}`);
     this.log(`MCP-Server gestartet: ${server.uri}, ${hubs.length ? hubs.join(', ') : 'ohne Anmeldung'}`);
@@ -268,21 +288,72 @@ function nodeError(message, kind) {
 }
 
 class Node {
-  constructor(log) {
+  // onPauseChange wird gerufen, wenn sich der Stand der Pausen ändert (Statusleiste neu zeichnen).
+  constructor(log, onPauseChange) {
     this.log = log;
     this.id = 0;
+    // Schranke, Pause und Budget an einer entfernten Adresse (pause.js, Task 025) — ein Stand
+    // für alle Fenster dieses Rechners in der Pausendatei.
+    this.gate = new pause.Gate({ file: new pause.PauseFile(pause.pauseFilePath()), log, onChange: onPauseChange || (() => {}) });
   }
 
-  async call(tool, args) {
-    return (await this.request(tool, args)).structuredContent;
+  // opts.hub: der Hub, den die Anfrage betrifft — ein pausiertes Paar scheitert ohne Anfrage.
+  async call(tool, args, opts) {
+    return (await this.request(tool, args, opts)).result.structuredContent;
   }
 
   // Wie call, dazu der Text des Ergebnisses. Bei read ist er nur das JSON der Struktur, der
   // Inhalt steht in data.content (Task 024); den Text braucht readFile nur für einen älteren
   // Node, bei dem er der Inhalt war.
-  async callWithText(tool, args) {
-    const r = await this.request(tool, args);
+  async callWithText(tool, args, opts) {
+    const r = (await this.request(tool, args, opts)).result;
     return { data: r.structuredContent, text: (r.content || []).map((c) => c.text || '').join('') };
+  }
+
+  // Wie call, dazu die geschickten Paare (sent) — für das Erkennen an changes.
+  async callSent(tool, args) {
+    const r = await this.request(tool, args);
+    return { data: r.result.structuredContent, sent: r.sent };
+  }
+
+  // Die Paare der Anmeldungen ohne Token: Hub, Account, Kennung der Token-Datei.
+  pairs() {
+    return Object.entries(this.credentials()).filter(([, c]) => c.token)
+      .map(([hub, c]) => ({ hub, account: c.account, tokenId: c.tokenId }));
+  }
+
+  // Die Probe: whoami mit genau diesen Paaren, an der Schranke vorbei; request beobachtet die
+  // Antwort.
+  probe(pairs) {
+    return this.request('whoami', {}, { probe: true, hubs: pairs.map((p) => p.hub) });
+  }
+
+  // Die Schranke: An eine entfernte Adresse erst nach der Probe; lokal nichts.
+  async ready() {
+    const t = nodeTarget();
+    if (!t.remote) return;
+    await this.gate.ensure(t.endpoint, this.pairs(), (pairs) => this.probe(pairs));
+  }
+
+  // Die pausierten Paare an der entfernten Adresse ({ hub: { account, failures, nextProbe } });
+  // lokal keine.
+  paused() {
+    const t = nodeTarget();
+    if (!t.remote || !t.endpoint) return {};
+    return this.gate.paused(t.endpoint, this.pairs());
+  }
+
+  // Fehlversuche der Adresse in den letzten 10 min (Budget), für die Anzeige.
+  budget() {
+    const t = nodeTarget();
+    return t.remote && t.endpoint ? this.gate.budget(t.endpoint) : 0;
+  }
+
+  // Eine Antwort hat Paare als ungültig erwiesen (changes: alle Collections eines Hubs weg).
+  noteInvalid(sent, hubs) {
+    const t = nodeTarget();
+    if (!t.remote || !hubs.length) return;
+    this.gate.observe(t.endpoint, sent, { invalid: hubs });
   }
 
   // Tokens je Aufruf frisch, aber höchstens alle 5 s von der Platte (stat kommt oft).
@@ -295,29 +366,58 @@ class Node {
     return this._creds;
   }
 
-  // Nach einer anderen Wahl oder Einstellung sofort neu lesen.
+  // Nach einer anderen Wahl oder Einstellung sofort neu lesen — und an einer entfernten Adresse
+  // neu proben (Zutun des Nutzers: zählt ins Budget, wartet nicht darauf).
   invalidate() {
     this._creds = undefined;
+    this.gate.reset();
   }
 
   // Ein Aufruf, nie wiederholt — auch kein Schreibvorgang. Die Antwort eines Werkzeugs mit
   // Fehler trägt toolError, den Text als toolText und, bei den Werkzeugen, die schreiben, den
   // Code aus error.code als toolCode; nach ihm wird entschieden, nicht nach der Meldung.
-  async request(tool, args) {
+  // Liefert { result, sent }: das Ergebnis und die geschickten Paare.
+  //
+  // An eine entfernte Adresse (Task 025): erst die Probe (Schranke), dann ohne die pausierten
+  // Paare; betrifft die Anfrage einen pausierten Hub (opts.hub), scheitert sie ohne Anfrage
+  // (kind paused); bleibt kein Paar, geht nichts hinaus. Die Antwort wird beobachtet: eine 401
+  // des Proxys heißt alle geschickten Paare ungültig, whoami sagt es je Hub (rules.whoamiOutcome).
+  // opts.probe ist die Probe selbst (an der Schranke vorbei, Paare opts.hubs).
+  async request(tool, args, opts = {}) {
     const target = nodeTarget();
     const url = target.endpoint;
     if (!url) throw nodeError(target.error, 'unreachable');
     const sel = hubSelection();
     if (sel.error) throw nodeError(sel.error, 'unreachable');
+    const creds = this.credentials();
+    let hubs = Object.keys(creds).filter((h) => creds[h].token);
+    if (target.remote && !opts.probe) {
+      await this.gate.ensure(url, this.pairs(), (pairs) => this.probe(pairs));
+      const paused = this.paused();
+      if (opts.hub && paused[opts.hub]) {
+        throw nodeError(`Hub ${opts.hub}: Anmeldung pausiert (ungültiges Paar), nächste Probe `
+          + `${pause.inTime(paused[opts.hub].nextProbe - Date.now())}; nichts gefragt`, 'paused');
+      }
+      const active = hubs.filter((h) => !paused[h]);
+      if (!active.length && hubs.length) throw nodeError('alle Paare pausiert (Anmeldung ungültig); nichts gefragt', 'paused');
+      hubs = active;
+    }
+    if (opts.hubs) hubs = opts.hubs;
     const headers = {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
     };
-    for (const [hub, c] of Object.entries(this.credentials())) {
-      if (!c.token) continue;
+    const sent = [];
+    for (const hub of hubs) {
+      const c = creds[hub];
+      if (!c || !c.token) continue;
       headers[`X-Keph-Account-${hub}`] = c.account;
       headers[`X-Keph-Token-${hub}`] = c.token;
+      sent.push({ hub, account: c.account, tokenId: c.tokenId });
     }
+    const observe = (outcome) => {
+      if (target.remote && sent.length) this.gate.observe(url, sent, outcome);
+    };
     const body = { jsonrpc: '2.0', id: ++this.id, method: 'tools/call', params: { name: tool, arguments: args || {} } };
     let res;
     try {
@@ -330,6 +430,8 @@ class Node {
       if (NOT_SENT.has(code)) throw nodeError(`Node ${url} nicht erreichbar (${why})`, 'unreachable');
       throw nodeError(`Verbindung zum Node ${url} abgebrochen (${why})`, 'unclear');
     }
+    // Eine 401 des Proxys zählt an dessen Jail wie ein Fehlversuch — für die ganze Adresse.
+    if (res.status === 401) observe({ invalid: 'all' });
     // Eine Antwort, die nicht vom Node kommt (Proxy: 401, Weiterleitung, HTML), hat er nie
     // ausgeführt — außer 5xx, da ist der Ausgang unklar.
     const why = rules.explainResponse(res.status, res.headers.get('content-type'));
@@ -351,7 +453,8 @@ class Node {
       err.toolCode = sc && sc.error ? sc.error.code : undefined;
       throw err;
     }
-    return msg.result;
+    if (tool === 'whoami' && msg.result) observe(rules.whoamiOutcome(msg.result.structuredContent, sent.map((p) => p.hub)));
+    return { result: msg.result, sent };
   }
 }
 
@@ -390,9 +493,15 @@ class Status {
       this.error = undefined;
       this.noteVersion();
     } catch (e) {
-      this.who = undefined;
-      this.error = e.message;
-      this.log(`whoami: ${this.error}`);
+      if (e.kind === 'paused') {
+        // Alle Paare pausiert: keine Anfrage; die Leiste zeigt die Pausen aus der Datei.
+        this.who = { paused: true, hubs: [], unknown_hubs: [] };
+        this.error = undefined;
+      } else {
+        this.who = undefined;
+        this.error = e.message;
+        this.log(`whoami: ${this.error}`);
+      }
     }
     this.render();
     this._changed.fire();
@@ -435,9 +544,17 @@ class Status {
   }
 
   // Die Regel der Statusleiste auf den Hubs von whoami (rules.hubStatus): genutzt sind die Hubs
-  // mit Zugangsdaten, nur sie warnen; Tooltip und summary() lesen beide hieraus.
+  // mit Zugangsdaten, nur sie warnen — ein pausiertes Paar mit dem Grund „pausiert“; Tooltip und
+  // summary() lesen beide hieraus.
   status() {
-    return rules.hubStatus(this.hubs(), this.node.credentials(), this.unchosen());
+    return rules.hubStatus(this.hubs(), this.node.credentials(), this.unchosen(), this.node.paused(), Date.now());
+  }
+
+  // Die Zeile zur Version: ohne Antwort (alle Paare pausiert) nur die Erweiterung.
+  versionLine() {
+    return this.who.paused
+      ? `Node nicht gefragt (alle Paare pausiert, ${this.node.budget()} Fehlversuche in 10 min), Erweiterung ${ext.packageJSON.version}`
+      : `Version Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}`;
   }
 
   // Dasselbe wie der Tooltip, als Text — für „Kephalaion: Status anzeigen“.
@@ -451,21 +568,27 @@ class Status {
       lines.push(`Keine gültige Anmeldung am Node (über den Proxy nennt er dann weder Version noch Hubs): ${HIDDEN_HINT}`);
       return lines;
     }
-    lines.push(`Version Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}`);
+    lines.push(this.versionLine());
     const st = this.status();
     if (!st.used.length) lines.push(`Warnung: ${st.warning}`);
-    this.hubs().forEach((h, i) => {
-      const s = st.hubs[i];
+    for (const s of st.hubs) {
+      const h = this.hubs().find((x) => x.hub === s.hub);
+      if (!h) {
+        // Vom Node nicht genannt: pausiert, keine Anfrage.
+        lines.push(`Hub ${s.hub}: keine Anfrage`);
+        lines.push(`  Warnung: ${s.warning}`);
+        continue;
+      }
       let l = `Hub ${h.hub} (Node ${h.node}): ${s.used ? `Anmeldung ${h.login}` : s.note}`;
       if (h.login === 'ok') l += `, Account ${h.account}, User ${h.user}`;
       lines.push(l);
       if (s.warning) lines.push(`  Warnung: ${s.warning}`);
       if (this.accountNote(h.hub)) lines.push(`  ${this.accountNote(h.hub)}`);
       for (const c of h.collections || []) lines.push(`  ${c.address}: ${c.rights.join(', ')}`);
-      const sy = h.sync;
+      const sy = h.sync || {};
       lines.push(sy.never_synced ? '  noch nie abgeglichen' : `  abgeglichen ${sy.last_success}, Revision ${sy.revision}`);
       if (sy.last_error) lines.push(`  letzter Fehler ${sy.last_error_at}: ${sy.last_error}`);
-    });
+    }
     if ((this.who.unknown_hubs || []).length) lines.push(`Token-Verzeichnisse ohne Hub am Node: ${this.who.unknown_hubs.join(', ')}`);
     return lines;
   }
@@ -490,21 +613,25 @@ class Status {
     it.backgroundColor = st.warning ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
 
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**Kephalaion** — Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}\n\n`);
+    md.appendMarkdown(`**Kephalaion** — ${this.versionLine()}\n\n`);
     if (!st.used.length) md.appendMarkdown(`${st.warning}\n\n`);
-    this.hubs().forEach((h, i) => {
-      const s = st.hubs[i];
+    for (const s of st.hubs) {
+      const h = this.hubs().find((x) => x.hub === s.hub);
+      if (!h) {
+        md.appendMarkdown(`**${s.hub}**: keine Anfrage\n\nWarnung: ${s.warning}\n\n`);
+        continue;
+      }
       md.appendMarkdown(`**${h.hub}** (Node ${h.node}): ${s.used ? `Anmeldung \`${h.login}\`` : s.note}`);
       if (h.login === 'ok') md.appendMarkdown(`, Account ${h.account}, User ${h.user}`);
       md.appendMarkdown('\n\n');
       if (s.warning) md.appendMarkdown(`Warnung: ${s.warning}\n\n`);
       if (this.accountNote(h.hub)) md.appendMarkdown(`${this.accountNote(h.hub)}\n\n`);
       for (const c of h.collections || []) md.appendMarkdown(`- \`${c.address}\` — ${c.rights.join(', ')}\n`);
-      const sy = h.sync;
+      const sy = h.sync || {};
       if (sy.never_synced) md.appendMarkdown('\nnoch nie abgeglichen\n\n');
       else md.appendMarkdown(`\nabgeglichen ${sy.last_success}, Revision ${sy.revision}\n\n`);
       if (sy.last_error) md.appendMarkdown(`letzter Fehler ${sy.last_error_at}: ${sy.last_error}\n\n`);
-    });
+    }
     if ((this.who.unknown_hubs || []).length) {
       md.appendMarkdown(`Token-Verzeichnisse ohne Hub am Node: ${this.who.unknown_hubs.join(', ')}\n`);
     }
@@ -521,7 +648,8 @@ const CHANGES_MS = 3000;
 const MAX_DOCUMENT_BYTES = 1 << 20;
 
 // Fehler beim Lesen: eine Antwort des Werkzeugs („nicht lesbar“ u. ä.) wird FileNotFound,
-// ein Fehler der Verbindung Unavailable.
+// ein Fehler der Verbindung Unavailable — auch ein pausiertes Paar (ohne Anfrage): nicht
+// FileNotFound, sonst hielte VS Code die Dateien für gelöscht.
 function toFsError(e, uri) {
   if (e.toolError) return vscode.FileSystemError.FileNotFound(uri);
   return vscode.FileSystemError.Unavailable(`Kephalaion: ${e.message}`);
@@ -632,6 +760,7 @@ class Events {
 class KephFs {
   constructor(node, status, log) {
     this.node = node;
+    this.status = status;
     this.log = log;
     this.cursor = undefined;
     this._emitter = new vscode.EventEmitter();
@@ -768,7 +897,7 @@ class KephFs {
     if (!col) return this.dir(false);
     let d;
     try {
-      d = await this.node.call('read', { collection: `${hub}:${col}`, name, content: false });
+      d = await this.node.call('read', { collection: `${hub}:${col}`, name, content: false }, { hub });
     } catch (e) {
       throw toFsError(e, uri);
     }
@@ -792,7 +921,7 @@ class KephFs {
     const out = [];
     try {
       for (;;) {
-        const r = await this.node.call('list', args);
+        const r = await this.node.call('list', args, { hub });
         for (const e of r.entries || []) {
           const last = e.name.split('/').pop();
           if (e.kind === 'document') {
@@ -820,7 +949,7 @@ class KephFs {
     if (!col || !name) throw vscode.FileSystemError.FileIsADirectory(uri);
     let r;
     try {
-      r = await this.node.callWithText('read', { collection: `${hub}:${col}`, name });
+      r = await this.node.callWithText('read', { collection: `${hub}:${col}`, name }, { hub });
     } catch (e) {
       throw toFsError(e, uri);
     }
@@ -840,7 +969,7 @@ class KephFs {
   async look(hub, col, name) {
     let d;
     try {
-      d = await this.node.call('read', { collection: `${hub}:${col}`, name, content: false });
+      d = await this.node.call('read', { collection: `${hub}:${col}`, name, content: false }, { hub });
     } catch (e) {
       throw lookError(e);
     }
@@ -852,7 +981,7 @@ class KephFs {
   async change(tool, args) {
     let r;
     try {
-      r = await this.node.call(tool, args);
+      r = await this.node.call(tool, args, { hub: args.collection.split(':')[0] });
     } catch (e) {
       this.log(`${tool} ${args.collection} ${args.name}: ${e.toolCode || e.kind || 'Fehler'} — ${e.toolText || e.message}`);
       throw writeError(e);
@@ -990,8 +1119,9 @@ class KephFs {
   // der erste Aufruf nur den Ausgangspunkt „ab jetzt“.
   async pollChanges() {
     let r;
+    let sent;
     try {
-      r = await this.node.call('changes', this.cursor ? { cursor: this.cursor } : {});
+      ({ data: r, sent } = await this.node.callSent('changes', this.cursor ? { cursor: this.cursor } : {}));
     } catch (e) {
       if (e.toolError) {
         // z. B. ungültiger cursor: neu ansetzen; was dazwischen lag, ist verloren.
@@ -1041,6 +1171,14 @@ class KephFs {
       ev.add(vscode.FileChangeType.Changed, hubUri(address.split(':')[0]));
     }
     this.fire(ev);
+    // Ein Hub, der eben noch lesbar war und es gar nicht mehr ist (alle seine Collections aus dem
+    // letzten whoami sind dropped): sein Paar ist ungültig geworden — rotate auf einem anderen
+    // Rechner, Account gesperrt (rules.droppedHubs, Task 025).
+    if ((r.dropped || []).length && sent) {
+      const readable = {};
+      for (const p of sent) readable[p.hub] = this.status.collections(p.hub).map((c) => c.address);
+      this.node.noteInvalid(sent, rules.droppedHubs(r.dropped, readable));
+    }
     if (r.more) return this.pollChanges();
   }
 }
@@ -1053,8 +1191,9 @@ function activate(context) {
   ext = context.extension;
   const out = vscode.window.createOutputChannel('Kephalaion');
   const log = (s) => out.appendLine(`${new Date().toISOString()} ${s}`);
-  const node = new Node(log);
-  const status = new Status(node, log);
+  let status;
+  const node = new Node(log, () => status && status.render());
+  status = new Status(node, log);
   const kfs = new KephFs(node, status, log);
 
   context.subscriptions.push(
@@ -1138,7 +1277,7 @@ function activate(context) {
   );
 
   // Der Node als MCP-Server für Copilot; die API gibt es ab VS Code 1.101.
-  const mcp = new McpProvider(log);
+  const mcp = new McpProvider(log, node);
   if (vscode.lm && typeof vscode.lm.registerMcpServerDefinitionProvider === 'function') {
     context.subscriptions.push(
       vscode.lm.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, mcp),
