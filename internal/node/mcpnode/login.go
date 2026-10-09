@@ -91,6 +91,13 @@ type Login struct {
 	// Unreadable ist gesetzt, wenn sich die Replica beim Prüfen nicht lesen
 	// ließ; State ist dann LoginMissing.
 	Unreadable *UnreadableError
+	// Known sagt, dass die Replica lebende Zeilen des Accounts hat — bei
+	// LoginInvalid also: das Token passt nicht zur Zeile. Nach node account
+	// rotate an einem anderen Node ist die Zeile bis zum nächsten Abgleich
+	// veraltet; darauf stützt sich der Anstoß in guard (Task 025).
+	Known bool
+	// entry ist der Hub-Eintrag, für den Anstoß des Abgleichs.
+	entry store.Hub
 }
 
 // Right ist das Recht eines Accounts in einer Collection.
@@ -113,6 +120,21 @@ func (l Logins) Valid() []Login {
 	for _, h := range l.Hubs {
 		if h.State == LoginOK {
 			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// KnownInvalid liefert die Hub-Einträge, an denen ein Paar abgewiesen
+// wurde, obwohl die Replica den Account kennt (LoginInvalid mit Known) —
+// die Zeile kann veraltet sein, etwa nach node account rotate an einem
+// anderen Node. Ein unbekannter Account, ein halbes Paar und ein Hub ohne
+// Replica zählen nicht: Dort brächte ein Abgleich nichts.
+func (l Logins) KnownInvalid() []store.Hub {
+	var out []store.Hub
+	for _, h := range l.Hubs {
+		if h.State == LoginInvalid && h.Known {
+			out = append(out, h.entry)
 		}
 	}
 	return out
@@ -152,7 +174,7 @@ func (n *Node) Authenticate(ctx context.Context, header http.Header) (Logins, er
 		p, ok := pairs[h.Name]
 		delete(pairs, h.Name)
 		if !ok {
-			out.Hubs = append(out.Hubs, Login{Hub: h.Name, Node: h.NodeName, State: LoginMissing})
+			out.Hubs = append(out.Hubs, Login{Hub: h.Name, Node: h.NodeName, State: LoginMissing, entry: h})
 			continue
 		}
 		login, err := n.check(ctx, h, p)
@@ -161,6 +183,7 @@ func (n *Node) Authenticate(ctx context.Context, header http.Header) (Logins, er
 		} else if err != nil {
 			return Logins{}, err
 		}
+		login.entry = h
 		out.Hubs = append(out.Hubs, login)
 	}
 	for _, p := range list {
@@ -175,7 +198,8 @@ func (n *Node) Authenticate(ctx context.Context, header http.Header) (Logins, er
 // Zeilen des Accounts über den Index, sha256 des Tokens, Vergleich in
 // konstanter Zeit; ohne Zeile gegen einen Ersatz-Hash. Unbekannter Account,
 // falsches Token, eine unvollständige Angabe und eine fehlende Replica
-// ergeben dasselbe: LoginInvalid. Eine Zeile, die sich nicht lesen lässt —
+// ergeben dasselbe: LoginInvalid — mit Known, wenn es Zeilen des Accounts
+// gab. Eine Zeile, die sich nicht lesen lässt —
 // etwa ohne user, von einem Hub vor Task 006 —, zählt nicht. Der User ist der
 // der ersten passenden Zeile; der Hub schreibt ihn in alle Zeilen eines
 // Accounts unter einer Revision.
@@ -193,6 +217,7 @@ func (n *Node) check(ctx context.Context, h store.Hub, p HubHeader) (Login, erro
 		subtle.ConstantTimeCompare([]byte(hash), []byte(dummyHash))
 		return out, nil
 	}
+	out.Known = true
 	var rights []Right
 	user := ""
 	for _, row := range rows {

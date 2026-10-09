@@ -168,9 +168,12 @@ func hides(h http.Header, l Logins) bool { return Proxied(h) && len(l.Valid()) =
 // die Header-Paare: Ist eines ungültig, vermerkt es zuerst login=invalid im
 // Log (ein Fehlversuch je Anfrage; die Zeile setzt via davor), dann die
 // Accounts (nur Namen). Über einen Proxy setzt es bei einem Fehlversuch den
-// Antwort-Header LoginHeader — auch neben einem gültigen Paar — und markiert
-// die Anfrage ohne gültige Anmeldung als verdeckt — initialize nennt dann
-// keine Version.
+// Antwort-Header LoginHeader — auch neben einem gültigen Paar —, stößt für
+// jeden Hub, dessen Replica den abgewiesenen Account kennt, den Abgleich an
+// (HubLink.Recheck: nach rotate an einem anderen Node ist die Zeile
+// veraltet; ohne zu warten, die Antwort bleibt gleich) und markiert die
+// Anfrage ohne gültige Anmeldung als verdeckt — initialize nennt dann keine
+// Version. Lokal gibt es weder Header noch Anstoß.
 func (n *Node) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := loopback.CheckHost(r); err != nil {
@@ -183,11 +186,13 @@ func (n *Node) guard(next http.Handler) http.Handler {
 		}
 		ctx := r.Context()
 		pairs := HubHeaders(r.Header)
+		var logins Logins
 		valid, failed := false, false
 		if len(pairs) > 0 {
 			// Ein Fehler von node.db zählt nicht als Fehlversuch; das
 			// Werkzeug meldet ihn selbst.
-			if logins, err := n.Authenticate(ctx, r.Header); err == nil {
+			if l, err := n.Authenticate(ctx, r.Header); err == nil {
+				logins = l
 				failed = logins.Failed()
 				if failed {
 					reqlog.Note(ctx, "login", "invalid")
@@ -201,6 +206,11 @@ func (n *Node) guard(next http.Handler) http.Handler {
 		if Proxied(r.Header) {
 			if failed {
 				w.Header().Set(LoginHeader, LoginInvalid)
+				if n.link.Recheck != nil {
+					for _, h := range logins.KnownInvalid() {
+						n.link.Recheck(h)
+					}
+				}
 			}
 			if !valid {
 				r = r.WithContext(context.WithValue(ctx, hiddenKey{}, true))

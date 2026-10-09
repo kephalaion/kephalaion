@@ -437,7 +437,7 @@ func wantWriteCode(t *testing.T, what string, out mcpnode.WriteOutput, code, wan
 // Über ssh schreibt der Node noch nicht: unsupported, ohne Anfrage.
 func TestMCPWriteUnsupportedTransport(t *testing.T) {
 	e := newCommEnv(t)
-	link := nodeHubLink(config.Config{}, nil, nil)
+	link := nodeHubLink(config.Config{}, nil, nil, nil)
 	h, err := nodeStore(t, e.cfg).Hub(context.Background(), "fern")
 	if err != nil {
 		t.Fatal(err)

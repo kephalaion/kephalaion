@@ -553,3 +553,86 @@ func TestBackgroundSyncKick(t *testing.T) {
 		t.Errorf("%d Abgleiche, laufend %v", n, bg.running)
 	}
 }
+
+// Der Anstoß nach einem abgewiesenen Paar (recheck, Task 025) ist
+// gedrosselt: Der erste gleicht sofort ab; weitere innerhalb der Frist
+// fallen zu genau einem zusammen, der an ihrem Ende folgt; nach der Frist
+// wieder sofort. ssh wird übergangen; nach dem Ende startet nichts mehr.
+func TestBackgroundSyncRecheck(t *testing.T) {
+	slow(t, "wartet die Frist der Drosselung ab (1 s)")
+	e := newCommEnv(t)
+	var calls atomic.Int32
+	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
+		c, err := httpapi.NewClient(address, rootCAs)
+		if err != nil {
+			return nil, err
+		}
+		return syncCounter{c, &calls}, nil
+	})
+	oldDelay := recheckDelay
+	recheckDelay = time.Second
+	t.Cleanup(func() { recheckDelay = oldDelay })
+	ns := nodeStore(t, e.cfg)
+	cfg, _, err := config.Load(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var log syncBuffer
+	bg := newBackgroundSync(ctx, ns, cfg, nil, reqlog.New(&log))
+	fern, err := ns.Hub(ctx, "fern")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle := func() bool {
+		bg.mu.Lock()
+		defer bg.mu.Unlock()
+		return !bg.running[fern.EntryID]
+	}
+	pending := func() bool {
+		bg.mu.Lock()
+		defer bg.mu.Unlock()
+		return bg.rechecks[fern.EntryID].pending
+	}
+	start := time.Now()
+	bg.recheck(fern)
+	eventually(t, "erster Abgleich", func() bool { return calls.Load() == 1 && idle() })
+	if time.Since(start) >= recheckDelay {
+		t.Skip("der erste Abgleich dauerte länger als die Frist; die Drosselung lässt sich so nicht messen")
+	}
+	// Innerhalb der Frist: drei weitere stoßen nichts an, einer wartet.
+	bg.recheck(fern)
+	bg.recheck(fern)
+	bg.recheck(fern)
+	if n := calls.Load(); n != 1 || !pending() {
+		t.Fatalf("innerhalb der Frist: %d Abgleiche, wartend %v", n, pending())
+	}
+	eventually(t, "nachgeholter Abgleich", func() bool { return calls.Load() == 2 && idle() })
+	if d := time.Since(start); d < recheckDelay {
+		t.Errorf("nachgeholt nach %s, vor dem Ende der Frist %s", d, recheckDelay)
+	}
+	if pending() {
+		t.Error("nach dem Nachholen wartet noch einer")
+	}
+	// Danach nichts mehr: Die drei Anstöße waren genau einer.
+	time.Sleep(recheckDelay + recheckDelay/2)
+	if n := calls.Load(); n != 2 {
+		t.Errorf("nach dem Nachholen %d Abgleiche, erwartet 2", n)
+	}
+	// Nach der Frist wieder sofort.
+	bg.recheck(fern)
+	eventually(t, "dritter Abgleich", func() bool { return calls.Load() == 3 && idle() })
+	if st := syncStatus(t, ns, "fern"); st.OKAt == 0 {
+		t.Errorf("hub_sync: %+v", st)
+	}
+	extern := fern
+	extern.EntryID, extern.Transport = "01ANDERER", nodestore.TransportSSH
+	bg.recheck(extern)
+	cancel()
+	bg.recheck(fern)
+	bg.wg.Wait()
+	if n := calls.Load(); n != 3 || len(bg.running) != 0 {
+		t.Errorf("%d Abgleiche, laufend %v", n, bg.running)
+	}
+}

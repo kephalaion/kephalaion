@@ -228,7 +228,7 @@ func serve(ctx context.Context, cfg config.Config, system bool, log *reqlog.Logg
 		bg = newBackgroundSync(bgCtx, nodes, cfg, hub, log)
 		for _, rl := range roles {
 			if rl.nodes != nil {
-				rl.server.Handler = newNodeHandler(rl.nodes, updates.Report, nodeHubLink(cfg, hub, bg.kick))
+				rl.server.Handler = newNodeHandler(rl.nodes, updates.Report, nodeHubLink(cfg, hub, bg.kick, bg.recheck))
 			}
 		}
 	}
@@ -502,11 +502,12 @@ func hubText(w http.ResponseWriter, r *http.Request, status int, text string) {
 
 // nodeHubLink ist der Weg der Werkzeuge des Nodes, die schreiben, zum Hub:
 // derselbe connector wie beim Abgleich — local nimmt hub, den Hub desselben
-// serve, wenn er ihn trägt —, und kick stößt den Abgleich eines Eintrags an.
-// Ein Transport, den der connector noch nicht kann (ssh), kommt als
+// serve, wenn er ihn trägt —, kick stößt den Abgleich eines Eintrags an und
+// recheck den gedrosselten nach einem abgewiesenen Paar (Task 025). Ein
+// Transport, den der connector noch nicht kann (ssh), kommt als
 // mcpnode.ErrUnsupported an; jeder andere Fehler beim Verbinden heißt für
 // das Werkzeug: Hub nicht erreichbar.
-func nodeHubLink(cfg config.Config, hub hubstore.Store, kick func(nodestore.Hub)) mcpnode.HubLink {
+func nodeHubLink(cfg config.Config, hub hubstore.Store, kick, recheck func(nodestore.Hub)) mcpnode.HubLink {
 	return mcpnode.HubLink{
 		Connect: func(ctx context.Context, h nodestore.Hub) (contract.Hub, func(), error) {
 			conn := &connector{ctx: ctx, cfg: cfg, hub: hub}
@@ -520,7 +521,8 @@ func nodeHubLink(cfg config.Config, hub hubstore.Store, kick func(nodestore.Hub)
 			}
 			return c, conn.close, nil
 		},
-		Sync: kick,
+		Sync:    kick,
+		Recheck: recheck,
 	}
 }
 

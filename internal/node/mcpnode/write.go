@@ -40,6 +40,15 @@ type HubLink struct {
 	// Sync stößt den Abgleich eines Hub-Eintrags an und wartet nicht darauf;
 	// ohne Sync geschieht nichts.
 	Sync func(h store.Hub)
+	// Recheck stößt den Abgleich eines Hub-Eintrags an, nachdem über einen
+	// Proxy ein Paar zu einem Account abgewiesen wurde, den die Replica
+	// kennt (Logins.KnownInvalid; Task 025): Die Zeile kann veraltet sein,
+	// nach node account rotate an einem anderen Node. Wartet nicht. Der
+	// Empfänger drosselt (cmd/kephalaion: höchstens einer je Frist je
+	// Eintrag, ein weiterer wird an ihrem Ende nachgeholt), damit
+	// Fehlversuche den Hub nicht in Takt bringen; ohne Recheck geschieht
+	// nichts.
+	Recheck func(h store.Hub)
 }
 
 // ErrUnsupported meldet in HubLink.Connect einen Transport, den der Node noch

@@ -16,6 +16,11 @@ import (
 // nachsieht, ob er wieder an ist. Tests stellen ihn kürzer.
 var syncIdle = nodestore.DefaultSyncInterval
 
+// recheckDelay ist die Frist der Drosselung von recheck je Hub-Eintrag:
+// höchstens ein Anstoß je Frist; ein weiterer innerhalb der Frist wird an
+// ihrem Ende nachgeholt, genau einer. Tests stellen sie kürzer.
+var recheckDelay = 3 * time.Second
+
 // backgroundSync ist der Abgleich im Hintergrund von serve (Rolle node): beim
 // Start je Hub-Eintrag ein Abgleich, danach je Abstand (sync_interval, je
 // Runde gelesen). Die Einträge liest jede Runde neu aus node.db, node hub
@@ -32,7 +37,10 @@ var syncIdle = nodestore.DefaultSyncInterval
 // eigene Änderung vom Hub bestätigt bekommen, und nach unklarem Ausgang sieht
 // der Aufrufer erst danach, ob gespeichert ist. Läuft der Abgleich des
 // Eintrags schon, folgt ihm ein weiterer: Der laufende hat den Schreibvorgang
-// vielleicht nicht mehr gesehen.
+// vielleicht nicht mehr gesehen. Ebenso, gedrosselt, wenn der Node über den
+// Proxy ein Paar zu einem bekannten Account abgewiesen hat (recheck): Nach
+// rotate an einem anderen Node gilt das neue Token so schon vor der
+// nächsten Runde.
 //
 // Log: keine Zeile für einen Abgleich ohne Änderung; eine, wenn Zeilen kamen
 // (Hub, Anzahl, Revision). Ein Fehler beim ersten Fehlschlag je Eintrag nach
@@ -54,6 +62,8 @@ type backgroundSync struct {
 	// again hält die Einträge, die angestoßen wurden, während ihr Abgleich
 	// lief, nach entry_id: Nach dem laufenden gleichen sie noch einmal ab.
 	again map[string]nodestore.Hub
+	// rechecks hält die Drosselung von recheck je Eintrag, nach entry_id.
+	rechecks map[string]*recheckState
 	// stopped: run endet; danach startet nichts mehr, damit wg.Wait nicht
 	// neben einem wg.Add läuft.
 	stopped bool
@@ -75,12 +85,21 @@ type syncOutcome struct {
 	kind   replica.ErrorKind
 }
 
+// recheckState ist die Drosselung von recheck für einen Eintrag.
+type recheckState struct {
+	// last ist, wann der Eintrag zuletzt über recheck angestoßen wurde.
+	last time.Time
+	// pending: ein Anstoß wartet auf das Ende der Frist.
+	pending bool
+}
+
 // newBackgroundSync bereitet den Abgleich im Hintergrund vor; er gilt, bis
 // ctx endet. Angestoßen werden kann er gleich, die Runden beginnen mit run.
 func newBackgroundSync(ctx context.Context, nodes nodestore.Store, cfg config.Config, hub hubstore.Store,
 	log *reqlog.Logger) *backgroundSync {
 	return &backgroundSync{ctx: ctx, nodes: nodes, cfg: cfg, hub: hub, log: log, running: map[string]bool{},
-		again: map[string]nodestore.Hub{}, outcome: map[string]syncOutcome{}, skipped: map[string]bool{}}
+		again: map[string]nodestore.Hub{}, rechecks: map[string]*recheckState{}, outcome: map[string]syncOutcome{},
+		skipped: map[string]bool{}}
 }
 
 // run läuft, bis der ctx des Abgleichs endet; dann bricht es laufende
@@ -175,6 +194,11 @@ func (b *backgroundSync) kick(h nodestore.Hub) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.kickLocked(h)
+}
+
+// kickLocked ist kick mit gehaltenem b.mu.
+func (b *backgroundSync) kickLocked(h nodestore.Hub) {
 	switch {
 	case b.stopped || b.ctx.Err() != nil:
 	case b.running[h.EntryID]:
@@ -182,6 +206,50 @@ func (b *backgroundSync) kick(h nodestore.Hub) {
 	default:
 		b.start(h)
 	}
+}
+
+// recheck stößt den Abgleich eines Eintrags an, weil ein Client über den
+// Proxy mit einem Paar abgewiesen wurde, dessen Account die Replica kennt —
+// nach node account rotate an einem anderen Node ist ihre Zeile bis zum
+// nächsten Abgleich veraltet (Task 025, mcpnode.HubLink.Recheck). Gedrosselt,
+// damit Fehlversuche den Hub nicht in Takt bringen: höchstens ein Anstoß je
+// recheckDelay je Eintrag; ein Anstoß innerhalb der Frist fällt nicht weg,
+// sondern folgt an ihrem Ende, genau einer. Wartet nicht; ssh wird
+// übergangen wie bei kick. Nach dem Ende startet nichts mehr.
+func (b *backgroundSync) recheck(h nodestore.Hub) {
+	if h.Transport == nodestore.TransportSSH {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopped || b.ctx.Err() != nil {
+		return
+	}
+	st := b.rechecks[h.EntryID]
+	if st == nil {
+		st = &recheckState{}
+		b.rechecks[h.EntryID] = st
+	}
+	now := time.Now()
+	if since := now.Sub(st.last); st.last.IsZero() || since >= recheckDelay {
+		st.last = now
+		b.kickLocked(h)
+		return
+	}
+	if st.pending {
+		return
+	}
+	st.pending = true
+	time.AfterFunc(recheckDelay-now.Sub(st.last), func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		st.pending = false
+		if b.stopped || b.ctx.Err() != nil {
+			return
+		}
+		st.last = time.Now()
+		b.kickLocked(h)
+	})
 }
 
 // start gleicht einen Eintrag in einer eigenen Goroutine ab; b.mu ist

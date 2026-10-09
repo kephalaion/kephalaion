@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -60,6 +61,11 @@ type proxyEnv struct {
 	log    *lockedBuffer
 	// docID ist die id von wissen/a.md an zentrale.
 	docID string
+
+	mu sync.Mutex
+	// rechecks sind die Hubs, für die der Node über HubLink.Recheck den
+	// Abgleich angestoßen hat (Task 025).
+	rechecks []string
 }
 
 func newProxyEnv(t *testing.T, aliases ...string) *proxyEnv {
@@ -95,15 +101,7 @@ func newProxyEnv(t *testing.T, aliases ...string) *proxyEnv {
 	if f := e.hubs["zentrale"]; f != nil {
 		e.docID = f.put("wissen", "a.md", "# A\n")
 	}
-	s := &replica.Syncer{Nodes: nodes}
-	if _, err := s.Sync(ctx, "", func(h store.Hub) (contract.Hub, error) {
-		if f := e.hubs[h.Name]; f != nil {
-			return f, nil
-		}
-		return nil, fmt.Errorf("nicht erreichbar")
-	}); err != nil {
-		t.Fatal(err)
-	}
+	e.sync(t)
 	// lager hat nie abgeglichen: Die Replica fehlt.
 	_ = os.Remove(nodes.ReplicaPath("lager"))
 	e.log = &lockedBuffer{}
@@ -112,6 +110,11 @@ func newProxyEnv(t *testing.T, aliases ...string) *proxyEnv {
 			return e.hubs[h.Name], func() {}, nil
 		},
 		Sync: func(store.Hub) {},
+		Recheck: func(h store.Hub) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.rechecks = append(e.rechecks, h.Name)
+		},
 	}
 	node := httptest.NewServer(reqlog.New(e.log).Middleware("node",
 		NewHandler(nodes, proxyVersion, func() upgrade.Report { return proxyUpdate }, link)))
@@ -125,6 +128,30 @@ func newProxyEnv(t *testing.T, aliases ...string) *proxyEnv {
 	t.Cleanup(proxy.Close)
 	e.proxy = proxy.URL
 	return e
+}
+
+// sync gleicht alle Einträge mit den Fälschungen ab — wie der Abgleich im
+// Hintergrund; lager ist nicht erreichbar.
+func (e *proxyEnv) sync(t *testing.T) {
+	t.Helper()
+	s := &replica.Syncer{Nodes: e.nodes}
+	if _, err := s.Sync(context.Background(), "", func(h store.Hub) (contract.Hub, error) {
+		if f := e.hubs[h.Name]; f != nil {
+			return f, nil
+		}
+		return nil, fmt.Errorf("nicht erreichbar")
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// takeRechecks liefert die Hubs der Anstöße seit dem letzten Aufruf.
+func (e *proxyEnv) takeRechecks() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := e.rechecks
+	e.rechecks = nil
+	return out
 }
 
 // valid ist das gültige Header-Paar von anna an einem Hub, wrong eines mit
@@ -677,5 +704,84 @@ func TestProxyLoginHeader(t *testing.T) {
 	}
 	if n := strings.Count(e.log.String(), "login=invalid") - before; n != 5 {
 		t.Errorf("lokal %d-mal login=invalid im Log, erwartet 5:\n%s", n, e.log.String())
+	}
+}
+
+// Fenster nach rotate (Task 025, Etappe 3): Wird über den Proxy ein Paar zu
+// einem Account abgewiesen, den die Replica kennt, stößt der Node den
+// Abgleich dieses Hub-Eintrags an (HubLink.Recheck) — die Antwort bleibt,
+// wie sie ist. Nach rotate am Hub prüft der Node das neue Token gegen die
+// alte Zeile; nach dem angestoßenen Abgleich gilt es. Kein Anstoß ohne
+// Paar, bei gültiger Anmeldung, unbekanntem Alias, unbekanntem Account,
+// halbem Paar, Hub ohne Replica — und lokal nie.
+func TestProxyRecheckAfterRotate(t *testing.T) {
+	e := newProxyEnv(t, "lager", "werkstatt", "zentrale")
+	for name, h := range map[string]http.Header{
+		"ohne Paar":           nil,
+		"gültig":              e.valid("zentrale"),
+		"unbekannter Alias":   e.wrong(t, "nirgends"),
+		"unbekannter Account": e.unknown(t, "zentrale"),
+		"halbes Paar":         {"X-Keph-Account-Zentrale": {"anna"}},
+		"Hub ohne Replica":    e.wrong(t, "lager"),
+	} {
+		e.call(t, e.proxy, h, "whoami", nil)
+		if r := e.takeRechecks(); len(r) != 0 {
+			t.Errorf("über den Proxy, %s: Anstoß %v", name, r)
+		}
+	}
+	// Lokal nie, auch nicht bei falschem Token zu einem bekannten Account.
+	e.call(t, e.direct, e.wrong(t, "zentrale"), "whoami", nil)
+	if r := e.takeRechecks(); len(r) != 0 {
+		t.Errorf("lokal: Anstoß %v", r)
+	}
+	// Je Anfrage ein Anstoß je betroffenem Hub (der SDK-Client schickt je
+	// Aufruf mehrere Anfragen, deshalb hier rohe POSTs): falsches Token zu
+	// einem bekannten Account, auch neben einem gültigen Paar, auch bei
+	// initialize.
+	whoamiVia := func(h http.Header) (string, []string) {
+		t.Helper()
+		status, body := post(t, e.proxy, h, whoamiBody)
+		if status != http.StatusOK {
+			t.Fatalf("whoami: HTTP %d %s", status, body)
+		}
+		return body, e.takeRechecks()
+	}
+	if _, r := whoamiVia(e.wrong(t, "zentrale")); !slices.Equal(r, []string{"zentrale"}) {
+		t.Errorf("falsches Token: Anstoß %v", r)
+	}
+	if _, r := whoamiVia(merge(e.valid("zentrale"), e.wrong(t, "werkstatt"))); !slices.Equal(r, []string{"werkstatt"}) {
+		t.Errorf("gültig und falsch: Anstoß %v", r)
+	}
+	serverVersion(t, e.proxy, merge(e.wrong(t, "zentrale"), e.wrong(t, "werkstatt")))
+	if r := e.takeRechecks(); !slices.Equal(r, []string{"werkstatt", "zentrale"}) {
+		t.Errorf("initialize mit zwei falschen: Anstoß %v", r)
+	}
+
+	// rotate am Hub: Die Replica hat noch die alte Zeile. Das neue Token ist
+	// ungültig und stößt an; nach dem Abgleich gilt es, das alte nicht mehr.
+	next := token(t)
+	for _, c := range []string{"privat", "wissen"} {
+		e.hubs["zentrale"].grant("anna", c, next, contract.Rights{Write: true})
+	}
+	fresh := pair("zentrale", "anna", next)
+	body, r := whoamiVia(fresh)
+	if !strings.Contains(body, `"hidden":true`) {
+		t.Fatalf("neues Token vor dem Abgleich: %s", body)
+	}
+	if !slices.Equal(r, []string{"zentrale"}) {
+		t.Errorf("neues Token vor dem Abgleich: Anstoß %v", r)
+	}
+	e.sync(t)
+	body, r = whoamiVia(fresh)
+	if strings.Contains(body, `"hidden":true`) || !strings.Contains(body, `"hub":"zentrale","login":"ok"`) {
+		t.Fatalf("neues Token nach dem Abgleich: %s", body)
+	}
+	if len(r) != 0 {
+		t.Errorf("neues Token nach dem Abgleich: Anstoß %v", r)
+	}
+	// Eine laufende Verbindung mit dem alten Token: ungültig, bekannt — ein
+	// Anstoß je Anfrage (die Drosselung liegt beim Empfänger).
+	if _, r := whoamiVia(e.valid("zentrale")); !slices.Equal(r, []string{"zentrale"}) {
+		t.Errorf("altes Token nach dem Abgleich: Anstoß %v", r)
 	}
 }
