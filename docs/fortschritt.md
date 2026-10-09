@@ -393,6 +393,17 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 025 — Fehlversuche fälschungssicher zählen, ohne richtige Clients zu sperren:** gebaut
+  am 2026-10-09 (Etappe 1: Weg 4 lokal mit Caddy 2.11.7 und mit `fail2ban-regex` auf der VM
+  belegt; Etappe 2: Antwort-Header `X-Keph-Login: invalid` über den Proxy; Etappe 3: Anstoß des
+  Abgleichs nach einem abgewiesenen Paar zu einem bekannten Account, gedrosselt; Etappe 4: die
+  Erweiterung für VS Code mit Schranke, Pause je Paar und Budget in der Pausendatei für alle
+  Fenster, `vscode/pause.js`), auf der VM ausgerollt (Etappe 5: Rollen `kephalaion`, `caddy`,
+  `fail2ban`; die Jail `kephalaion-mcp` liest das Zugriffslog von Caddy mit `remote_ip`; Abnahmen
+  T1–T10 in `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“), dokumentiert
+  (Etappe 6); Befund `mcp-von-aussen.md`. Offen die Abnahme durch den Nutzer mit mehreren
+  VS-Code-Fenstern und mit `rotate` gegen die VM, Schritte unter „Zu testen“.
+
 - **Task 030 — Abnahme der Statusleiste in der WSL:** gebaut am 2026-10-08 (Etappe 1, belegt
   am Wegwerf-Node mit zwei Einträgen auf denselben Hub; Befund `vscode-betrieb.md`), Doku
   nachgezogen (Etappe 2); offen die Abnahme durch den Nutzer in der WSL mit einem Wegwerf-Node
@@ -798,16 +809,17 @@ ist Nacharbeit des Nutzers)
 ## Zu besprechen
 
 - **Fehlversuche nach `rotate` und durch die Rate der Erweiterung** (Task 023, Befund
-  `mcp-von-aussen.md`): Mit entfernter `nodeUrl` schickt die Erweiterung rund 2 Anfragen je
-  Sekunde; nach `node account rotate` prüft der entfernte Node das neue Token bis zu seinem
-  nächsten Abgleich gegen die alte Zeile — jede Anfrage ein Fehlversuch, Sperre in Sekunden.
-  Heute nur dokumentiert (`vscode.md`). Möglich: den Abgleich bei einem ungültigen Paar
-  anstoßen, eine Gnadenfrist für das alte Token (`konzept.md`, „Token-Rotation (später)“) oder
-  eine geringere Rate der Erweiterung bei entfernter Adresse.
+  `mcp-von-aussen.md`): **erledigt** — entschieden am 2026-10-02, gebaut in Task 025: Der Node
+  stößt bei einem abgewiesenen Paar zu einem bekannten Account den Abgleich an (gedrosselt, keine
+  Gnadenfrist), die Erweiterung pausiert ungültige Paare mit Schranke und Budget über alle
+  Fenster (höchstens 4 Fehlversuche in 10 min), und die Jail zählt im Log von Caddy mit der
+  echten Adresse (`konzept.md`, „Kommunikation“; `vscode.md`, „Fehlversuche“). Die Rate der
+  Erweiterung bei gültigem Paar ist unverändert.
 - **Abfragen der Erweiterung für VS Code:** Jedes Fenster fragt `changes` alle 3 s und `whoami`
   alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
   je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
   So lassen oder nur mit eingebundener Collection bzw. im Fokus fragen (`vscode.md`, „Offen“)?
+  Fehlversuche begrenzt seit Task 025 die Pause, die Rate bleibt.
 - **Admins in der Weboberfläche** (Task 026): **erledigt** — entschieden am 2026-10-05 (Header
   `X-User-Roles` von authproxy, Rolle `kephalaion.admin`), gebaut in Task 029 (`konzept.md`,
   „Die Weboberfläche am Hub“).

@@ -136,8 +136,12 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   was der Client beheben muss: `invalid`; `missing` **trotz** Token-Datei (die Datei ist leer
   oder nicht lesbar, das Paar geht nicht hinaus — die Meldung nennt die Datei); ein Fehler im
   Abgleich eines genutzten Hubs (auch „Replica nicht lesbar“, das `whoami` als `missing` mit
-  `last_error` meldet); mehrere Accounts ohne Wahl; wie bisher Node nicht erreichbar und die
-  verdeckte Antwort (`hidden`) — und kein einziger genutzter Hub. **Nicht gelb** ist ein Hub
+  `last_error` meldet); mehrere Accounts ohne Wahl; ein **pausiertes Paar** an einer entfernten
+  `nodeUrl` (Task 025, „Fehlversuche“ unten: der Grund „pausiert — Anmeldung ungültig (n
+  Fehlversuche), nächste Probe in … min“ mit der Schwelle der Jail und der Abhilfe; das Paar geht
+  nicht hinaus, der Node meldet den Hub als `missing`, die Regel führt ihn trotzdem als genutzt —
+  auch ohne Antwort des Nodes, wenn alle Paare pausiert sind); wie bisher Node nicht erreichbar
+  und die verdeckte Antwort (`hidden`) — und kein einziger genutzter Hub. **Nicht gelb** ist ein Hub
   des Nodes, für den der Client kein Token hat: Er ist `missing` ohne Fehlversuch, ein
   normaler Zustand an einem geteilten Node (die VM: ein Node, mehrere Hubs, viele Clients in
   DevContainern). Die Leiste nennt ihn nicht; Tooltip und „Kephalaion: Status anzeigen“ führen
@@ -265,13 +269,74 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
   Hubs); die Statusleiste zeigt dann „Keph: nicht angemeldet“ und fragt im Tooltip, ob die
   Token-Dateien stimmen und die Hubs unter `tokens/` (bzw. in `kephalaion.hubs`) wie die
   Hub-Einträge am Node heißen.
-- **Fehlversuche zählen:** Jede Anfrage mit einem ungültigen Paar ist auf dem Rechner des Proxys
-  ein Fehlversuch (fail2ban, 10 in 10 min sperren die Adresse auf 80/443). Gemessen schickte die
-  Erweiterung rund 2 Anfragen je Sekunde (381 in 186 s, A10 unten) — mit einem ungültigen Token
-  ist der Rechner nach wenigen Sekunden gesperrt, samt dem Abgleich eines Nodes dort mit dem Hub
-  hinter demselben Proxy. Nach `kephalaion node account rotate` prüft der entfernte Node das neue
-  Token bis zu seinem nächsten Abgleich (Vorgabe 30 s) gegen die alte Zeile: vor `rotate` die
-  entfernte `nodeUrl` leeren oder auf diesen Abgleich warten (Befund `mcp-von-aussen.md`).
+- **Fehlversuche (Task 025):** Jede Anfrage mit einem ungültigen Paar ist auf dem Rechner des
+  Proxys ein Fehlversuch (fail2ban zählt im Zugriffslog von Caddy; 10 in 10 min sperren die Adresse
+  auf 80/443, nach einer früheren Sperre schon 5). Gemessen schickte die Erweiterung rund 2
+  Anfragen je Sekunde (381 in 186 s, A10 unten) — mit einem ungültigen Token wäre der Rechner nach
+  wenigen Sekunden gesperrt gewesen, samt dem Abgleich eines Nodes dort mit dem Hub hinter
+  demselben Proxy. Deshalb gilt an einer entfernten `nodeUrl` (`remote` aus `rules.parseNodeUrl`;
+  lokal bleibt alles wie bisher), Modul [`vscode/pause.js`](../vscode/pause.js), Begriffe in
+  [`begriffe.md`](begriffe.md) („probe“, „paused pair“, „budget“, „pause file“):
+  - **Schranke:** Vor jeder anderen Anfrage an die Adresse geht genau eine **Probe** (`whoami`)
+    mit den aktuellen Paaren; `stat`, `readDirectory`, `readFile`, `changes`, die Schreibvorgänge
+    und der Start des MCP-Servers warten auf ihr Ergebnis — ein gemeinsames, keine zweite. Neu
+    geprobt wird, wenn sich ein Paar ändert (Token-Datei, Wahl des Accounts, `kephalaion.hubs`,
+    `nodeUrl`, „Neu verbinden“ — sofort, zählt ins Budget, wartet nicht darauf), nicht vor jeder
+    Anfrage.
+  - **Erkennen:** `whoami` mit `hidden` (alle geschickten Paare ungültig) oder `login` `invalid`
+    je Hub; `changes`, das alle eben noch lesbaren Collections eines Hubs als `dropped` meldet
+    (ein ungültiges Paar macht alle unlesbar; fällt nur eine weg, ist das ein entzogenes Recht,
+    kein Fehlversuch); eine 401 des Proxys (`rules.explainResponse`; sie betrifft die ganze
+    Adresse, denn sie zählt in `caddy-auth`). Die Anfrage, die es entdeckt, zählt als Fehlversuch.
+    Grenze: Verliert der Account alle Collections eines Hubs (Recht entzogen, gelöscht), sieht das
+    aus wie ein ungültiges Paar — bis zur nächsten Probe.
+  - **Pause je Paar:** Ein ungültiges Paar geht nicht mehr mit, weder in Anfragen der Erweiterung
+    noch beim Start des MCP-Servers (`resolveMcpServerDefinition`); die übrigen Paare arbeiten
+    weiter. Ein Aufruf des Dateisystems für einen pausierten Hub scheitert ohne Anfrage als
+    `Unavailable` — nicht `FileNotFound`, sonst hielte VS Code die Dateien für gelöscht. Bleibt
+    kein Paar übrig, geht an die Adresse nichts außer der nächsten Probe. Ein laufender MCP-Server
+    behält seine Header und wird nicht neu gestartet.
+  - **Ein Stand für alle Fenster:** Pause und Budget stehen in der **Pausendatei**
+    `$XDG_STATE_HOME/kephalaion/vscode-pause.json` (sonst `~/.local/state/kephalaion/`), die alle
+    Extension Hosts dieses Rechners lesen und schreiben — unabhängig von Profil, Ausgabe und
+    Fenster, nicht in `globalStorageUri`. Je Paar Adresse, Hub, Account, die Kennung der
+    Token-Datei (Größe und Zeit, ohne Inhalt), Zahl der Fehlversuche und Zeit der nächsten Probe;
+    je Adresse das Budget. Kein Token, kein Hash; atomar geschrieben (`rename`, `0600`); vor jeder
+    Anfrage übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); proben darf
+    zur selben Zeit nur ein Fenster (Sperrdatei mit `O_EXCL`, nach 30 s verwaist), die anderen
+    übernehmen das Ergebnis; ist sie kaputt oder fehlt sie, gelten Schranke und Sperrdatei
+    trotzdem. Grenze: ein Stand je Benutzer und Betriebssystem, auf dem die Token-Dateien liegen —
+    Fenster unter Windows und in der WSL desselben Rechners teilen ihn nicht (dieselbe Adresse
+    nach außen), haben aber ohnehin eigene Token-Dateien.
+  - **Wann wieder geprobt wird:** sofort einmal, wenn sich die Kennung der Token-Datei des Paars
+    ändert (spätestens beim nächsten Lesen, 5 s), ebenso bei anderer Wahl und „Neu verbinden“;
+    sonst nach wachsender Pause — 1, 2, 4, 8, 16, 30 min, danach alle 30 min — und nur, wenn das
+    **Budget** der Adresse es erlaubt: weniger als 2 Fehlversuche in den letzten 10 min, über alle
+    Paare und Fenster (jede Anfrage mit ungültigem Paar, wie der Node sie zählt — Proben wie der
+    Übergang gültig → ungültig im Betrieb samt Anfragen, die andere Fenster schon abgeschickt
+    hatten). Die übrigen 2 der 4 bleiben für so einen Übergang; nach einer früheren Sperre reichen
+    der Jail schon 5. Ohne Zutun des Nutzers so über alle Fenster höchstens 4 Fehlversuche in
+    10 min; darüber nur, wenn im Betrieb binnen 10 min mehrere Paare ungültig werden oder beim
+    Übergang schon mehr als 2 Anfragen zugleich unterwegs sind (viele Fenster im selben Moment).
+    Nach `rotate` klärt die erste Probe nach 1 min den Fall, sobald der entfernte Node abgeglichen
+    hat — und das tut er seit Task 025 von selbst, sobald er das neue Token abweist. Jede Probe
+    von Hand zählt einen Fehlversuch. Nach einer gültigen Antwort ist die Pause des Paars weg und
+    die Datei bereinigt; die Zeiten im Budget bleiben, bis sie 10 min alt sind.
+  - **Anzeige:** Die Statusleiste zeigt den pausierten Hub gelb mit dem Grund „pausiert“ aus
+    `rules.hubStatus` („Wann gelb“ oben); der Tooltip nennt die nächste Probe, die Zahl der
+    Fehlversuche, die Schwelle der Jail und die Abhilfe (Token-Datei erneuern; nach `rotate`
+    erledigt es sich nach dem Abgleich des entfernten Nodes). Sind alle Paare pausiert, zeigt sie
+    „Node nicht gefragt (alle Paare pausiert, n Fehlversuche in 10 min)“. Im Log „Kephalaion“
+    steht nur ein Wechsel des Stands, nicht jede Anfrage.
+  - **Tests** (`make vscode-test`): die Zeitfolgen mit ersetzbarer Uhr und zwei Instanzen an
+    derselben Datei in `vscode/test/pause.test.js` (Start, Übergang im Betrieb, Paar A pausiert
+    und Paar B wird ungültig — je höchstens 4 in 10 min, gezählt an den Anfragen, wie ein Ersatz
+    des Nodes sie sieht), das Erkennen in `rules.test.js`, die Erweiterung selbst (eine Anfrage
+    beim Start, `Unavailable`, zwei Hubs, lokal unverändert, MCP-Server ohne das pausierte Paar,
+    401 und `dropped`) in `extension.test.js`. Gegen die VM belegt am 2026-10-09 mit zwei
+    Instanzen des Moduls und einem Dummy-Token: eine Anfrage, eine Zeile im Journal von Caddy
+    (`~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“); die Abnahme mit
+    mehreren Fenstern steht unter „Zu testen“ in [`fortschritt.md`](fortschritt.md).
 
 **Abgenommen am 2026-10-02** (Task 023, A10, durch den Nutzer) gegen die Dev-VM mit 0.0.7:
 Statusleiste gelb (der zweite Hub der VM, `vmhttp`, ohne Anmeldung — erwartet), `whoami` in
@@ -440,7 +505,8 @@ Treffer (mit etwas Verzögerung, erst nach einer weiteren Suche). Das ist in Ord
 - Wie der Node-Dienst gestartet wird, wenn er nicht läuft — Hinweis in VS Code oder selbst
   starten (wie k-playbook beim Briefing).
 - Abstand der Abfrage von `changes` — fest, oder länger, solange das Fenster nicht im Fokus
-  ist.
+  ist. Fehlversuche begrenzt seit Task 025 die Pause an einer entfernten Adresse; die Rate selbst
+  ist unverändert.
 - Leere Verzeichnisse: vorerst nur in der Erweiterung gemerkt (Task 014); ob später als
   `SYSTEM:D:`-Zeile am Hub, bleibt offen (vgl. „Persönliche Verzeichnisse“ im Konzept).
 - Das Schreiben im echten VS Code: die Handgriffe unter „Umsetzung: Schreiben“, „Im echten

@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -153,6 +151,8 @@ type acctEnv struct {
 	direct string
 	proxy  string
 	log    *lockedBuffer
+	// caddy ist das Zugriffslog des Proxy-Nachbaus (caddyProxy).
+	caddy  *lockedBuffer
 	tokens []string
 
 	mu    sync.Mutex
@@ -198,13 +198,8 @@ func newAcctEnv(t *testing.T) *acctEnv {
 		NewHandler(nodes, proxyVersion, func() upgrade.Report { return proxyUpdate }, link)))
 	t.Cleanup(node.Close)
 	e.direct = node.URL
-	target, _ := url.Parse(node.URL)
-	proxy := httptest.NewServer(&httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
-		pr.SetURL(target)
-		pr.SetXForwarded()
-	}})
-	t.Cleanup(proxy.Close)
-	e.proxy = proxy.URL
+	e.caddy = &lockedBuffer{}
+	e.proxy = caddyProxy(t, node.URL, e.caddy).URL
 	return e
 }
 
@@ -427,13 +422,14 @@ func TestAccountOutcomes(t *testing.T) {
 		if l := e.lastLine(); !strings.Contains(l, " via=127.0.0.1 login=invalid hub=zentrale") {
 			t.Errorf("%s: Logzeile Fehlversuch über den Proxy: %q", name, l)
 		}
-		// Der Filter der Jail trifft die Zeile, einmal.
-		if hits := jailHits(t, e.lastFullLine()); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
-			t.Errorf("%s: Filter der Jail: %v in %q", name, hits, e.lastLine())
+		// Der Filter der Jail trifft die Zeile bei Caddy, einmal.
+		if hits := jailHits(t, lastCaddyLine(e.caddy)); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
+			t.Errorf("%s: Filter der Jail: %v in %q", name, hits, lastCaddyLine(e.caddy))
 		}
 		hiddenUnknown := do(e.proxy, pair("nirgends", "anna", tok))
-		if hits := jailHits(t, e.lastFullLine()); len(hits) != 0 {
-			t.Errorf("%s: unbekannter Hub trifft den Filter: %q", name, e.lastLine())
+		if hits := jailHits(t, lastCaddyLine(e.caddy)); len(hits) != 0 || !strings.Contains(lastCaddyLine(e.caddy),
+			`"keph_login":null`) {
+			t.Errorf("%s: unbekannter Hub trifft den Filter: %q", name, lastCaddyLine(e.caddy))
 		}
 		if hiddenUnknown.status != hiddenWrong.status || hiddenUnknown.body != hiddenWrong.body {
 			t.Errorf("%s: unbekannter Hub über den Proxy %d %s, falsches Token %d %s", name, hiddenUnknown.status,
@@ -623,14 +619,23 @@ func TestEncodedPathsReachNoRoute(t *testing.T) {
 				if via := strings.Contains(line, " via=127.0.0.1"); via != (base == e.proxy) {
 					t.Errorf("%s: via in %q", p, line)
 				}
-				if hits := jailHits(t, e.lastFullLine()); strings.Contains(line, "login=invalid") || len(hits) != 0 {
-					t.Errorf("%s: Fehlversuch %v in %q", p, hits, line)
+				if strings.Contains(line, "login=invalid") {
+					t.Errorf("%s: Fehlversuch in %q", p, line)
+				}
+				// Bei Caddy steht die Schreibweise, wie der Client sie schickte,
+				// ohne keph_login: Der Filter trifft nicht.
+				if base == e.proxy {
+					c := lastCaddyLine(e.caddy)
+					if hits := jailHits(t, c); len(hits) != 0 || !strings.Contains(c, `"uri":"/kephalaion`+p+`"`) ||
+						!strings.Contains(c, `"keph_login":null`) {
+						t.Errorf("%s: Fehlversuch %v in %q", p, hits, c)
+					}
 				}
 			}
 		}
 		e.call(t, e.proxy, http.MethodPost, route.path, route.header, route.body)
-		if hits := jailHits(t, e.lastFullLine()); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
-			t.Errorf("%s: Filter der Jail %v in %q", route.path, hits, e.lastLine())
+		if hits := jailHits(t, lastCaddyLine(e.caddy)); !reflect.DeepEqual(hits, []string{"127.0.0.1"}) {
+			t.Errorf("%s: Filter der Jail %v in %q", route.path, hits, lastCaddyLine(e.caddy))
 		}
 	}
 	// Am Hub nur die beiden Klartextpfade.
@@ -662,36 +667,56 @@ func TestAccountRotateReplicaFails(t *testing.T) {
 	}
 }
 
-// Der Antwort-Header X-Keph-Login: invalid (Task 025) steht an den Routen
-// für Accounts über den Proxy genau dann, wenn der Hub das Token ablehnt —
-// bei rotate wie bei check. Nicht bei unbekanntem Alias, nicht erreichtem
-// Hub, falscher Form und nicht bei Erfolg; lokal nie.
+// Der Antwort-Header X-Keph-Login: invalid (Task 025) an den Routen für
+// Accounts: Der Node setzt ihn auf eine Anfrage mit X-Forwarded-For genau
+// dann, wenn der Hub das Token ablehnt — bei rotate wie bei check. Nicht bei
+// unbekanntem Alias, nicht erreichtem Hub, falscher Form und nicht bei
+// Erfolg; ohne X-Forwarded-For nie. Über den Proxy erreicht er den Client
+// nie: Caddy schreibt ihn als keph_login in seine Zeile.
 func TestAccountLoginHeader(t *testing.T) {
 	e := newAcctEnv(t)
 	tok, wrong := e.newToken(t), e.newToken(t)
 	e.hub.add("anna", "kleist", tok, "wissen")
 	has := func(r acctReply) string { return r.header.Get(LoginHeader) }
-	// Über den Proxy: abgelehnt → Header.
-	if r := e.check(t, e.proxy, pair("zentrale", "anna", wrong)); r.status != http.StatusForbidden || has(r) != LoginInvalid {
-		t.Errorf("check falsch über den Proxy: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
+	// Der Node setzt ihn (direkt, mit X-Forwarded-For wie vom Proxy): abgelehnt → Header.
+	if r := e.check(t, e.direct, forwarded(pair("zentrale", "anna", wrong))); r.status != http.StatusForbidden ||
+		has(r) != LoginInvalid {
+		t.Errorf("check falsch mit X-Forwarded-For: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
 	}
-	if r := e.rotate(t, e.proxy, pair("zentrale", "anna", wrong), ident.HashToken(e.newToken(t))); r.status !=
+	if r := e.rotate(t, e.direct, forwarded(pair("zentrale", "anna", wrong)), ident.HashToken(e.newToken(t))); r.status !=
 		http.StatusForbidden || has(r) != LoginInvalid {
-		t.Errorf("rotate falsch über den Proxy: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
+		t.Errorf("rotate falsch mit X-Forwarded-For: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
 	}
-	if r := e.check(t, e.proxy, pair("zentrale", "niemand", wrong)); has(r) != LoginInvalid {
-		t.Errorf("check unbekannter Account über den Proxy: %s=%q", LoginHeader, has(r))
+	if r := e.check(t, e.direct, forwarded(pair("zentrale", "niemand", wrong))); has(r) != LoginInvalid {
+		t.Errorf("check unbekannter Account mit X-Forwarded-For: %s=%q", LoginHeader, has(r))
 	}
-	// Über den Proxy ohne Fehlversuch: kein Header.
+	// Mit X-Forwarded-For ohne Fehlversuch: kein Header.
 	for name, r := range map[string]acctReply{
-		"gültig":             e.check(t, e.proxy, pair("zentrale", "anna", tok)),
-		"unbekannter Alias":  e.check(t, e.proxy, pair("nirgends", "anna", wrong)),
-		"Hub nicht erreicht": e.check(t, e.proxy, pair("funkloch", "anna", wrong)),
-		"ohne Paar":          e.call(t, e.proxy, http.MethodPost, AccountCheckPath, nil, ""),
-		"falsche Methode":    e.call(t, e.proxy, http.MethodGet, AccountCheckPath, pair("zentrale", "anna", wrong), ""),
+		"gültig":             e.check(t, e.direct, forwarded(pair("zentrale", "anna", tok))),
+		"unbekannter Alias":  e.check(t, e.direct, forwarded(pair("nirgends", "anna", wrong))),
+		"Hub nicht erreicht": e.check(t, e.direct, forwarded(pair("funkloch", "anna", wrong))),
+		"ohne Paar":          e.call(t, e.direct, http.MethodPost, AccountCheckPath, forwarded(nil), ""),
+		"falsche Methode":    e.call(t, e.direct, http.MethodGet, AccountCheckPath, forwarded(pair("zentrale", "anna", wrong)), ""),
 	} {
 		if got := has(r); got != "" {
-			t.Errorf("über den Proxy, %s: %s=%q (HTTP %d)", name, LoginHeader, got, r.status)
+			t.Errorf("mit X-Forwarded-For, %s: %s=%q (HTTP %d)", name, LoginHeader, got, r.status)
+		}
+	}
+	// Über den Proxy: nie in der Antwort, in der Zeile bei Caddy.
+	for name, c := range map[string]struct {
+		header http.Header
+		want   string
+	}{
+		"falsches Token":    {pair("zentrale", "anna", wrong), LoginInvalid},
+		"gültig":            {pair("zentrale", "anna", tok), ""},
+		"unbekannter Alias": {pair("nirgends", "anna", wrong), ""},
+	} {
+		r := e.check(t, e.proxy, c.header)
+		if got := has(r); got != "" {
+			t.Errorf("über den Proxy, %s: %s=%q in der Antwort", name, LoginHeader, got)
+		}
+		if got := kephLogin(t, lastCaddyLine(e.caddy)); got != c.want {
+			t.Errorf("über den Proxy, %s: keph_login=%q, erwartet %q", name, got, c.want)
 		}
 	}
 	// Lokal nie, auch nicht bei einem Fehlversuch.

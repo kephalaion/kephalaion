@@ -727,8 +727,9 @@ Anmeldung des Proxys und ein `POST` ohne Sitzung. Die Weboberfläche trägt nich
 Eingang ist ein `GET` (ohne Sitzung 302 der Anmeldung) und antwortet selbst nie 401.
 10 in 10 Minuten sperren dort die Adresse für 80 und 443; 403 zählt nicht, 400 auch nicht.
 Wer ins Log einer Datei schreibt wie im Caddyfile oben, richtet den Filter auf die Datei.
-Fehlversuche am MCP-Eingang des Nodes sind kein 401; sie zählt eine eigene Jail auf dem Log
-des Nodes („Node für Clients anderer Rechner“, „Fehlversuche“).
+Fehlversuche am MCP-Eingang des Nodes sind kein 401; sie zählt eine eigene Jail an einem Feld
+im selben Zugriffslog, das der Node über einen Antwort-Header setzt („Node für Clients anderer
+Rechner“, „Fehlversuche“).
 
 ### Auf dem Rechner des Hubs zu bestätigen
 
@@ -759,6 +760,9 @@ für das Log (Weg 1 mit Namen; Weg 2 wie oben mit IP und `tls internal`):
 
 ```text
 {
+    # Admin-API nur als Unix-Socket: Auf 127.0.0.1:2019 (Standard) könnte jeder Prozess des
+    # Rechners die Konfiguration ersetzen — auch das Log der Fehlversuche abschalten.
+    admin unix//var/lib/caddy/admin.sock
     # Kein Request-Header im Log: auch Fehlerlog und reverse_proxy (Logger default).
     log default {
         format filter {
@@ -789,13 +793,17 @@ https://hub.example.org {
             header_up Host {upstream_hostport}
         }
     }
+    # Fehlversuche des Nodes: sein Antwort-Header X-Keph-Login kommt als Feld keph_login ins
+    # Zugriffslog (log_append) und aus der Antwort (header_down) — in allen drei Blöcken des Nodes.
     handle /kephalaion/mcp {
         uri strip_prefix /kephalaion
         request_body {
             max_size 8MiB
         }
+        log_append keph_login {http.reverse_proxy.header.X-Keph-Login}
         reverse_proxy localhost:7433 {
             header_up Host {upstream_hostport}
+            header_down -X-Keph-Login
         }
     }
     # Routen für Accounts (node account setup und list, Task 028): je ein Block mit genau dem Pfad.
@@ -804,8 +812,10 @@ https://hub.example.org {
         request_body {
             max_size 64KiB
         }
+        log_append keph_login {http.reverse_proxy.header.X-Keph-Login}
         reverse_proxy localhost:7433 {
             header_up Host {upstream_hostport}
+            header_down -X-Keph-Login
         }
     }
     handle /kephalaion/account/check {
@@ -813,8 +823,10 @@ https://hub.example.org {
         request_body {
             max_size 64KiB
         }
+        log_append keph_login {http.reverse_proxy.header.X-Keph-Login}
         reverse_proxy localhost:7433 {
             header_up Host {upstream_hostport}
+            header_down -X-Keph-Login
         }
     }
     handle {
@@ -841,8 +853,20 @@ https://hub.example.org {
   Hubs — er antwortet, als hätte er keinen Hub-Eintrag. Mit gültiger Anmeldung an einem Hub
   antwortet er wie lokal. Caddys `reverse_proxy` setzt den Header selbst und verwirft einen, den
   der Client mitschickt (solange `trusted_proxies` nicht gesetzt ist). Ein Proxy ohne diesen
-  Header ließe jede Anfrage lokal aussehen: Der Node nennte dann jedem Version und Hubs, und
-  Fehlversuche stünden ohne Adresse im Log.
+  Header ließe jede Anfrage lokal aussehen: Der Node nennte dann jedem Version und Hubs, und er
+  setzte den Antwort-Header für Fehlversuche nicht. Für die Sperre selbst spielt
+  `X-Forwarded-For` seit Task 025 keine Rolle mehr: Die Jail zählt mit `remote_ip` aus der
+  TCP-Verbindung („Fehlversuche“ unten).
+- **Admin-API nur als Unix-Socket** (`admin unix//var/lib/caddy/admin.sock`, wie auf der Dev-VM
+  seit 2026-10-05). Auf `127.0.0.1:2019` (Standard) könnte jeder Prozess des Rechners ohne
+  Anmeldung die laufende Konfiguration ersetzen — `forward_auth` abschalten, jede Antwort mit
+  dem Header für Fehlversuche versehen oder das Log davon abschalten. Caddy legt den Socket mit
+  `0200` im Home von `caddy` (`0750`) an: nur `caddy` und root kommen heran. `systemctl reload
+  caddy` nimmt die Adresse aus dem Caddyfile; ändert sie sich (beim Umstieg), einmal `restart`
+  statt `reload`. Die Warnung „admin endpoint on open interface; host checking disabled“ im
+  Journal ist dann erwartet: An einen Unix-Socket kommt kein Browser. Grenze: root oder Rechte
+  wie root (`sudo`, Gruppe `docker`) und ein Prozess, der den Port des Nodes übernimmt, solange
+  der Node neu startet.
 - **Ohne Anmeldung des Proxys.** MCP-Clients können kein Formular; sie weisen sich je Hub mit
   `X-Keph-Account-<alias>` und `X-Keph-Token-<alias>` aus, wie Nodes am Hub mit ihrem Token.
   Nach außen ist `/kephalaion/mcp` so offen wie `/kephalaion/hub/`. Steht die Option mit
@@ -868,49 +892,57 @@ https://hub.example.org {
   durch: Eine fremde `Origin` bekommt vom Node 403, wie lokal (MCP für Browser ist nicht
   vorgesehen).
 
-### Fehlversuche: eine Jail auf dem Log des Nodes
+### Fehlversuche: eine Jail auf dem Zugriffslog des Proxys
 
 Der Node antwortet bei falschem Token nie 401, sondern wie lokal mit einer Antwort des Werkzeugs
 (`isError`) — ein 401 nähmen MCP-Clients als Beginn einer Anmeldung per OAuth, und lokal verlöre
 `whoami` seine Hilfe bei falsch eingerichteten Clients. Ein fail2ban-Filter auf 401 im Log des
-Proxys sieht davon also nichts. Stattdessen schreibt der Node je Anfrage eine Zeile; trägt die
-Anfrage mindestens ein ungültiges Header-Paar (falsches Token, unbekannter oder gesperrter
-Account), steht `login=invalid` direkt hinter `via`:
+Proxys sieht davon also nichts. Stattdessen setzt der Node über den Proxy auf jede Anfrage mit
+mindestens einem ungültigen Header-Paar (falsches Token, unbekannter oder gesperrter Account,
+halbes Paar, Hub noch nie abgeglichen — auch neben einem gültigen Paar) den Antwort-Header
+**`X-Keph-Login: invalid`** ([`begriffe.md`](begriffe.md); Task 025). Das Caddyfile oben schreibt
+ihn mit `log_append keph_login {http.reverse_proxy.header.X-Keph-Login}` als Feld `keph_login`
+in die Zeile des Zugriffslogs — neben `remote_ip` aus der TCP-Verbindung — und nimmt ihn mit
+`header_down -X-Keph-Login` aus der Antwort: Der Client sieht ihn nie, und ein Fremder erfährt an
+der Antwort nicht, welche Aliase der Node kennt. Der Platzhalter trägt den Header der Antwort des
+Upstreams auch nach `header_down`; `resp_headers` im Log zeigt nur, was an den Client geht, und
+taugt deshalb nicht (belegt mit Caddy 2.11.7). Die Zeile, gekürzt:
 
 ```text
-2026-10-02T12:22:48+02:00 node POST /mcp 200 7.854ms via=80.131.88.238 login=invalid account=kamran-wsl
+{"level":"info",…,"msg":"handled request","request":{"remote_ip":"80.131.88.238",…,"uri":"/kephalaion/mcp"},…,"status":200,…,"keph_login":"invalid"}
 ```
 
-**Ein Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind. Eine Anfrage
-ohne Paar (`initialize` ohne Token) zählt nicht, ebenso eine nur mit Paaren zu Aliasen, die der
-Node nicht kennt, und eine ohne `via` (lokal, nicht über den Proxy). An den Routen für Accounts
-(Task 028) ist ein Fehlversuch eine Anfrage, deren Token der Hub ablehnt:
+Ohne Paar (`initialize` ohne Token), mit gültigem Paar und bei Paaren nur zu Aliasen, die der
+Node nicht kennt, ist `keph_login` `null` — dort ist nichts geprüft worden, und unbekannte Aliase
+mitzuzählen träfe richtig eingerichtete Clients mit Paaren für Hubs, die dieser Node nicht führt.
+**Ein Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind. An den Routen
+für Accounts (Task 028) ist ein Fehlversuch eine Anfrage, deren Token der Hub ablehnt (Status 403,
+`uri` `/kephalaion/account/rotate` bzw. `/kephalaion/account/check`); nicht bei unbekanntem Alias
+und nicht erreichtem Hub. `node account list` verursacht so höchstens einen Fehlversuch je
+ungültiger Token-Datei, `node account setup` mit liegender `.pending` höchstens zwei je Aufruf.
+Im Log des Nodes steht je Anfrage weiter `login=invalid` hinter `via` (der ersten Adresse aus
+`X-Forwarded-For`), zur Diagnose — bis Task 025 zählte die Jail dort, und ein Prozess auf dem
+Rechner des Nodes konnte mit gefälschtem `X-Forwarded-For` direkt am Node eine Zeile mit fremder
+Adresse erzeugen und sie sperren lassen; bei Caddy erzeugt so eine Anfrage keine Zeile.
 
-```text
-2026-10-06T10:47:15+02:00 node POST /account/check 403 537µs via=80.131.88.238 login=invalid hub=vm node=vm-node account=probe028 code=account_unauthenticated
-```
+Fälschen lässt sich die Zeile nicht: `remote_ip` stammt aus der TCP-Verbindung, `keph_login`
+nur aus der Antwort des Nodes, Caddy maskiert Anführungszeichen in Pfad und Host (`\"`), und der
+Filter hält `remote_ip` und `uri` im selben `request`-Objekt. Auch eine kodierte Schreibweise des
+Pfads geht nicht an der Jail vorbei: Caddy wählt seine Route am dekodierten Pfad und reicht
+`…/account/rotat%65` oder `…/%6dcp` so an den Node durch, der Node wählt seine Route aber am
+Pfad, wie die Anfrage ihn schreibt — eine solche Anfrage ist 404, ohne dass ein Token geprüft
+wird, und ohne Header. `uri` steht im Log mit Präfix und Query (der Node übergeht die Query), der
+Filter lässt sie zu. Grenze: root oder Rechte wie root (`sudo`, Gruppe `docker`) und ein Prozess,
+der den Port des Nodes übernimmt, solange der Node neu startet.
 
-`node account list` verursacht so höchstens einen Fehlversuch je ungültiger Token-Datei, `node
-account setup` mit liegender `.pending` höchstens zwei je Aufruf. Die Zeile lässt sich über
-Header nicht fälschen: Namen stehen nur nach der Namensregel darin (sonst `(ungültig)`), `via`
-und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil der Proxy einen
-mitgeschickten `X-Forwarded-For` verwirft. Auch eine kodierte Schreibweise des Pfads geht nicht
-an der Jail vorbei: Caddy wählt seine Route am dekodierten Pfad und reicht `…/account/rotat%65`
-oder `…/%6dcp` so an den Node durch, der Node wählt seine Route aber am Pfad, wie er im Log steht
-— eine solche Anfrage ist 404, ohne dass ein Token geprüft wird. Grenze: Ein Prozess auf dem
-Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen — so
-eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
-vertrauenswürdig.
-
-Filter und Jail für die globale Installation (System-Unit `kephalaion.service`, Log im
-Journal), Schwelle und Fenster wie bei einer Jail für 401 im Log des Proxys:
+Filter und Jail, Schwelle und Fenster wie bei der Jail für 401 im Log des Proxys:
 
 ```ini
 # /etc/fail2ban/filter.d/kephalaion-mcp.conf
 [Definition]
-failregex = (?:^|\s)node [A-Z]+ /(?:mcp|account/rotate|account/check) \d{3} \S+ via=<ADDR> login=invalid(?:\s|$)
+failregex = "request":\{"remote_ip":"<ADDR>",[^}]*"uri":"/kephalaion/(?:mcp|account/rotate|account/check)(?:\?[^"]*)?"[^}]*\}.*"keph_login":"invalid"
 ignoreregex =
-journalmatch = _SYSTEMD_UNIT=kephalaion.service
+journalmatch = _SYSTEMD_UNIT=caddy.service
 
 # /etc/fail2ban/jail.d/kephalaion.local (Auszug)
 [kephalaion-mcp]
@@ -924,9 +956,12 @@ bantime  = 1h
 ```
 
 Prüfen ohne Sperre: `fail2ban-regex systemd-journal /etc/fail2ban/filter.d/kephalaion-mcp.conf`
-trifft nur Zeilen mit `via` und `login=invalid`; `fail2ban-client status kephalaion-mcp` zählt.
-Der Filter ist nicht an der Zeit verankert: fail2ban liefert die Zeile aus dem Journal mit
-eigenem Präfix (`<host> kephalaion[<pid>]: …`).
+trifft nur Zeilen der drei Routen mit `"keph_login":"invalid"`; `journalctl -u caddy -o cat |
+grep -c '"keph_login":"invalid"'` zählt sie. Wer ins Log einer Datei schreibt, richtet `logpath`
+auf die Datei. Der Filter ist nicht an der Zeit verankert: fail2ban nimmt sie aus dem
+Journal-Eintrag (Präfix `<host> caddy[<pid>]: …`). Geprüft am 2026-10-09 mit Caddy 2.11.7 und
+fail2ban 1.0.2 gegen 16 Zeilen (6 Treffer, 10 Negativzeilen übergangen) und auf der Dev-VM
+(`~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“).
 
 **Folgen einer Sperre.** fail2ban sperrt die ganze Adresse auf 80 und 443 — auch den Abgleich
 eines Nodes vom selben Rechner mit dem Hub hinter demselben Proxy und die Weboberfläche. Die
@@ -934,9 +969,17 @@ eigene Adresse ist nicht ausgenommen, nur was die Jail ausdrücklich ausnimmt. E
 eingerichteter Assistent zählt schon beim Start einer Sitzung mehrere Fehlversuche
 (`initialize`, `tools/list`, je eine Anfrage) und danach einen je Werkzeugaufruf: Nach wenigen
 Sitzungen ist die Adresse gesperrt — ebenso mit einem veralteten Token, etwa einer Kopie nach
-`rotate` am Original. Erkennbar an `login=invalid` im Log des Nodes; Abhilfe: das Token beim
-Client erneuern, dann `fail2ban-client set kephalaion-mcp unbanip <adresse>` per SSH. Eine
-Jail für 401 im Log des Proxys zählt getrennt.
+`rotate` am Original; eine Adresse mit früherer Sperre zählt doppelt, für sie reichen 5.
+Erkennbar an `"keph_login":"invalid"` im Log des Proxys und `login=invalid` im Log des Nodes;
+Abhilfe: das Token beim Client erneuern, dann `fail2ban-client set kephalaion-mcp unbanip
+<adresse>` per SSH. Eine Jail für 401 im Log des Proxys zählt getrennt. Zwei Schranken davor
+(Task 025): Die Erweiterung für VS Code pausiert an einer entfernten Adresse ein ungültiges Paar
+von selbst — über alle Fenster eines Rechners höchstens 4 Fehlversuche in 10 min
+([`vscode.md`](vscode.md), „Fehlversuche“) —, und nach `node account rotate` an einem anderen
+Rechner stößt der Node den Abgleich an, sobald er das neue Token gegen die alte Zeile abweist
+(gedrosselt; [`konzept.md`](konzept.md), „Kommunikation“): Das Fenster dauert Sekunden, nicht bis
+zu `sync_interval`. Eine laufende Verbindung mit dem alten Token zählt weiter je Werkzeugaufruf —
+nach `rotate` die Sitzung neu starten bzw. den MCP-Server neu verbinden.
 
 ### Proben
 
@@ -953,7 +996,8 @@ curl -sS $H -X POST "$U" --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","
 curl -sS -o /dev/null -w '%{http_code}\n' $H -H 'Origin: https://example.com' -X POST "$U" --data '{}'
 # Route für Accounts ohne Paar: 400 invalid vom Node (nicht die Anmeldung des Proxys)
 curl -sS -X POST https://hub.example.org/kephalaion/account/check
-# mit Dummy-Paar: 403, "hidden":true; im Journal des Nodes via=… login=invalid
+# mit Dummy-Paar: 403, "hidden":true, ohne X-Keph-Login in der Antwort; im Journal von Caddy
+# eine Zeile mit "keph_login":"invalid", im Journal des Nodes via=… login=invalid
 curl -sS -X POST -H 'X-Keph-Account-team: probe' -H "X-Keph-Token-team: <dummy-token>" \
   https://hub.example.org/kephalaion/account/check
 ```
@@ -1034,7 +1078,8 @@ Einrichtungstoken (`hub account token alice-laptop`), die alte Token-Datei lösc
 erneut — oder `rotate` am Node mit Hub-Eintrag und die Datei übergeben. Ein Kommando für das
 spätere Rotieren über den Node ist Folgearbeit (Todo 18). Der Eintrag bei den Assistenten
 bleibt richtig (er liest die Datei), wirksam mit einer neuen Sitzung. Bis die neue Datei da ist,
-schickt der Client das alte Token — jede Anfrage ein Fehlversuch für die Jail.
+schickt der Client das alte Token — jede Anfrage ein Fehlversuch für die Jail (die Erweiterung
+für VS Code pausiert das Paar nach dem ersten; ein Assistent nicht).
 
 ### Grenzen
 
@@ -1059,8 +1104,8 @@ schickt der Client das alte Token — jede Anfrage ein Fehlversuch für die Jail
 ### Ansible
 
 Wie „Hub für Nodes anderer Rechner“, „Ansible“: `Caddyfile.j2` ist die Vorlage oben (mit
-beiden Filtern und dem Block für `/kephalaion/mcp`), dazu Filter und Jail für fail2ban als
-Dateien:
+`admin unix//…`, beiden Filtern und den drei Blöcken des Nodes samt `log_append` und
+`header_down`), dazu Filter und Jail für fail2ban als Dateien:
 
 ```yaml
 - name: fail2ban für den MCP-Eingang des Nodes
@@ -1076,9 +1121,10 @@ Dateien:
   notify: fail2ban neu laden    # Handler: fail2ban-client -t, dann fail2ban-client reload
 ```
 
-**Reihenfolge:** erst das Binary mit Task 023 (ein älterer Node nennt über den Block seine
-Version), dann das Caddyfile, dann die Jail; Tokens der Clients erst danach. Wie es auf der
-Dev-VM aussieht: `~/dev/vm/kephalaion/README.md`, „Stand 2026-10-02“.
+**Reihenfolge:** erst das Binary mit Task 025 (es setzt den Antwort-Header; ein Node vor Task 023
+nennte über den Block seine Version), dann das Caddyfile, dann die Jail; Tokens der Clients erst
+danach. Wie es auf der Dev-VM aussieht: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand
+2026-10-09“ (Rollen `kephalaion`, `caddy`, `fail2ban`, je `make deploy ROLE=…`).
 
 ## Neue Schemafassung: node.db neu anlegen
 

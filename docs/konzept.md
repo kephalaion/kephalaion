@@ -388,7 +388,18 @@ Antwort aus einer lokalen Replica kommen.
   veraltetes Token, etwa eine Kopie nach `rotate` am Original. Eine Adresse ohne Präfix landet
   im Sammel-`handle` hinter `forward_auth`; dort zählt schon heute jedes 401 in `caddy-auth`.
   Beide Jails zählen getrennt. Aufgehoben wird eine Sperre per SSH (`fail2ban-client set
-  <jail> unbanip <adresse>`).
+  <jail> unbanip <adresse>`). Zwei Schranken davor (Task 025): Die Erweiterung für VS Code
+  pausiert an einer entfernten Adresse ein ungültiges Paar von selbst — über alle Fenster eines
+  Rechners höchstens 4 Fehlversuche in 10 min ([`vscode.md`](vscode.md), „Fehlversuche“;
+  [`begriffe.md`](begriffe.md), „probe“, „paused pair“, „budget“, „pause file“) —, und nach
+  `node account rotate` an einem anderen Rechner stößt der Node, der das neue Token noch gegen
+  die alte Zeile prüft, den Abgleich seines Hub-Eintrags an, sobald er ein Paar zu einem Account
+  abweist, den seine Replica kennt (`HubLink.Recheck`; gedrosselt auf einen je 3 s je Eintrag, ein
+  weiterer wird am Ende der Frist nachgeholt): Das Fenster nach `rotate` dauert Sekunden, nicht
+  bis zu `sync_interval`. Lokal weder Header noch Anstoß. Grenze, dokumentiert: Eine laufende
+  Verbindung mit dem alten Token (MCP-Server in VS Code, Sitzung eines Assistenten) zählt je
+  Werkzeugaufruf einen Fehlversuch — nach `rotate` die Sitzung neu starten bzw. den Server neu
+  verbinden.
 - **Kein Token im Log des Proxys** (Task 023, auf der VM geprüft am 2026-10-02). MCP-Clients
   schicken das Token als `X-Keph-Token-<alias>`; ein Proxy, der Request-Header loggt, schwärzt
   so einen Header nicht von sich aus (Caddy nur `Authorization` und Cookies). Der Proxy hält
@@ -1269,7 +1280,9 @@ ungültig, unbekannt, `.pending` offen) — gefragt beim Node, nicht in einer ei
   account lock`) oder erzeugt ein neues Einrichtungstoken (`hub account token`). Keine
   Einschränkung im Code; die Beschränkung auf Einrichtungstokens gehört zu Todo 16.
 - **Fehlversuche gegen die Jail.** Lehnt der Hub das Token an einer der Routen ab, ist das ein
-  Fehlversuch wie am MCP-Eingang (`login=invalid` hinter `via`, „Kommunikation“). `list`
+  Fehlversuch wie am MCP-Eingang (`login=invalid` hinter `via` im Log des Nodes; über den Proxy
+  der Antwort-Header `X-Keph-Login: invalid`, den der Proxy als `keph_login` ins Zugriffslog
+  schreibt und an dem die Jail zählt, „Kommunikation“). `list`
   verursacht höchstens einen je ungültiger Datei — liegt eine `.pending` neben einer `.token`,
   prüft es beide (zwei Anfragen; nach unklarem Ausgang gilt eine davon) —, `setup` mit einer
   `.pending`, die nicht gilt, höchstens zwei je Aufruf (`.pending`, dann das
@@ -1425,7 +1438,7 @@ Projekte dieses Rechners.
 | `~/.config/kephalaion/` (`XDG_CONFIG_HOME`) | Konfiguration, klein, lesbar | `config.yaml`, `tokens/<hub>/<account>.token` je Account (`0600`) |
 | `~/.local/share/kephalaion/` (`XDG_DATA_HOME`) | Daten, die bleiben müssen | `hub.db`, `node.db` |
 | `~/.local/share/kephalaion/replicas/` | wiederherstellbar durch Abgleich | `<alias>.db` je Hub-Eintrag |
-| `~/.local/state/kephalaion/` (`XDG_STATE_HOME`) | Zustand, Logs | `serve.log` des LaunchAgent (macOS); unter Linux geht das Log ins Journal |
+| `~/.local/state/kephalaion/` (`XDG_STATE_HOME`) | Zustand, Logs | `serve.log` des LaunchAgent (macOS); unter Linux geht das Log ins Journal. `vscode-pause.json` der Erweiterung für VS Code (Task 025): Pause und Budget für alle Fenster des Rechners an einer entfernten `nodeUrl`, kein Token ([`begriffe.md`](begriffe.md), „pause file“) |
 
 - **Token-Dateien — festgehalten am 2026-09-26:** Die Tokens der Accounts liegen neben der
   config, **eine Datei je Account und Hub**: `~/.config/kephalaion/tokens/<hub>/<account>.token`,
@@ -2415,8 +2428,12 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   einen Reverse-Proxy vor dem Hub (gebaut in Task 018); `ssh` später, am selben Anschluss.
   Der MCP-Eingang des Nodes über denselben Proxy: gebaut in Task 023 („Entfernt: MCP über
   HTTPS“). Fehlversuche begrenzt bisher nur fail2ban auf dem Rechner des Proxys: am Hub die
-  401 im Log des Proxys, am Node die Zeilen mit `login=invalid` (entschieden am 2026-10-01,
-  „Kommunikation“). Offen bleibt die Begrenzung im Hub selbst.
+  401 im Log des Proxys, am Node seit Task 025 das Feld `keph_login` im selben Log (der
+  Antwort-Header `X-Keph-Login`, den der Proxy mit der echten Adresse loggt und aus der Antwort
+  nimmt; bis dahin `login=invalid` im Log des Nodes, das ein lokaler Prozess über
+  `X-Forwarded-For` fälschen konnte; entschieden am 2026-10-01 und 2026-10-02, „Kommunikation“).
+  Davor pausiert die Erweiterung für VS Code ungültige Paare, und nach `rotate` stößt der Node den
+  Abgleich an. Offen bleibt die Begrenzung im Hub selbst.
 - **GUI unter `/kephalaion/`:** gebaut in Task 020 als Weboberfläche am Hub, seit Task 026
   mit allen Accounts des Users der Anmeldung des Proxys (`X-User`), ohne Token („Kommunikation“,
   „Die Weboberfläche am Hub“): die Seite an der Wurzel, ihre Teile unter `/gui/`, hinter der
@@ -2446,6 +2463,11 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
   in der altes und neues Token gelten; der neue Hash gleicht sich zu den Nodes ab. Ein Node
   rotiert sein Token selbst: Er erzeugt ein neues und meldet dem Hub nur den Hash, ab da gilt
   das neue (erster Vorgang, siehe „Authentifizierung“, „Einrichtung“). Wie das neue Token bis zu k-playbook gelangt, ist offen.
+  Das Fenster nach `rotate` an einem anderen Node — er prüft das neue Token bis zu seinem
+  nächsten Abgleich gegen die alte Zeile — schließt seit Task 025 der Anstoß des Abgleichs nach
+  einem abgewiesenen Paar zu einem bekannten Account („Kommunikation“, Folgen einer Sperre);
+  eine Gnadenfrist für das alte Token gibt es nicht (entschieden am 2026-10-02), eine laufende
+  Verbindung damit bleibt eine dokumentierte Grenze.
 - **Vormerken bei Nichterreichbarkeit:** derzeit nein, es wird gemeldet. Ob ein Ausgangskorb
   später kommt, ist offen; er bringt Reihenfolge- und Doppelschreibfragen mit.
 - **Anhängen bei mehreren Accounts:** Der Hub serialisiert. Für die lokale Ablage steht
