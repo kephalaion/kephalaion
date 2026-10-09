@@ -146,7 +146,21 @@ Ausführlich: [`konzept.md`](konzept.md).
   Aliasen, die der Node nicht kennt, tragen ihn nicht — an den **account routes** ebenso wenig
   ein unbekannter Alias und ein Hub, der nicht erreicht wurde. Auf dem Rechner des Proxys zählt
   eine fail2ban-Jail die Zeilen mit `via` und `login=invalid` im Journal des Dienstes
-  ([`installation.md`](installation.md)); der Node selbst antwortet nie 401.
+  ([`installation.md`](installation.md)); der Node selbst antwortet nie 401. **Seit Task 025**
+  zählt die Jail im Log des Proxys (**X-Keph-Login**); `login=invalid` im Log des Nodes bleibt zur
+  Diagnose.
+- **X-Keph-Login** (Antwort-Header, Task 025) — der Header `X-Keph-Login: invalid`, den der Node auf
+  eine Anfrage **via proxy** an `/mcp` oder eine der **account routes** setzt, die ein Fehlversuch
+  ist (**login=invalid**: mindestens ein ungültiges Header-Paar zu einem Alias, den der Node kennt —
+  auch neben einem gültigen; an den **account routes** ein vom Hub abgelehntes Token). Keine Anfrage
+  ohne Paar, keine mit Paaren nur zu unbekannten Aliasen und keine lokale (ohne `X-Forwarded-For`)
+  trägt ihn; ein anderer Wert als `invalid` kommt nicht vor. Der Proxy schreibt ihn mit der Adresse
+  der TCP-Verbindung in sein Zugriffslog (Caddy: `log_append keph_login
+  {http.reverse_proxy.header.X-Keph-Login}` als Feld `keph_login`) und nimmt ihn aus der Antwort
+  (`header_down -X-Keph-Login`): Der Client sieht ihn nie, und ein Fremder erfährt an der Antwort
+  nicht, welche Aliase der Node kennt. Darauf zählt die Jail (`kephalaion-mcp`,
+  [`installation.md`](installation.md), „Fehlversuche“) — mit der echten Adresse statt mit `via`,
+  das ein lokaler Prozess fälschen konnte.
 - **account routes** (Weg für Accounts) — die zwei Routen am Node-Listener neben `/mcp` (Task
   028), über die ein Client ohne Zugriff auf die Datenbank des Nodes das Token eines Accounts
   rotieren und prüfen lässt — für **node account setup** und **node account list**. Kein MCP:

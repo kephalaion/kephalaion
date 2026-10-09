@@ -340,32 +340,45 @@ Antwort aus einer lokalen Replica kommen.
   ein Nutzer dieses Nodes.
 - **Lokal bleibt alles.** Ohne `X-Forwarded-For` zeigt `whoami` weiter alle Hubs mit Anmeldung
   und Stand und `unknown_hubs` — die Hilfe bei falsch eingerichteten Clients.
-- **Fehlversuche: Der Node schreibt sie ins Log, eine Jail auf dem Rechner des Proxys zählt
-  sie.** Der Node antwortet bei falschem Token nie 401, sondern wie bisher mit einer Antwort des
-  Werkzeugs (`isError`) — ein 401 nehmen MCP-Clients als Beginn der Autorisierung per OAuth
-  (MCP-Spezifikation), und lokal verlöre `whoami` seine Hilfe. Stattdessen trägt die Logzeile
-  einer Anfrage mit mindestens einem ungültigen Header-Paar (falsches Token, unbekannter oder
-  gesperrter Account) den Vermerk `login=invalid`, direkt hinter `via` (der ersten Adresse aus
-  `X-Forwarded-For`) und vor allen Namen. Eine fail2ban-Jail liest das Journal des Dienstes
-  und zählt Zeilen mit `via` und `login=invalid` (auf der VM `kephalaion-mcp`). **Ein
-  Fehlversuch ist eine Anfrage**, gleich wie viele Paare darin ungültig sind; eine Anfrage ganz
-  ohne Header-Paar (`initialize` ohne Token) zählt nicht, ebenso eine mit Paaren nur zu
-  Aliasen, die der Node nicht kennt — dort ist nichts geprüft worden. Schwelle und Fenster wie
+- **Fehlversuche: Der Node markiert sie, Caddy schreibt sie mit der echten Adresse ins
+  Zugriffslog, eine Jail auf dem Rechner des Proxys zählt sie dort** (Task 023; seit Task 025 im
+  Log des Proxys statt im Log des Nodes). Der Node antwortet bei falschem Token nie 401, sondern
+  wie bisher mit einer Antwort des Werkzeugs (`isError`) — ein 401 nehmen MCP-Clients als Beginn
+  der Autorisierung per OAuth (MCP-Spezifikation), und lokal verlöre `whoami` seine Hilfe.
+  Stattdessen trägt die Antwort auf eine Anfrage **via proxy** mit mindestens einem ungültigen
+  Header-Paar (falsches Token, unbekannter oder gesperrter Account, halbes Paar, Hub noch nie
+  abgeglichen) den Antwort-Header **`X-Keph-Login: invalid`** ([`begriffe.md`](begriffe.md)) —
+  auch neben einem gültigen Paar; lokal setzt er ihn nie. Der Proxy schreibt den Wert mit
+  `log_append keph_login {http.reverse_proxy.header.X-Keph-Login}` als Feld `keph_login` in
+  seine JSON-Zeile — neben `remote_ip` aus der TCP-Verbindung — und nimmt ihn mit `header_down
+  -X-Keph-Login` aus der Antwort: Der Client sieht ihn nie, und ein Fremder erfährt an der Antwort
+  nicht, welche Aliase der Node kennt. Die Jail (`kephalaion-mcp` auf der VM) liest das Journal
+  von `caddy.service` und zählt Zeilen der Routen `/kephalaion/mcp`, `/kephalaion/account/rotate`
+  und `/kephalaion/account/check` mit `"keph_login":"invalid"` ([`installation.md`](installation.md),
+  „Fehlversuche“). Im Log des Nodes bleibt `login=invalid` hinter `via` (der ersten Adresse aus
+  `X-Forwarded-For`) je Anfrage zur Diagnose; gezählt wird dort nicht mehr. **Ein Fehlversuch ist
+  eine Anfrage**, gleich wie viele Paare darin ungültig sind; eine Anfrage ganz ohne Header-Paar
+  (`initialize` ohne Token) zählt nicht, ebenso eine mit Paaren nur zu Aliasen, die der Node nicht
+  kennt — dort ist nichts geprüft worden, und unbekannte Aliase mitzuzählen träfe richtig
+  eingerichtete Clients mit Paaren für Hubs, die dieser Node nicht führt. Schwelle und Fenster wie
   bei der Jail für 401 im Log des Proxys (`caddy-auth`): 10 in 10 min, Sperre 1 h, bei
-  Wiederholung jeweils doppelt so lang, höchstens eine Woche. Die Zeile lässt sich über Header
-  nicht fälschen: Account und Alias stehen nur über `ident.LogName` darin (keine Leerzeichen,
-  kein `=`), `via` und `login=invalid` an fester Stelle davor; `via` ist nur verlässlich, weil
-  der Proxy mitgeschickte Werte von `X-Forwarded-For` verwirft. Auch eine kodierte Schreibweise
-  des Pfads (`/%6dcp`, `/account/rotat%65`) zählt nicht an der Jail vorbei: Der Node wählt die
-  Route am Pfad, wie er im Log steht, nicht am dekodierten — so eine Anfrage ist 404, ohne dass
-  ein Token geprüft wird (ein Proxy wie Caddy wählt seine Route am dekodierten Pfad und reicht
-  die Schreibweise durch). Grenze: Ein Prozess auf dem
-  Rechner des Nodes erreicht ihn über Loopback ohne Proxy und kann den Header selbst setzen —
-  so eine Zeile mit fremder Adresse und deren Sperre erzeugen; wer dort arbeitet, gilt als
-  vertrauenswürdig. Die Tokens sind lang und zufällig — die Jail ist eine Absicherung
-  zusätzlich, nicht die einzige Schranke. Dasselbe gilt an den Routen für Accounts neben `/mcp`
-  (`/account/rotate`, `/account/check`, Task 028; „Einrichten durch den User“): Lehnt der Hub
-  das Token ab, trägt ihre Zeile `login=invalid` hinter `via`, und dieselbe Jail zählt sie.
+  Wiederholung jeweils doppelt so lang, höchstens eine Woche; eine Adresse mit früherer Sperre
+  zählt doppelt, für sie reichen 5. Fälschen lässt sich die Zeile nicht: `remote_ip` stammt aus
+  der TCP-Verbindung, nicht aus einem Header, und Caddy maskiert Anführungszeichen; `X-Forwarded-For`
+  spielt für die Sperre keine Rolle mehr. Ein Prozess auf dem Rechner des Nodes kann weder über
+  `X-Forwarded-For` am Node (Caddy schreibt dann keine Zeile) noch über die Admin-API von Caddy
+  (seit 2026-10-05 ein Unix-Socket, den nur `caddy` und root erreichen) eine fremde Adresse sperren
+  lassen. Grenze, dokumentiert: root oder Rechte wie root (`sudo`, Gruppe `docker`) und ein
+  Prozess, der den Port des Nodes übernimmt, solange der Node neu startet. Auch eine kodierte
+  Schreibweise des Pfads (`/%6dcp`, `/account/rotat%65`) zählt nicht an der Jail vorbei: Der Node
+  wählt die Route am Pfad, wie die Anfrage ihn schreibt, nicht am dekodierten — so eine Anfrage
+  ist 404, ohne dass ein Token geprüft wird (Caddy wählt seine Route am dekodierten Pfad, schreibt
+  die Schreibweise ins Log und reicht sie durch); im Log von Caddy steht `uri` mit Präfix und
+  Query, der Filter lässt die Query zu. Die Tokens sind lang und zufällig — die Jail ist eine
+  Absicherung zusätzlich, nicht die einzige Schranke. Dasselbe gilt an den Routen für Accounts
+  neben `/mcp` (`/account/rotate`, `/account/check`, Task 028; „Einrichten durch den User“): Lehnt
+  der Hub das Token ab, trägt die Antwort über den Proxy den Header — nicht bei unbekanntem Alias
+  und nicht erreichtem Hub —, und dieselbe Jail zählt die Zeile.
 - **Folgen einer Sperre.** fail2ban sperrt die ganze Adresse auf 80 und 443 — auch den Abgleich
   eines Nodes vom selben Rechner mit dem Hub hinter demselben Proxy und die Weboberfläche
   hinter dessen Anmeldung. Ausgenommen ist nur, was die Jail ausdrücklich ausnimmt (auf der VM

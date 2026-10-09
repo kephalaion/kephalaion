@@ -661,3 +661,47 @@ func TestAccountRotateReplicaFails(t *testing.T) {
 		t.Errorf("Logzeile ohne Fehler: %q", e.lastLine())
 	}
 }
+
+// Der Antwort-Header X-Keph-Login: invalid (Task 025) steht an den Routen
+// für Accounts über den Proxy genau dann, wenn der Hub das Token ablehnt —
+// bei rotate wie bei check. Nicht bei unbekanntem Alias, nicht erreichtem
+// Hub, falscher Form und nicht bei Erfolg; lokal nie.
+func TestAccountLoginHeader(t *testing.T) {
+	e := newAcctEnv(t)
+	tok, wrong := e.newToken(t), e.newToken(t)
+	e.hub.add("anna", "kleist", tok, "wissen")
+	has := func(r acctReply) string { return r.header.Get(LoginHeader) }
+	// Über den Proxy: abgelehnt → Header.
+	if r := e.check(t, e.proxy, pair("zentrale", "anna", wrong)); r.status != http.StatusForbidden || has(r) != LoginInvalid {
+		t.Errorf("check falsch über den Proxy: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
+	}
+	if r := e.rotate(t, e.proxy, pair("zentrale", "anna", wrong), ident.HashToken(e.newToken(t))); r.status !=
+		http.StatusForbidden || has(r) != LoginInvalid {
+		t.Errorf("rotate falsch über den Proxy: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
+	}
+	if r := e.check(t, e.proxy, pair("zentrale", "niemand", wrong)); has(r) != LoginInvalid {
+		t.Errorf("check unbekannter Account über den Proxy: %s=%q", LoginHeader, has(r))
+	}
+	// Über den Proxy ohne Fehlversuch: kein Header.
+	for name, r := range map[string]acctReply{
+		"gültig":             e.check(t, e.proxy, pair("zentrale", "anna", tok)),
+		"unbekannter Alias":  e.check(t, e.proxy, pair("nirgends", "anna", wrong)),
+		"Hub nicht erreicht": e.check(t, e.proxy, pair("funkloch", "anna", wrong)),
+		"ohne Paar":          e.call(t, e.proxy, http.MethodPost, AccountCheckPath, nil, ""),
+		"falsche Methode":    e.call(t, e.proxy, http.MethodGet, AccountCheckPath, pair("zentrale", "anna", wrong), ""),
+	} {
+		if got := has(r); got != "" {
+			t.Errorf("über den Proxy, %s: %s=%q (HTTP %d)", name, LoginHeader, got, r.status)
+		}
+	}
+	// Lokal nie, auch nicht bei einem Fehlversuch.
+	if r := e.check(t, e.direct, pair("zentrale", "anna", wrong)); r.status != http.StatusForbidden || has(r) != "" {
+		t.Errorf("check falsch lokal: HTTP %d, %s=%q", r.status, LoginHeader, has(r))
+	}
+	if !strings.Contains(e.lastLine(), " login=invalid hub=zentrale") {
+		t.Errorf("Logzeile lokal: %q", e.lastLine())
+	}
+	if r := e.rotate(t, e.direct, pair("zentrale", "anna", wrong), ident.HashToken(e.newToken(t))); has(r) != "" {
+		t.Errorf("rotate falsch lokal: %s=%q", LoginHeader, has(r))
+	}
+}

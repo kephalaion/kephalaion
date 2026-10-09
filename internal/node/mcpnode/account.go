@@ -29,7 +29,9 @@ import (
 // Es entscheidet der Hub, ohne Vorprüfung gegen die Replica: Ein frisch
 // angelegter Account steht dort erst nach dem nächsten Abgleich. Lehnt der
 // Hub das Token ab, ist das ein Fehlversuch wie am MCP-Eingang
-// (login=invalid als erster Vermerk). Über einen Proxy ohne gültige
+// (login=invalid als erster Vermerk, über einen Proxy der Antwort-Header
+// LoginHeader — nicht bei unbekanntem Alias und nicht erreichtem Hub, dort
+// ist nichts geprüft). Über einen Proxy ohne gültige
 // Anmeldung sind „abgelehnt“, „Hub unbekannt“ und „der Hub nimmt den Node
 // nicht an“ eine Antwort ohne Namen; „Hub nicht erreicht“, „Ausgang unklar“
 // und Fehler des Nodes bleiben eigene Codes, ebenfalls ohne Namen. Kein
@@ -188,6 +190,9 @@ func (n *Node) accountHandler(rotate bool) http.Handler {
 		c.note(r.Context(), fail.code)
 		out := AccountError{Code: fail.code, Message: fail.msg}
 		if Proxied(r.Header) {
+			if c.failed {
+				w.Header().Set(LoginHeader, LoginInvalid)
+			}
 			switch fail.code {
 			case string(contract.CodeAccountUnauthenticated), CodeUnknownHub, CodeHubRefused:
 				// Verdeckt: dieselbe Antwort, gleich ob der Hub ablehnte, der

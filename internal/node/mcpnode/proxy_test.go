@@ -607,3 +607,75 @@ func TestFailedLoginLogNotForgeable(t *testing.T) {
 		t.Errorf("lokal: %s", line)
 	}
 }
+
+// loginHeader schickt body an base/mcp und liefert den Antwort-Header
+// X-Keph-Login (leer, wenn er fehlt); die Anfrage muss 200 ergeben.
+func loginHeader(t *testing.T, base string, header http.Header, body string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, base+Path, strings.NewReader(body))
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP %d %s", resp.StatusCode, b)
+	}
+	if n := len(resp.Header.Values(LoginHeader)); n > 1 {
+		t.Errorf("%s steht %d-mal", LoginHeader, n)
+	}
+	return resp.Header.Get(LoginHeader)
+}
+
+const whoamiBody = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}`
+
+// Der Antwort-Header X-Keph-Login: invalid (Task 025) steht über den Proxy
+// auf jeder Anfrage mit mindestens einem ungültigen Paar zu einem Hub, den
+// der Node kennt — falsches Token, unbekannter Account, Hub ohne Replica,
+// auch neben einem gültigen Paar, bei initialize wie bei einem Werkzeug.
+// Nicht ohne Paar, nicht mit Paaren nur zu unbekannten Aliasen, nicht bei
+// gültiger Anmeldung an allen Hubs der Anfrage — und lokal nie, auch nicht
+// mit falschem Token; dort bleibt login=invalid im Log.
+func TestProxyLoginHeader(t *testing.T) {
+	e := newProxyEnv(t, "lager", "werkstatt", "zentrale")
+	cases := []struct {
+		name   string
+		header http.Header
+		want   string
+	}{
+		{"ohne Paar", nil, ""},
+		{"gültig", e.valid("zentrale"), ""},
+		{"gültig an zwei Hubs", merge(e.valid("zentrale"), e.valid("werkstatt")), ""},
+		{"unbekannter Alias", e.wrong(t, "nirgends"), ""},
+		{"gültig und unbekannter Alias", merge(e.valid("zentrale"), e.wrong(t, "nirgends")), ""},
+		{"falsches Token", e.wrong(t, "zentrale"), LoginInvalid},
+		{"unbekannter Account", e.unknown(t, "zentrale"), LoginInvalid},
+		{"Hub ohne Replica", e.wrong(t, "lager"), LoginInvalid},
+		{"gültig und falsch", merge(e.valid("zentrale"), e.wrong(t, "werkstatt")), LoginInvalid},
+		{"halbes Paar", http.Header{"X-Keph-Account-Zentrale": {"anna"}}, LoginInvalid},
+	}
+	for _, c := range cases {
+		for _, body := range []string{initializeBody, whoamiBody} {
+			if got := loginHeader(t, e.proxy, c.header, body); got != c.want {
+				t.Errorf("über den Proxy, %s: %s=%q, erwartet %q", c.name, LoginHeader, got, c.want)
+			}
+		}
+	}
+	// Lokal nie, auch nicht bei einem Fehlversuch; login=invalid im Log
+	// bleibt (je Fall einmal).
+	before := strings.Count(e.log.String(), "login=invalid")
+	for _, c := range cases {
+		if got := loginHeader(t, e.direct, c.header, whoamiBody); got != "" {
+			t.Errorf("lokal, %s: %s=%q", c.name, LoginHeader, got)
+		}
+	}
+	if n := strings.Count(e.log.String(), "login=invalid") - before; n != 5 {
+		t.Errorf("lokal %d-mal login=invalid im Log, erwartet 5:\n%s", n, e.log.String())
+	}
+}

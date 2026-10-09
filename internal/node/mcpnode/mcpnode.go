@@ -20,8 +20,12 @@
 // Anmeldung an einem Hub ist die Antwort verdeckt (hidden): keine Version,
 // kein update, keine Namen von Node und Hubs — der Node antwortet, als hätte
 // er keinen Hub-Eintrag. Eine Anfrage mit mindestens einem ungültigen
-// Header-Paar vermerkt im Log login=invalid, direkt hinter via; das zählt
-// eine Jail auf dem Rechner des Proxys (docs/konzept.md, „Kommunikation“).
+// Header-Paar vermerkt im Log login=invalid, direkt hinter via, und trägt
+// über einen Proxy den Antwort-Header X-Keph-Login: invalid (LoginHeader):
+// Der Proxy schreibt ihn mit der echten Adresse in sein Zugriffslog und
+// nimmt ihn aus der Antwort; dort zählt eine Jail auf seinem Rechner
+// (docs/konzept.md, „Kommunikation“; Task 025). Lokal gibt es den Header
+// nicht.
 //
 // Daneben die Routen für Accounts (/account/rotate, /account/check,
 // account.go): kein MCP, je Vorgang eine Anfrage, für node account setup
@@ -51,6 +55,13 @@ import (
 
 // Path ist der Pfad des MCP-Eingangs.
 const Path = "/mcp"
+
+// LoginHeader ist der Antwort-Header, den der Node über einen Proxy auf
+// einen Fehlversuch setzt — an /mcp wie an den Routen für Accounts —, mit
+// dem Wert LoginInvalid. Der Proxy schreibt ihn ins Zugriffslog und nimmt
+// ihn aus der Antwort (docs/begriffe.md, „X-Keph-Login“). Ohne Proxy
+// (kein X-Forwarded-For) fehlt er.
+const LoginHeader = "X-Keph-Login"
 
 // Die Präfixe der Header je Hub, klein geschrieben. Der Rest des Namens ist
 // der Alias des Hub-Eintrags; siehe HubHeaders.
@@ -156,8 +167,10 @@ func hides(h http.Header, l Logins) bool { return Proxied(h) && len(l.Valid()) =
 // eine Webseite im Browser den Node nicht über DNS-Rebinding. Danach prüft es
 // die Header-Paare: Ist eines ungültig, vermerkt es zuerst login=invalid im
 // Log (ein Fehlversuch je Anfrage; die Zeile setzt via davor), dann die
-// Accounts (nur Namen). Über einen Proxy ohne gültige Anmeldung markiert es
-// die Anfrage als verdeckt — initialize nennt dann keine Version.
+// Accounts (nur Namen). Über einen Proxy setzt es bei einem Fehlversuch den
+// Antwort-Header LoginHeader — auch neben einem gültigen Paar — und markiert
+// die Anfrage ohne gültige Anmeldung als verdeckt — initialize nennt dann
+// keine Version.
 func (n *Node) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := loopback.CheckHost(r); err != nil {
@@ -170,12 +183,13 @@ func (n *Node) guard(next http.Handler) http.Handler {
 		}
 		ctx := r.Context()
 		pairs := HubHeaders(r.Header)
-		valid := false
+		valid, failed := false, false
 		if len(pairs) > 0 {
 			// Ein Fehler von node.db zählt nicht als Fehlversuch; das
 			// Werkzeug meldet ihn selbst.
 			if logins, err := n.Authenticate(ctx, r.Header); err == nil {
-				if logins.Failed() {
+				failed = logins.Failed()
+				if failed {
 					reqlog.Note(ctx, "login", "invalid")
 				}
 				valid = len(logins.Valid()) > 0
@@ -184,8 +198,13 @@ func (n *Node) guard(next http.Handler) http.Handler {
 		for _, p := range pairs {
 			reqlog.Note(ctx, "account", p.Account)
 		}
-		if Proxied(r.Header) && !valid {
-			r = r.WithContext(context.WithValue(ctx, hiddenKey{}, true))
+		if Proxied(r.Header) {
+			if failed {
+				w.Header().Set(LoginHeader, LoginInvalid)
+			}
+			if !valid {
+				r = r.WithContext(context.WithValue(ctx, hiddenKey{}, true))
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
