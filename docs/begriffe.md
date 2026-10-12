@@ -398,7 +398,10 @@ Ausführlich: [`konzept.md`](konzept.md).
   Abstand nach **Proben ohne Ergebnis** (`unanswered`: Zahl, Zeit der letzten und der nächsten).
   Kein Token und kein Hash. Atomar geschrieben (neue Datei, `rename`, `0600`); vor jeder Anfrage
   übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); ist sie kaputt oder
-  fehlt sie, gelten Schranke und Sperrdatei trotzdem. Nach einer gültigen Antwort ist die Pause
+  fehlt sie, gelten Schranke und Sperrdatei trotzdem; lässt sie sich nicht schreiben (Verzeichnis
+  ohne Schreibrecht, Platte voll), hält das Fenster denselben Stand im Speicher und arbeitet
+  damit weiter, bis das Schreiben wieder gelingt (je einmal im Log) — Grenze: ohne schreibbare
+  Datei zählt der Stand nur je Fenster. Nach einer gültigen Antwort ist die Pause
   des Paars weg, die Zeiten im Budget bleiben, bis sie 10 min alt sind. Grenze: ein Stand je
   Benutzer und Betriebssystem, auf dem die Token-Dateien liegen — Fenster unter Windows und in
   der WSL desselben Rechners teilen ihn nicht (dieselbe Adresse nach außen), haben aber ohnehin

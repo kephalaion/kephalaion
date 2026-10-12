@@ -314,9 +314,16 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
     vor jeder Anfrage übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat);
     proben darf zur selben Zeit nur ein Fenster (Sperrdatei mit `O_EXCL`, nach 30 s verwaist),
     die anderen übernehmen das Ergebnis; ist sie kaputt oder fehlt sie, gelten Schranke und
-    Sperrdatei trotzdem. Grenze: ein Stand je Benutzer und Betriebssystem, auf dem die
-    Token-Dateien liegen — Fenster unter Windows und in der WSL desselben Rechners teilen ihn
-    nicht (dieselbe Adresse nach außen), haben aber ohnehin eigene Token-Dateien.
+    Sperrdatei trotzdem (leer gelesen, die nächste Probe schreibt sie neu). Lässt sie sich nicht
+    schreiben (Verzeichnis ohne Schreibrecht, etwa von root angelegt; Platte voll), ist das kein
+    Ergebnis einer Probe und kein Fehler für die Anfrage: Das Fenster hält Pause, Budget und
+    Abstand im Speicher und arbeitet damit genauso weiter; jedes weitere Schreiben versucht die
+    Datei erneut, und gelingt es, gilt wieder der geteilte Stand (je einmal im Log „Kephalaion“,
+    mit Pfad und Fehler, nicht je Anfrage — auch für die Sperrdatei: ohne sie probt jedes Fenster
+    für sich). Grenze: ohne schreibbare Datei zählt der Stand nur je Fenster. Grenze: ein Stand je
+    Benutzer und Betriebssystem, auf dem die Token-Dateien liegen — Fenster unter Windows und in
+    der WSL desselben Rechners teilen ihn nicht (dieselbe Adresse nach außen), haben aber ohnehin
+    eigene Token-Dateien.
   - **Wann wieder geprobt wird:** sofort einmal, wenn sich die Kennung der Token-Datei des Paars
     ändert (spätestens beim nächsten Lesen, 5 s), ebenso bei anderer Wahl und „Neu verbinden“;
     sonst nach wachsender Pause — 1, 2, 4, 8, 16, 30 min, danach alle 30 min — und nur, wenn das

@@ -294,7 +294,7 @@ class Node {
     this.id = 0;
     // Schranke, Pause und Budget an einer entfernten Adresse (pause.js, Task 025) — ein Stand
     // für alle Fenster dieses Rechners in der Pausendatei.
-    this.gate = new pause.Gate({ file: new pause.PauseFile(pause.pauseFilePath()), log, onChange: onPauseChange || (() => {}) });
+    this.gate = new pause.Gate({ file: new pause.PauseFile(pause.pauseFilePath(), { log }), log, onChange: onPauseChange || (() => {}) });
   }
 
   // opts.hub: der Hub, den die Anfrage betrifft — ein pausiertes Paar scheitert ohne Anfrage.

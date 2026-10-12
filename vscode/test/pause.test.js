@@ -40,6 +40,38 @@ test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: 
 
 const pair = (hub, account = 'kamran', tokenId = '48:1700000000000') => ({ hub, account, tokenId });
 
+// Ein Dateisystem, dem sich das Schreibrecht nehmen lässt wie einem Verzeichnis 0500 (readonly:
+// EACCES beim Anlegen und Umbenennen) oder einer vollen Platte (full: ENOSPC beim Schreiben, die
+// Datei entsteht leer, wie wirklich) — ohne chmod, das unter root nichts verböte. Alles andere ist
+// das echte Dateisystem.
+function brittleFs() {
+  const err = (code, what) => Object.assign(new Error(`${code}: ${what}`), { code });
+  const impl = Object.create(fs);
+  impl.readonly = false;
+  impl.full = false;
+  impl.writeFileSync = (file, ...rest) => {
+    if (impl.readonly) throw err('EACCES', `permission denied, open '${file}'`);
+    if (impl.full) {
+      fs.writeFileSync(file, '');
+      throw err('ENOSPC', `no space left on device, write '${file}'`);
+    }
+    return fs.writeFileSync(file, ...rest);
+  };
+  impl.renameSync = (from, to) => {
+    if (impl.readonly) throw err('EACCES', `permission denied, rename '${from}' -> '${to}'`);
+    return fs.renameSync(from, to);
+  };
+  impl.openSync = (file, flags, ...rest) => {
+    if (impl.readonly && flags === 'wx') throw err('EACCES', `permission denied, open '${file}'`);
+    return fs.openSync(file, flags, ...rest);
+  };
+  impl.writeSync = (fd, ...rest) => {
+    if (impl.full) throw err('ENOSPC', 'no space left on device, write');
+    return fs.writeSync(fd, ...rest);
+  };
+  return impl;
+}
+
 // Der Ersatz des Nodes über den Proxy: je Hub, ob das Paar gilt. Jede Anfrage mit mindestens
 // einem ungültigen Paar ist ein Fehlversuch (ein Fehlversuch ist eine Anfrage, gleich wie viele
 // Paare ungültig sind); alle ungültig heißt verdeckt. down: keine Verbindung (nichts kommt an);
@@ -83,11 +115,11 @@ class FakeNode {
 // Node.request in extension.js: erst die Probe, dann ohne pausierte Paare; die Antwort wird
 // beobachtet (rules.whoamiOutcome).
 class Window {
-  constructor(file, now, node, pairs, log) {
+  constructor(file, now, node, pairs, log = () => {}, fsImpl = fs) {
     this.node = node;
     this.now = now;
     this.pairs = pairs;
-    this.gate = new Gate({ file: new PauseFile(file, { now }), now, sleep: yieldSleep, log: log || (() => {}) });
+    this.gate = new Gate({ file: new PauseFile(file, { now, fsImpl, log }), now, sleep: yieldSleep, log });
   }
 
   async request() {
@@ -516,3 +548,163 @@ test('Zwei Fenster: der Abstand gilt je Adresse über die Pausendatei — zusamm
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered, {});
   assert.ok(!fs.existsSync(`${file}.lock`), 'Sperrdatei bleibt liegen');
 });
+
+// Der kritische Befund des zweiten Reviews (vscode/pause.js:444): Ließ sich die Pausendatei nicht
+// schreiben, galt der Schreibfehler als Ergebnis der Probe — Kennung gesetzt, keine Pause, alle
+// Paare hinaus; bei liegendem Node fehlte der Abstand, jede Anfrage probte neu. Jetzt: Der
+// Schreibfehler wirft nicht, der Stand gilt im Speicher dieses Fensters, und sonst alles wie mit
+// Datei; je einmal im Log; beim nächsten gelungenen Schreiben wieder die Datei.
+test('Pausendatei nicht schreibbar: kein Ergebnis — Schranke zu, Abstand 5–60 s und Pause im Speicher; wieder schreibbar → Datei', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  node.down = true;
+  const file = tmpFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = true;
+  const logs = [];
+  const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l), bfs);
+  // Sechs Anfragen zugleich und sechs nacheinander (der Probelauf des Reviews): eine Probe.
+  const results = await Promise.all([1, 2, 3, 4, 5, 6].map(() => w.tryRequest()));
+  for (let i = 0; i < 6; i++) results.push(await w.tryRequest());
+  assert.strictEqual(node.attempts, 1, `${node.attempts} Proben`);
+  for (const r of results) {
+    assert.ok(r instanceof Error, 'eine Anfrage ging durch');
+    assert.strictEqual(r.kind, 'unreachable', `${r.message}`);
+    assert.match(r.message, /ECONNREFUSED\); nächste Probe in 5 s/);
+  }
+  assert.strictEqual(w.gate.probedSig, undefined, 'der Schreibfehler galt als Ergebnis');
+  assert.ok(!fs.existsSync(file) && !fs.existsSync(`${file}.lock`));
+  // Der Abstand wächst im Speicher wie in der Datei: 10, 30, 60, dann 60 s, je genau eine Probe.
+  for (const [wait, next] of [[5, 10], [10, 30], [30, 60], [60, 60], [60, 60]]) {
+    now.advance(wait * SEC);
+    const before = node.attempts;
+    await Promise.all([w.tryRequest(), w.tryRequest()]);
+    assert.strictEqual(node.attempts, before + 1, `nach ${wait} s: ${node.attempts - before} Proben`);
+    assert.strictEqual(w.gate.file.load().unanswered[ADDRESS].nextProbe, now() + next * SEC, 'der Abstand im Speicher');
+    await w.tryRequest();
+    assert.strictEqual(node.attempts, before + 1);
+  }
+  assert.strictEqual(node.requests, 0, 'etwas kam beim Node an');
+  // Je einmal im Log, nicht je Anfrage: die Pausendatei und die Sperrdatei, mit Pfad und Fehler.
+  assert.strictEqual(logs.filter((l) => l.includes('Pausendatei') && l.includes('nicht schreibbar')).length, 1, logs.join('\n'));
+  assert.strictEqual(logs.filter((l) => l.includes('Sperrdatei') && l.includes('nicht anlegbar')).length, 1, logs.join('\n'));
+  assert.ok(logs.some((l) => l.includes(file) && l.includes('EACCES')), logs.join('\n'));
+  assert.ok(!logs.join('\n').includes(TOKEN));
+  // Der Node ist zurück, das Paar ungültig: Die Probe ist ein Ergebnis — Kennung gesetzt, das
+  // Paar pausiert im Speicher, nichts sendbar, kein changes alle 3 s; die Datei fehlt weiter.
+  node.down = false;
+  now.advance(60 * SEC);
+  await run([w], now, 50 * SEC);
+  assert.strictEqual(node.requests, 1, `${node.requests} Anfragen mit ungültigem Paar`);
+  assert.ok(w.gate.probedSig, 'nicht als geprobt gekennzeichnet');
+  assert.strictEqual(w.paused().vm.failures, 1);
+  assert.deepStrictEqual(w.gate.sendable(ADDRESS, w.pairs), []);
+  assert.strictEqual(w.gate.budget(ADDRESS), 1);
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), [], 'Datei oder Zwischendatei entstand trotzdem');
+  assert.strictEqual(logs.filter((l) => l.includes('nicht schreibbar')).length, 1, 'je Anfrage im Log');
+  // Das Schreibrecht ist zurück: Die nächste Probe (nach der Pause von 1 min) schreibt die Datei
+  // mit dem Stand aus dem Speicher, einmal im Log; ein zweites Fenster übernimmt die Pause.
+  bfs.readonly = false;
+  now.advance(MIN);
+  assert.strictEqual(await w.request(), 'paused');
+  assert.strictEqual(node.requests, 2);
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(state.pairs[`${ADDRESS}|vm|kamran`].failures, 2, 'die Zählung aus dem Speicher fehlt in der Datei');
+  assert.strictEqual(state.budget[ADDRESS].length, 2);
+  assert.strictEqual(logs.filter((l) => l.includes('Pausendatei') && l.includes('wieder schreibbar')).length, 1, logs.join('\n'));
+  assert.strictEqual(logs.filter((l) => l.includes('Sperrdatei') && l.includes('wieder anlegbar')).length, 1, logs.join('\n'));
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), ['vscode-pause.json']);
+  const b = new Window(file, now, node, [pair('vm')]);
+  assert.strictEqual(await b.request(), 'paused');
+  assert.strictEqual(node.requests, 2, 'das zweite Fenster probte trotz der Datei');
+  assert.strictEqual(b.paused().vm.failures, 2);
+});
+
+test('Pausendatei nicht schreibbar: Probe mit invalid pausiert das Paar im Speicher, nichts sendbar, nächste Probe nach der Pause', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = true;
+  const w = new Window(file, now, node, [pair('vm')], undefined, bfs);
+  const results = await Promise.all([1, 2, 3, 4, 5].map(() => w.request()));
+  assert.deepStrictEqual(results, ['paused', 'paused', 'paused', 'paused', 'paused']);
+  assert.strictEqual(node.requests, 1, 'mehr als eine Anfrage mit dem Paar');
+  assert.ok(w.gate.probedSig, 'die Probe mit Ergebnis setzte die Kennung nicht');
+  assert.strictEqual(w.paused().vm.nextProbe, now() + MIN);
+  assert.ok(!fs.existsSync(file));
+  // In der Minute nichts, danach die zweite Probe; dann hält das Budget (2) bis 10 min nach der ersten.
+  await run([w], now, 57 * SEC);
+  assert.strictEqual(node.requests, 1);
+  now.advance(3 * SEC);
+  assert.strictEqual(await w.request(), 'paused');
+  assert.strictEqual(node.requests, 2);
+  assert.strictEqual(w.paused().vm.failures, 2);
+  assert.strictEqual(w.gate.budget(ADDRESS), 2);
+  await run([w], now, 8 * MIN);
+  assert.strictEqual(node.requests, 2, 'Probe trotz vollem Budget');
+  assert.ok(node.worstWindow() <= RESERVE);
+});
+
+test('Platte voll (ENOSPC): keine Zwischendatei, keine leere Sperrdatei, der Stand im Speicher; danach wieder die Datei mit allem', () => {
+  const now = clock();
+  const file = tmpFile();
+  const bfs = brittleFs();
+  const logs = [];
+  const pf = new PauseFile(file, { now, fsImpl: bfs, log: (l) => logs.push(l) });
+  bfs.full = true;
+  assert.strictEqual(pf.tryLock(), 'none');
+  assert.strictEqual(pf.tryLock(), 'none');
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), [], 'eine leere Sperrdatei bleibt liegen');
+  pf.update((s) => { s.budget[ADDRESS] = [now()]; return true; });
+  assert.strictEqual(pf.unwritable, true);
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), [], 'eine Zwischendatei bleibt liegen');
+  assert.deepStrictEqual(pf.load().budget[ADDRESS], [now()], 'der Stand im Speicher ist weg');
+  // Das nächste Lesen-Ändern-Schreiben baut auf dem Speicher auf, nicht auf der fehlenden Datei.
+  pf.update((s) => { s.unanswered[ADDRESS] = { count: 1, at: now(), nextProbe: now() + 5 * SEC }; return true; });
+  assert.strictEqual(pf.load().budget[ADDRESS].length, 1);
+  assert.strictEqual(logs.length, 2, logs.join('\n'));
+  // Platz ist wieder da: Das nächste Schreiben legt die Datei an, mit allem aus dem Speicher.
+  bfs.full = false;
+  pf.update((s) => { s.budget[ADDRESS].push(now()); return true; });
+  assert.strictEqual(pf.unwritable, false);
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(onDisk.budget[ADDRESS].length, 2);
+  assert.strictEqual(onDisk.unanswered[ADDRESS].count, 1);
+  assert.strictEqual(pf.tryLock(), 'got');
+  pf.unlock();
+  assert.strictEqual(logs.length, 4, logs.join('\n'));
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), ['vscode-pause.json']);
+  assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+// Dasselbe am echten Dateisystem: ein Verzeichnis 0500, wie es root angelegt haben könnte.
+test('Verzeichnis 0500 am echten Dateisystem: EACCES ist kein Ergebnis — eine Probe, Pause im Speicher',
+  { skip: typeof process.getuid === 'function' && process.getuid() === 0 ? 'unter root verbietet 0500 nichts' : false },
+  async () => {
+    const now = clock();
+    const node = new FakeNode({ vm: false });
+    node.down = true;
+    const file = tmpFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.chmodSync(path.dirname(file), 0o500);
+    try {
+      const logs = [];
+      const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
+      for (let i = 0; i < 6; i++) await w.tryRequest();
+      assert.strictEqual(node.attempts, 1, `${node.attempts} Proben`);
+      assert.strictEqual(w.gate.probedSig, undefined);
+      now.advance(5 * SEC);
+      node.down = false;
+      assert.strictEqual(await w.request(), 'paused');
+      assert.strictEqual(node.requests, 1);
+      assert.ok(w.gate.probedSig);
+      assert.strictEqual(w.paused().vm.failures, 1);
+      assert.ok(logs.some((l) => l.includes('nicht schreibbar') && l.includes('EACCES')), logs.join('\n'));
+      assert.ok(!fs.existsSync(file));
+    } finally {
+      fs.chmodSync(path.dirname(file), 0o700);
+    }
+  });

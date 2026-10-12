@@ -16,6 +16,11 @@
 // - Ein Stand für alle Fenster dieses Rechners: die Pausendatei unter XDG_STATE_HOME, atomar
 //   geschrieben, vor jeder Anfrage billig neu gelesen (nur, wenn sie sich geändert hat); proben
 //   darf zur selben Zeit nur ein Fenster (Sperrdatei mit O_EXCL, nach LOCK_STALE_MS verwaist).
+//   Fehlt sie oder ist sie kaputt: leer gelesen, die nächste Probe schreibt sie neu. Lässt sie
+//   sich nicht schreiben (Verzeichnis ohne Schreibrecht, Platte voll): kein Ergebnis einer Probe
+//   und kein Fehler für die Anfrage — das Fenster hält denselben Stand im Speicher und arbeitet
+//   damit weiter, bis das Schreiben wieder gelingt (je einmal im Log); ohne Sperrdatei probt
+//   jedes Fenster für sich. Grenze: ohne schreibbare Datei zählt der Stand nur je Fenster.
 // - Probe ohne Ergebnis (keine Verbindung, 5xx des Proxys, Abbruch): Die Schranke bleibt zu —
 //   keine Anfrage mit ungeprüften Paaren, die wartenden scheitern —, und die Adresse wird mit
 //   wachsendem Abstand (RETRY_S, 5 s bis 60 s) neu geprobt, geteilt über die Pausendatei; ein
@@ -146,15 +151,21 @@ function budgetFreeAt(state, address, now) {
 }
 
 // Die Pausendatei: lesen, wenn sie sich geändert hat; Lesen-Ändern-Schreiben atomar; die
-// Sperrdatei daneben. fsImpl und now sind ersetzbar.
+// Sperrdatei daneben. fsImpl und now sind ersetzbar; log bekommt je einmal, wenn die Datei
+// oder die Sperrdatei nicht (mehr) schreibbar ist und wenn es wieder geht.
 class PauseFile {
-  constructor(file, { now = Date.now, fsImpl = fs } = {}) {
+  constructor(file, { now = Date.now, fsImpl = fs, log = () => {} } = {}) {
     this.file = file;
     this.lockFile = `${file}.lock`;
     this.now = now;
     this.fs = fsImpl;
+    this.log = log;
     this._stamp = undefined;
     this._state = emptyState();
+    // unwritable: Das letzte Schreiben scheiterte — der Stand gilt im Speicher, bis es wieder
+    // gelingt; bis dahin wird die Datei nicht gelesen (sie trüge den Stand nicht).
+    this.unwritable = false;
+    this._lockUnwritable = false;
   }
 
   ensureDir() {
@@ -166,8 +177,10 @@ class PauseFile {
   }
 
   // Der Stand aus der Datei, neu gelesen nur, wenn Inode, Größe oder Zeit anders sind. Fehlt
-  // sie oder ist sie kaputt: leer — Schranke und Sperrdatei gelten trotzdem.
+  // sie oder ist sie kaputt: leer — Schranke und Sperrdatei gelten trotzdem. Solange sie sich
+  // nicht schreiben lässt: der Stand im Speicher.
   load() {
+    if (this.unwritable) return this._state;
     let st;
     try {
       st = this.fs.statSync(this.file);
@@ -200,18 +213,40 @@ class PauseFile {
     return state;
   }
 
-  // Atomar: neue Datei, dann rename; 0600 — auch wenn kein Token darin steht.
+  // Atomar: neue Datei, dann rename; 0600 — auch wenn kein Token darin steht. Scheitert das
+  // (EACCES, ENOSPC): kein Fehler nach oben — der Stand bleibt im Speicher (unwritable), das
+  // nächste Schreiben versucht die Datei erneut; je einmal im Log. Sagt, ob geschrieben wurde.
   write(state) {
     this.ensureDir();
     const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
-    this.fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-    this.fs.renameSync(tmp, this.file);
     this._stamp = undefined;
     this._state = state;
+    try {
+      this.fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+      this.fs.renameSync(tmp, this.file);
+    } catch (e) {
+      try {
+        this.fs.unlinkSync(tmp);
+      } catch {
+        // nie entstanden
+      }
+      if (!this.unwritable) {
+        this.unwritable = true;
+        this.log(`Pausendatei ${this.file} nicht schreibbar (${e.message}): Pause, Budget und Abstand gelten `
+          + 'nur in diesem Fenster, bis das Schreiben wieder gelingt');
+      }
+      return false;
+    }
+    if (this.unwritable) {
+      this.unwritable = false;
+      this.log(`Pausendatei ${this.file} wieder schreibbar: ein Stand für alle Fenster`);
+    }
+    return true;
   }
 
   // Die Sperrdatei nehmen: 'got' (genommen), 'busy' (ein anderes Fenster probt), 'none' (lässt
-  // sich nicht anlegen — dann ohne Sperre weiter). Eine verwaiste wird ersetzt.
+  // sich nicht anlegen oder schreiben — dann ohne Sperre weiter, einmal im Log). Eine verwaiste
+  // wird ersetzt.
   tryLock() {
     this.ensureDir();
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -219,7 +254,7 @@ class PauseFile {
       try {
         fd = this.fs.openSync(this.lockFile, 'wx', 0o600);
       } catch (e) {
-        if (e.code !== 'EEXIST') return 'none';
+        if (e.code !== 'EEXIST') return this.lockFailed(e);
         const stale = this.lockStale();
         if (stale === 'busy') return 'busy';
         if (stale === 'stale') {
@@ -231,14 +266,34 @@ class PauseFile {
         }
         continue; // 'gone' oder 'stale': noch einmal anlegen
       }
+      let error;
       try {
         this.fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: this.now() }));
+      } catch (e) {
+        error = e;
       } finally {
         this.fs.closeSync(fd);
+      }
+      if (error) {
+        // Angelegt, aber leer (ENOSPC): nicht liegen lassen, andere hielten sie für verwaist.
+        this.unlock();
+        return this.lockFailed(error);
+      }
+      if (this._lockUnwritable) {
+        this._lockUnwritable = false;
+        this.log(`Sperrdatei ${this.lockFile} wieder anlegbar: zur selben Zeit probt nur ein Fenster`);
       }
       return 'got';
     }
     return 'busy';
+  }
+
+  lockFailed(e) {
+    if (!this._lockUnwritable) {
+      this._lockUnwritable = true;
+      this.log(`Sperrdatei ${this.lockFile} nicht anlegbar (${e.message}): dieses Fenster probt ohne Sperre`);
+    }
+    return 'none';
   }
 
   // 'busy', 'stale' (älter als LOCK_STALE_MS oder unlesbar) oder 'gone' (gerade freigegeben).
@@ -440,8 +495,6 @@ class Gate {
     const invalid = outcome.invalid === 'all' ? new Set(sent.map((p) => p.hub)) : new Set(outcome.invalid || []);
     const ok = new Set(outcome.ok || []);
     if (!invalid.size && !ok.size) return;
-    // Ein Ergebnis — auch für eine laufende Probe, die danach wirft (401 des Proxys).
-    this.observed = true;
     const now = this.now();
     this.file.update((state) => {
       let changed = clearUnanswered(state, address);
@@ -464,6 +517,10 @@ class Gate {
       }
       return changed;
     });
+    // Ein Ergebnis — auch für eine laufende Probe, die danach wirft (401 des Proxys). Erst nach
+    // dem Vermerk: Was davor scheitert, ist kein Ergebnis (die Pausendatei wirft nicht; ein
+    // Fehler hier wäre einer des Moduls, und die Probe gälte als ohne Ergebnis).
+    this.observed = true;
     // Den neuen Stand nennt paused() beim nächsten Aufruf mit allen Paaren (Statusleiste).
     this.onChange();
   }
