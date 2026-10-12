@@ -606,7 +606,7 @@ func TestWhoamiCanceled(t *testing.T) {
 	if _, err := openReplica(ctx, e.nodes, h); err == nil || asUnreadable(err) != nil {
 		t.Errorf("openReplica mit abgebrochenem ctx: %v", err)
 	}
-	if _, err := accountRows(ctx, e.nodes, h, "bob"); err == nil || asUnreadable(err) != nil {
+	if _, _, err := accountRows(ctx, e.nodes, h, "bob"); err == nil || asUnreadable(err) != nil {
 		t.Errorf("accountRows mit abgebrochenem ctx: %v", err)
 	}
 	if _, _, _, err := Whoami(ctx, e.nodes, "test", testUpdate, Logins{}); err == nil {

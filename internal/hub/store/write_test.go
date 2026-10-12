@@ -32,7 +32,7 @@ func newWriteStore(t *testing.T) *writeFixture {
 	ctx := context.Background()
 	s := newStore(t)
 	for _, c := range []string{"a", "b", "c"} {
-		if err := s.AddCollection(ctx, c, ""); err != nil {
+		if err := s.AddCollection(ctx, c, "", false); err != nil {
 			t.Fatal(err)
 		}
 	}

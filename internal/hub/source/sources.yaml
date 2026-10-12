@@ -1,0 +1,18 @@
+# Die Liste der Quellen (docs/begriffe.md, „source list“; Task 031): je
+# Collection-Name die festen Vorgaben einer Collection, die der Hub selbst
+# aus dem neuesten Release eines öffentlichen GitHub-Repos füllt.
+#
+#   public      immer true: lesen darf jeder Account des Hubs
+#   source.git  URL des Repos, genau https://github.com/<owner>/<repo>
+#   source.asset Name des Archivs (tar.gz) im Release
+#   max_bytes   Obergrenze für das Archiv und den entpackten Inhalt
+#
+# Der einzige Ort, an dem Kephalaion k-playbook beim Namen kennt — eine
+# bewusste Ausnahme von der Trennung beider Projekte. Eine Änderung hier
+# braucht ein neues Release von Kephalaion.
+k-playbook:
+  public: true
+  source:
+    git: https://github.com/kascada/k-playbook
+    asset: k-playbook-defaults.tar.gz
+  max_bytes: 8388608

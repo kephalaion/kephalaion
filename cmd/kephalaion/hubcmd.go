@@ -7,24 +7,40 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 )
 
 const hubCollectionUsage = `Aufruf:
-  kephalaion hub collection add  <name> [--description text]
+  kephalaion hub collection add  <name> [--description text] [--public]
   kephalaion hub collection list
-  kephalaion hub collection set  <name> --description text
+  kephalaion hub collection show <name>
+  kephalaion hub collection set  <name> [--description text] [--public[=false]]
   kephalaion hub collection rm   <name>
 
 Kommandos:
-  add    legt eine Collection an
+  add    legt eine Collection an. Steht der Name in der Liste der Quellen
+         dieses Binarys (etwa k-playbook), bekommt sie deren Vorgaben:
+         öffentlich, fest abonniert, Inhalt aus dem Release der Quelle
+         unter defaults/ — niemand schreibt darin.
   list   zeigt alle Collections
-  set    ändert die Beschreibung
+  show   zeigt eine Collection, bei einer mit Quelle auch Quelle und
+         geholten Stand
+  set    ändert Beschreibung und/oder öffentlich; bei einer Collection aus
+         der Liste der Quellen bleibt sie öffentlich
   rm     entfernt eine Collection — nur, wenn kein Node sie abgleichen darf,
          kein Account Rechte in ihr hat (auch kein gesperrter) und keine
          Dokumente in ihr stehen, auch keine Löschmarken. Löschmarken von
          Accounts zählen nicht; sie bleiben stehen, und ein grant in einer
-         gleichnamigen neuen Collection belebt sie wieder.
+         gleichnamigen neuen Collection belebt sie wieder. Bei einer
+         Collection mit Quelle entfernt rm die geholten Dokumente mit.
+
+Öffentlich (--public): Jeder Account des Hubs liest die Collection, ohne
+eigene Zeile darin; schreiben braucht weiter Rechte (hub account grant). Am
+Node liest sie nur ein Account, der dort auch eine eigene Collection
+desselben Hubs hat. Abgleichen darf ein Node sie weiter nur nach hub node
+grant — außer einer Collection aus der Liste der Quellen, die jeder Node
+von selbst abgleicht.
 
 Namen: a–z, 0–9, '.', '_' und '-', am Anfang a–z oder 0–9, höchstens 63
 Zeichen, kein Präfix system. Jede Änderung steht im Protokoll (actions) als
@@ -32,6 +48,7 @@ admin.
 
 Optionen:
   --description text   Kurzbeschreibung
+  --public             öffentlich; bei set mit --public=false wieder nicht
   --config pfad        Ort der config (siehe kephalaion hub init --help)
 `
 
@@ -74,11 +91,16 @@ func runHubCollection(args []string, stdout, stderr io.Writer) int {
 		"add": func(a []string) int {
 			c := newCommand("hub collection add", u, stdout, stderr, "<name>")
 			desc := c.fs.String("description", "", "")
+			public := c.fs.Bool("public", false, "")
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
-				if err := s.AddCollection(ctx, pos[0], *desc); err != nil {
+				if err := s.AddCollection(ctx, pos[0], *desc, *public); err != nil {
 					return err
 				}
 				fmt.Fprintf(stdout, "Collection %s angelegt.\n", pos[0])
+				if e, ok := source.Lookup(pos[0]); ok {
+					fmt.Fprintf(stdout, "Aus der Liste der Quellen: öffentlich, fest abonniert, Inhalt aus %s (%s) unter %s/.\n",
+						e.Git, e.Asset, source.DefaultsDir)
+				}
 				return nil
 			})
 		},
@@ -94,21 +116,59 @@ func runHubCollection(args []string, stdout, stderr io.Writer) int {
 					return nil
 				}
 				tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tBESCHREIBUNG")
+				fmt.Fprintln(tw, "NAME\tÖFFENTLICH\tQUELLE\tBESCHREIBUNG")
 				for _, col := range colls {
-					fmt.Fprintf(tw, "%s\t%s\n", col.Name, orDash(col.Description))
+					src := "-"
+					if e, ok := source.Lookup(col.Name); ok {
+						src = e.Repo
+					}
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", col.Name, yesNo(col.IsPublic()), src, orDash(col.Description))
 				}
 				return tw.Flush()
+			})
+		},
+		"show": func(a []string) int {
+			c := newCommand("hub collection show", u, stdout, stderr, "<name>")
+			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
+				col, err := s.Collection(ctx, pos[0])
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(stdout, "Collection %s\n", col.Name)
+				fmt.Fprintf(stdout, "  Beschreibung: %s\n", orDash(col.Description))
+				fmt.Fprintf(stdout, "  öffentlich:   %s\n", yesNo(col.IsPublic()))
+				if e, ok := source.Lookup(col.Name); ok {
+					fmt.Fprintf(stdout, "  Quelle:       %s, Asset %s, höchstens %d Bytes (Liste der Quellen)\n",
+						e.Git, e.Asset, e.MaxBytes)
+					fmt.Fprintf(stdout, "  abonniert:    fest, von jedem Node\n")
+					if col.FetchedTag == "" {
+						fmt.Fprintf(stdout, "  geholt:       noch nichts (kephalaion hub collection fetch %s)\n", col.Name)
+					} else {
+						fmt.Fprintf(stdout, "  geholt:       %s am %s\n", col.FetchedTag, formatMillis(col.FetchedAt))
+					}
+				} else {
+					fmt.Fprintf(stdout, "  Quelle:       keine\n")
+				}
+				fmt.Fprintf(stdout, "  angelegt:     %s von %s\n", formatMillis(col.CreatedAt), col.CreatedBy)
+				return nil
 			})
 		},
 		"set": func(a []string) int {
 			c := newCommand("hub collection set", u, stdout, stderr, "<name>")
 			desc := c.fs.String("description", "", "")
+			public := c.fs.Bool("public", false, "")
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
-				if !c.isSet("description") {
-					return fmt.Errorf("nichts zu ändern; erwartet --description")
+				var change hubstore.CollectionChange
+				if c.isSet("description") {
+					change.Description = desc
 				}
-				if err := s.SetCollectionDescription(ctx, pos[0], *desc); err != nil {
+				if c.isSet("public") {
+					change.Public = public
+				}
+				if change.Description == nil && change.Public == nil {
+					return fmt.Errorf("nichts zu ändern; erwartet --description oder --public")
+				}
+				if err := s.SetCollection(ctx, pos[0], change); err != nil {
 					return err
 				}
 				fmt.Fprintf(stdout, "Collection %s geändert.\n", pos[0])

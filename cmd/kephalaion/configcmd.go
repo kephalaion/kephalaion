@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	nodestore "github.com/kephalaion/kephalaion/internal/node/store"
 )
@@ -225,12 +226,13 @@ const configExportUsage = `Aufruf:
 
 Schreibt die config und je eingerichteter Rolle die settings und die lokalen
 Tabellen als YAML, samt Fassung des Formats — keine Inhalte:
-  hub:   collections, nodes (nur der Hash des Tokens), node_collections,
-         accounts (User, nur der Hash des Tokens, die Rechte je Collection
-         samt Scopes vendor/<name>)
+  hub:   collections (samt public), nodes (nur der Hash des Tokens),
+         node_collections, accounts (User, nur der Hash des Tokens, die
+         Rechte je Collection samt Scopes vendor/<name>)
   node:  hubs (samt dem eigenen Token beim Hub, im Klartext), hub_collections
-Nicht dabei sind db_info — ein neu angelegter Hub bekommt eine neue hub_id —
-und das Protokoll actions. Ohne --output auf die Standardausgabe. Die Datei
+Nicht dabei sind db_info — ein neu angelegter Hub bekommt eine neue hub_id —,
+das Protokoll actions und der geholte Stand einer Collection mit Quelle:
+Nach dem Import holt kephalaion hub collection fetch <name> ihn neu. Ohne --output auf die Standardausgabe. Die Datei
 entsteht mit den Rechten 0600, weil sie Geheimnisse enthält.
 
 Optionen:
@@ -498,6 +500,16 @@ func runConfigImport(args []string, stdout, stderr io.Writer) int {
 		}
 		done = append(done, fmt.Sprintf("%s: ersetzt — %s", r, summary))
 		fmt.Fprintf(stdout, "%s: %s\n", r, summary)
+		if r == config.Hub && hubTables != nil {
+			// Den geholten Stand trägt kein Export: Eine Collection mit
+			// Quelle gilt nach dem Import als noch nicht geholt.
+			for _, c := range hubTables.Collections {
+				if _, ok := source.Lookup(c.Name); ok {
+					fmt.Fprintf(stdout, "hub: Collection %s hat eine Quelle; holen mit: kephalaion hub collection fetch %s\n",
+						c.Name, c.Name)
+				}
+			}
+		}
 	}
 	return 0
 }

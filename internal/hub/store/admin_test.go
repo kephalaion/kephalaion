@@ -60,17 +60,17 @@ func actions(t *testing.T, s *sqliteStore) []actionRow {
 func TestCollections(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
-	if err := s.AddCollection(ctx, "team-x", "Team X"); err != nil {
+	if err := s.AddCollection(ctx, "team-x", "Team X", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddCollection(ctx, "privat", ""); err != nil {
+	if err := s.AddCollection(ctx, "privat", "", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddCollection(ctx, "team-x", ""); !errors.Is(err, ErrExists) {
+	if err := s.AddCollection(ctx, "team-x", "", false); !errors.Is(err, ErrExists) {
 		t.Errorf("doppelt: %v", err)
 	}
 	for _, bad := range []string{"Team", "a:b", "system", "SYSTEM-x", ""} {
-		if err := s.AddCollection(ctx, bad, ""); err == nil {
+		if err := s.AddCollection(ctx, bad, "", false); err == nil {
 			t.Errorf("%q hätte abgelehnt werden sollen", bad)
 		}
 	}
@@ -82,10 +82,10 @@ func TestCollections(t *testing.T) {
 		got[1].Description != "Team X" || got[1].CreatedBy != Admin || got[1].CreatedAt == 0 {
 		t.Errorf("Collections = %+v", got)
 	}
-	if err := s.SetCollectionDescription(ctx, "privat", "Eigenes"); err != nil {
+	if err := s.SetCollection(ctx, "privat", desc("Eigenes")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetCollectionDescription(ctx, "fehlt", "x"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetCollection(ctx, "fehlt", desc("x")); !errors.Is(err, ErrNotFound) {
 		t.Errorf("set auf Fehlendes: %v", err)
 	}
 	got, _ = s.Collections(ctx)
@@ -104,7 +104,7 @@ func TestRemoveCollectionInUse(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	for _, c := range []string{"a", "b", "c"} {
-		if err := s.AddCollection(ctx, c, ""); err != nil {
+		if err := s.AddCollection(ctx, c, "", false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -207,7 +207,7 @@ func TestGrants(t *testing.T) {
 	if err := s.Grant(ctx, "laptop", "team-x"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("grant ohne Collection: %v", err)
 	}
-	if err := s.AddCollection(ctx, "team-x", ""); err != nil {
+	if err := s.AddCollection(ctx, "team-x", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Grant(ctx, "fehlt", "team-x"); !errors.Is(err, ErrNotFound) {
@@ -277,7 +277,7 @@ func TestNodeNameTakenByAccount(t *testing.T) {
 func TestSetKeepsGrantsAndToken(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
-	if err := s.AddCollection(ctx, "team-x", "alt"); err != nil {
+	if err := s.AddCollection(ctx, "team-x", "alt", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AddNode(ctx, "laptop", "alt"); err != nil {
@@ -290,7 +290,7 @@ func TestSetKeepsGrantsAndToken(t *testing.T) {
 	if err := s.SetNodeDescription(ctx, "laptop", "neu"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetCollectionDescription(ctx, "team-x", "neu"); err != nil {
+	if err := s.SetCollection(ctx, "team-x", desc("neu")); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := s.Node(ctx, "laptop")
@@ -311,8 +311,8 @@ func TestActions(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	steps := []func() error{
-		func() error { return s.AddCollection(ctx, "team-x", "") },
-		func() error { return s.SetCollectionDescription(ctx, "team-x", "d") },
+		func() error { return s.AddCollection(ctx, "team-x", "", false) },
+		func() error { return s.SetCollection(ctx, "team-x", desc("d")) },
 		func() error { _, err := s.AddNode(ctx, "laptop", ""); return err },
 		func() error { return s.SetNodeDescription(ctx, "laptop", "d") },
 		func() error { return s.Grant(ctx, "laptop", "team-x") },
@@ -391,3 +391,6 @@ func TestCheckTables(t *testing.T) {
 		}
 	}
 }
+
+// desc ist eine Änderung nur der Beschreibung.
+func desc(d string) CollectionChange { return CollectionChange{Description: &d} }

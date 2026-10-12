@@ -68,7 +68,7 @@ func newLocalFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	for _, c := range []string{"a", "b", "c"} {
-		if err := st.AddCollection(ctx, c, ""); err != nil {
+		if err := st.AddCollection(ctx, c, "", false); err != nil {
 			t.Fatal(err)
 		}
 	}

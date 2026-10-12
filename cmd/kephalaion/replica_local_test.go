@@ -43,7 +43,7 @@ func TestReplicaSyncWithLocalHub(t *testing.T) {
 		}
 	}
 	for _, c := range []string{"wissen", "team"} {
-		must(hub.AddCollection(ctx, c, ""))
+		must(hub.AddCollection(ctx, c, "", false))
 	}
 	token, err := hub.AddNode(ctx, "laptop", "")
 	must(err)

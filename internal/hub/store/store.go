@@ -25,8 +25,9 @@ const Role = string(config.Hub)
 
 // SchemaVersion ist die Schemafassung, die dieses Binary erwartet. Es gibt
 // noch keine Migrationen: Passt die Fassung nicht, ist die Datenbank neu
-// anzulegen.
-const SchemaVersion = 5
+// anzulegen. Fassung 6 bringt public, fetched_tag und fetched_at in
+// collections (Task 031).
+const SchemaVersion = 6
 
 // Zeilen in db_info, die nur der Hub hat.
 const (
@@ -62,12 +63,22 @@ type Store interface {
 	ReplaceSettings(ctx context.Context, settings map[string]string) error
 
 	Collections(ctx context.Context) ([]Collection, error)
-	AddCollection(ctx context.Context, name, description string) error
-	SetCollectionDescription(ctx context.Context, name, description string) error
+	// Collection liest eine Collection; ErrNotFound, wenn es sie nicht gibt.
+	Collection(ctx context.Context, name string) (Collection, error)
+	// AddCollection legt eine Collection an. Steht der Name in der Liste der
+	// Quellen (source.Lookup), bekommt sie deren Vorgaben: public gilt dann
+	// immer.
+	AddCollection(ctx context.Context, name, description string, public bool) error
+	// SetCollection ändert Beschreibung und/oder public einer Collection in
+	// einem Schreibvorgang. public abschalten lehnt es bei einer Collection
+	// aus der Liste der Quellen ab.
+	SetCollection(ctx context.Context, name string, change CollectionChange) error
 	// RemoveCollection entfernt eine Collection, die kein Node erlaubt hat, in
 	// der kein gesperrter Account Rechte gemerkt hat und in der keine
 	// Dokumente stehen. Löschmarken von Account-Zeilen zählen nicht; sie
-	// bleiben stehen.
+	// bleiben stehen. Bei einer Collection mit Quelle entfernt es ihre
+	// Dokumentzeilen samt Löschmarken in derselben Transaktion — anders wäre
+	// sie nie leer, denn schreiben kann darin niemand.
 	RemoveCollection(ctx context.Context, name string) error
 
 	Nodes(ctx context.Context) ([]Node, error)
@@ -232,7 +243,9 @@ var queries = struct {
 	CollectionGet         string
 	CollectionInsert      string
 	CollectionSetDesc     string
+	CollectionSetPublic   string
 	CollectionDelete      string
+	CollectionDeleteDocs  string
 	CollectionsDeleteAll  string
 	CollectionCountDocs   string
 	CollectionGrantedNode string
@@ -335,14 +348,22 @@ var queries = struct {
 	SyncRowsOrder:  `) ORDER BY revision, id`,
 	SyncRowsLimit:  ` LIMIT $%d`,
 
-	CollectionsAll: `SELECT name, COALESCE(description, ''), created_at, created_by
-		FROM collections ORDER BY name`,
-	CollectionGet: `SELECT name, COALESCE(description, ''), created_at, created_by
-		FROM collections WHERE name = $1`,
-	CollectionInsert: `INSERT INTO collections (name, description, created_at, created_by)
-		VALUES ($1, $2, $3, $4)`,
-	CollectionSetDesc:    `UPDATE collections SET description = $2 WHERE name = $1`,
-	CollectionDelete:     `DELETE FROM collections WHERE name = $1`,
+	// Collections: collectionColumns in dieser Reihenfolge, gelesen mit
+	// scanCollection.
+	CollectionsAll: `SELECT ` + collectionColumns + ` FROM collections ORDER BY name`,
+	CollectionGet:  `SELECT ` + collectionColumns + ` FROM collections WHERE name = $1`,
+	// fetched_tag und fetched_at bleiben NULL: Den geholten Stand schreibt
+	// nur fetch, nie der Import.
+	CollectionInsert: `INSERT INTO collections (name, description, public, created_at, created_by)
+		VALUES ($1, $2, $3, $4, $5)`,
+	CollectionSetDesc:   `UPDATE collections SET description = $2 WHERE name = $1`,
+	CollectionSetPublic: `UPDATE collections SET public = $2 WHERE name = $1`,
+	CollectionDelete:    `DELETE FROM collections WHERE name = $1`,
+	// CollectionDeleteDocs entfernt die Dokumentzeilen einer Collection mit
+	// Quelle samt Löschmarken, vor hub collection rm. SYSTEM:-Zeilen bleiben
+	// (Löschmarken von Account-Zeilen sollen stehen bleiben; lebende
+	// blockieren wie sonst).
+	CollectionDeleteDocs: `DELETE FROM documents WHERE collection = $1 AND substr(name, 1, 7) <> 'SYSTEM:'`,
 	CollectionsDeleteAll: `DELETE FROM collections`,
 	// Jede Zeile zählt — auch Löschmarken von Dokumenten und lebende
 	// SYSTEM:-Zeilen —, nur Löschmarken von Account-Zeilen nicht: Sie bleiben
@@ -470,6 +491,9 @@ CREATE TABLE actions (
 CREATE TABLE collections (
   name        TEXT PRIMARY KEY,
   description TEXT,
+  public      INTEGER NOT NULL DEFAULT 0,
+  fetched_tag TEXT,
+  fetched_at  INTEGER,
   created_at  INTEGER NOT NULL,
   created_by  TEXT NOT NULL
 );

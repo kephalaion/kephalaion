@@ -718,7 +718,13 @@ func printReplicaStatus(ctx context.Context, w io.Writer, st nodestore.Store, h 
 		}
 	}
 	for _, s := range states {
-		if _, ok := byName[s.Collection]; ok {
+		if _, ok := byName[s.Collection]; !ok {
+			continue
+		}
+		if s.Subscribed {
+			fmt.Fprintf(w, "        %s: fest abonniert, Revision %d, abgeglichen %s\n", s.Collection, s.Revision,
+				formatMillis(s.SyncedAt))
+		} else {
 			fmt.Fprintf(w, "        %s: nicht mehr gewünscht, Revision %d; geht mit dem nächsten Abgleich\n",
 				s.Collection, s.Revision)
 		}

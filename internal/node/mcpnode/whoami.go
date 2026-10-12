@@ -82,11 +82,15 @@ type SyncInfo struct {
 // Verzeichnis-Scopes als Namen ohne '/' am Ende, immer eine Liste — die
 // strukturierte Angabe, nach der node dir push sein Ziel prüft; ein Node vor
 // Task 021 lässt das Feld weg.
+//
+// Public sagt, dass der Account die Collection nur liest, weil sie
+// öffentlich ist — ohne eigene Zeile, Rights ist dann nur „read“.
 type CollectionRights struct {
 	Collection string   `json:"collection"`
 	Address    string   `json:"address"`
 	Rights     []string `json:"rights"`
 	Dirs       []string `json:"dirs"`
+	Public     bool     `json:"public,omitempty"`
 }
 
 // Whoami baut die Antwort von whoami aus den Anmeldungen, samt Textteil —
@@ -145,8 +149,12 @@ func Whoami(ctx context.Context, nodes store.Store, version string, update upgra
 			for _, r := range l.Rights {
 				addr := ident.Address(l.Hub, r.Collection)
 				info.Collections = append(info.Collections, CollectionRights{Collection: r.Collection, Address: addr,
-					Rights: r.Rights.List(), Dirs: append([]string{}, r.Dirs...)})
-				parts = append(parts, fmt.Sprintf("%s (%s)", addr, r.Rights))
+					Rights: r.Rights.List(), Dirs: append([]string{}, r.Dirs...), Public: r.Public})
+				if r.Public {
+					parts = append(parts, fmt.Sprintf("%s (%s, öffentlich)", addr, r.Rights))
+				} else {
+					parts = append(parts, fmt.Sprintf("%s (%s)", addr, r.Rights))
+				}
 			}
 			who = fmt.Sprintf("angemeldet als %s (User %s): %s", l.Account, l.User, strings.Join(parts, ", "))
 		case l.State == LoginInvalid:

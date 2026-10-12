@@ -105,8 +105,12 @@ const nodeCollectionUsage = `Aufruf:
 Kommandos:
   add    will die Collection von diesem Hub haben; geprüft wird nur, dass es
          den Hub-Eintrag gibt — ob der Hub sie erlaubt, zeigt der Abgleich
-  list   zeigt alle gewünschten Collections
+  list   zeigt alle gewünschten Collections und die fest abonnierten
   rm     will sie nicht mehr haben
+
+Fest abonniert ist eine Collection, die der Hub jedem Node vorgibt (aus der
+Liste der Quellen, etwa k-playbook): Der Node gleicht sie von selbst ab, ohne
+add; rm darauf geht vorerst nicht.
 
 Optionen:
   --config pfad   Ort der config (siehe kephalaion node init --help)
@@ -321,12 +325,34 @@ func runNodeCollection(args []string, stdout, stderr io.Writer) int {
 				if err != nil {
 					return err
 				}
-				if len(wanted) == 0 {
+				hubs, err := s.Hubs(ctx)
+				if err != nil {
+					return err
+				}
+				subscribed := map[string]bool{}
+				var extra []string
+				for _, h := range hubs {
+					for _, c := range subscribedOf(ctx, s, h) {
+						addr := ident.Address(h.Name, c)
+						subscribed[addr] = true
+						if !slices.Contains(h.Collections, c) {
+							extra = append(extra, addr)
+						}
+					}
+				}
+				if len(wanted) == 0 && len(extra) == 0 {
 					fmt.Fprintln(stdout, "Keine Collections.")
 					return nil
 				}
 				for _, w := range wanted {
-					fmt.Fprintln(stdout, ident.Address(w.Hub, w.Collection))
+					addr := ident.Address(w.Hub, w.Collection)
+					if subscribed[addr] {
+						addr += "  (fest abonniert)"
+					}
+					fmt.Fprintln(stdout, addr)
+				}
+				for _, addr := range extra {
+					fmt.Fprintln(stdout, addr+"  (fest abonniert)")
 				}
 				return nil
 			})
@@ -338,14 +364,52 @@ func runNodeCollection(args []string, stdout, stderr io.Writer) int {
 				if err != nil {
 					return err
 				}
-				if err := s.RemoveCollection(ctx, hub, coll); err != nil {
-					return err
+				fixed := false
+				if h, err := s.Hub(ctx, hub); err == nil {
+					fixed = slices.Contains(subscribedOf(ctx, s, h), coll)
 				}
-				fmt.Fprintf(stdout, "Collection %s nicht mehr gewünscht.\n", pos[0])
+				err = s.RemoveCollection(ctx, hub, coll)
+				switch {
+				case fixed && errors.Is(err, nodestore.ErrNotFound):
+					return fmt.Errorf("Collection %s ist fest abonniert: der Hub gibt sie jedem Node vor, "+
+						"abbestellen geht vorerst nicht", pos[0])
+				case err != nil:
+					return err
+				case fixed:
+					fmt.Fprintf(stdout, "Collection %s nicht mehr gewünscht; sie bleibt fest abonniert "+
+						"(der Hub gibt sie jedem Node vor).\n", pos[0])
+				default:
+					fmt.Fprintf(stdout, "Collection %s nicht mehr gewünscht.\n", pos[0])
+				}
 				return nil
 			})
 		},
 	})
+}
+
+// subscribedOf liest aus der Replica eines Hub-Eintrags die fest abonnierten
+// Collections, wie die letzte Seite des Abgleichs sie nannte. Ohne Replica,
+// mit einer fremden oder unlesbaren keine.
+func subscribedOf(ctx context.Context, s nodestore.Store, h nodestore.Hub) []string {
+	r, err := replica.Open(ctx, s.ReplicaPath(h.Name))
+	if err != nil {
+		return nil
+	}
+	defer r.Close()
+	if r.EntryID() != h.EntryID {
+		return nil
+	}
+	states, err := r.States(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, st := range states {
+		if st.Subscribed {
+			out = append(out, st.Collection)
+		}
+	}
+	return out
 }
 
 // nodeDo wertet die Argumente aus, öffnet den Node und führt fn aus.

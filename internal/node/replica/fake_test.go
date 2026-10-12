@@ -23,6 +23,9 @@ type fakeHub struct {
 	node    string
 	token   string
 	allowed map[string]bool
+	// public und subscribed sind die Merkmale; die Antwort nennt sie, soweit
+	// erlaubt (Task 031).
+	public, subscribed map[string]bool
 	// failAt lässt den Aufruf mit dieser Nummer (ab 1) scheitern; 0 nie.
 	failAt   int
 	calls    int
@@ -33,7 +36,7 @@ var errTransport = errors.New("Verbindung abgebrochen")
 
 func newFakeHub(token string, allowed ...string) *fakeHub {
 	f := &fakeHub{id: ulid.Make().String(), docs: map[string]contract.Row{}, node: "laptop", token: token,
-		allowed: map[string]bool{}}
+		allowed: map[string]bool{}, public: map[string]bool{}, subscribed: map[string]bool{}}
 	for _, c := range allowed {
 		f.allowed[c] = true
 	}
@@ -101,10 +104,19 @@ func (f *fakeHub) Sync(_ context.Context, req contract.SyncRequest) (contract.Sy
 	}
 	resp := contract.SyncResponse{HubID: f.id, Version: contract.Version, HubRevision: f.rev,
 		Collections: []contract.CollectionStatus{}, Allowed: []string{}, Rows: []contract.Row{}}
+	resp.Public, resp.Subscribed = []string{}, []string{}
 	for c := range f.allowed {
 		resp.Allowed = append(resp.Allowed, c)
+		if f.public[c] {
+			resp.Public = append(resp.Public, c)
+		}
+		if f.subscribed[c] {
+			resp.Subscribed = append(resp.Subscribed, c)
+		}
 	}
 	sort.Strings(resp.Allowed)
+	sort.Strings(resp.Public)
+	sort.Strings(resp.Subscribed)
 	since := map[string]int64{}
 	for _, s := range req.Collections {
 		ok := f.allowed[s.Collection]

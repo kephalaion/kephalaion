@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
@@ -21,9 +22,11 @@ import (
 //  2. Hash, gesperrt und User aus accounts, dort maßgeblich: unbekannt,
 //     falsches Token oder gesperrt ist ErrAccountAuth.
 //  3. Lesbarkeit: Die Collection gibt es, der Node darf sie abgleichen
-//     (node_collections), der Account hat eine lebende SYSTEM:A:-Zeile in
-//     ihr — sonst ErrNotReadable, dieselbe Antwort für alle drei.
-//  4. Das Recht aus dieser Zeile, je Dokument nach der einen Regel in
+//     (node_collections, oder sie steht in der Liste der Quellen), der
+//     Account hat eine lebende SYSTEM:A:-Zeile in ihr oder sie ist
+//     öffentlich — sonst ErrNotReadable, dieselbe Antwort für alle drei.
+//  4. In einer Collection mit Quelle schreibt niemand: ErrForbidden.
+//  5. Das Recht aus dieser Zeile (ohne Zeile keines), je Dokument nach der einen Regel in
 //     contract.Rights.MayWrite: write für Neues und Eigenes (created_by ist
 //     der User des Accounts, gleich über welchen seiner Accounts angelegt),
 //     supersede für Fremdes; unter vendor/<name>/ allein der Scope
@@ -109,6 +112,9 @@ func (s *sqliteStore) writeAs(ctx context.Context, auth WriteAuth, collection st
 	if err != nil {
 		return err
 	}
+	if _, ok := source.Lookup(collection); ok {
+		return sourceLocked(collection, "schreiben über einen Node")
+	}
 	w := newDocTx(tx, user, auth.Account, auth.Carrier)
 	if err := fn(&w, rights); err != nil {
 		return err
@@ -138,37 +144,43 @@ func accountUser(ctx context.Context, tx sqlitedb.Querier, auth WriteAuth) (stri
 }
 
 // readableRights prüft, dass collection für den Account über diesen Node
-// lesbar ist, und liefert seine Rechte aus seiner Zeile in ihr.
+// lesbar ist, und liefert seine Rechte aus seiner Zeile in ihr — in einer
+// öffentlichen Collection ohne Zeile keine.
 func readableRights(ctx context.Context, tx sqlitedb.Querier, auth WriteAuth, collection string) (contract.Rights, error) {
 	notReadable := &kindError{ErrNotReadable, fmt.Sprintf(
 		"Collection %s ist nicht lesbar: unbekannt, für diesen Node nicht erlaubt oder für Account %s nicht eingetragen",
 		collection, auth.Account)}
-	ok, err := collectionExists(ctx, tx, collection)
-	if err != nil {
-		return contract.Rights{}, err
-	}
-	if !ok {
-		return contract.Rights{}, notReadable
-	}
-	n, err := count(ctx, tx, queries.GrantGet, auth.Carrier, collection)
-	if err != nil {
-		return contract.Rights{}, err
-	}
-	if n == 0 {
-		return contract.Rights{}, notReadable
-	}
-	row, err := liveDocument(ctx, tx, collection, contract.AccountRowName(auth.Account))
+	c, err := getCollection(ctx, tx, collection)
 	if errors.Is(err, ErrNotFound) {
 		return contract.Rights{}, notReadable
 	}
 	if err != nil {
 		return contract.Rights{}, err
 	}
-	c, err := contract.DecodeAccountContent(row.Content)
+	if _, listed := source.Lookup(collection); !listed {
+		n, err := count(ctx, tx, queries.GrantGet, auth.Carrier, collection)
+		if err != nil {
+			return contract.Rights{}, err
+		}
+		if n == 0 {
+			return contract.Rights{}, notReadable
+		}
+	}
+	row, err := liveDocument(ctx, tx, collection, contract.AccountRowName(auth.Account))
+	if errors.Is(err, ErrNotFound) {
+		if c.IsPublic() {
+			return contract.Rights{}, nil
+		}
+		return contract.Rights{}, notReadable
+	}
+	if err != nil {
+		return contract.Rights{}, err
+	}
+	content, err := contract.DecodeAccountContent(row.Content)
 	if err != nil {
 		return contract.Rights{}, fmt.Errorf("%s in %s: %w", row.Name, collection, err)
 	}
-	return c.Rights, nil
+	return content.Rights, nil
 }
 
 // mayChange prüft das Recht, ein lebendes Dokument zu ändern, zu löschen

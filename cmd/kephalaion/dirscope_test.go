@@ -71,7 +71,7 @@ func TestExportImportDirs(t *testing.T) {
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
 	const kpDirs = "\n            dirs:\n              - a/b\n              - docs"
-	for _, want := range []string{"format: 8", "dirs: []", kpDirs, "dirs:\n              - zwei"} {
+	for _, want := range []string{"format: 9", "dirs: []", kpDirs, "dirs:\n              - zwei"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}
@@ -90,13 +90,13 @@ func TestExportImportDirs(t *testing.T) {
 	}
 	format7 := toFormat7(t, data)
 	for _, c := range []struct{ name, content, want string }{
-		{"F7 mit dirs", strings.Replace(data, "format: 8", "format: 7", 1),
+		{"F7 mit dirs", strings.Replace(toFormat8(t, data), "format: 8", "format: 7", 1),
 			"Format 7 kennt keine Verzeichnis-Scopes (tables.hub.accounts[0].rights[0].dirs); ab Format 8"},
 		{"F7 mit dirs leer", strings.Replace(format7, "supersede: false", "supersede: false\n            dirs: []", 1),
 			"Format 7 kennt keine Verzeichnis-Scopes"},
 		{"F7 mit dirs null", strings.Replace(format7, "supersede: false", "supersede: false\n            dirs:", 1),
 			"Format 7 kennt keine Verzeichnis-Scopes"},
-		{"F6 mit dirs", strings.Replace(data, "format: 8", "format: 6", 1), "Format 6 kennt keine Verzeichnis-Scopes"},
+		{"F6 mit dirs", strings.Replace(toFormat8(t, data), "format: 8", "format: 6", 1), "Format 6 kennt keine Verzeichnis-Scopes"},
 		{"vendor", strings.Replace(data, kpDirs, "\n            dirs:\n              - vendor/x", 1),
 			"Account kp in team-x: Verzeichnis-Scope \"vendor/x\": unter vendor/ gilt allein"},
 		{"leer", strings.Replace(data, kpDirs, "\n            dirs:\n              - \"\"", 1),

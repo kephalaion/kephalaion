@@ -119,7 +119,7 @@ func TestExportImportCA(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
-	for _, want := range []string{"format: 8", "        ca: \"\"\n", "        ca: |\n          -----BEGIN CERTIFICATE-----\n"} {
+	for _, want := range []string{"format: 9", "        ca: \"\"\n", "        ca: |\n          -----BEGIN CERTIFICATE-----\n"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}

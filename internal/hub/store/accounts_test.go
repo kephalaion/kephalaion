@@ -80,7 +80,7 @@ func newAccountStore(t *testing.T) *sqliteStore {
 	t.Helper()
 	s := newStore(t)
 	for _, c := range []string{"team-x", "privat"} {
-		if err := s.AddCollection(context.Background(), c, ""); err != nil {
+		if err := s.AddCollection(context.Background(), c, "", false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,7 +105,7 @@ func TestAccountNames(t *testing.T) {
 		t.Errorf("Node admin: %v", err)
 	}
 	// Collections dürfen admin heißen.
-	if err := s.AddCollection(ctx, "admin", ""); err != nil {
+	if err := s.AddCollection(ctx, "admin", "", false); err != nil {
 		t.Errorf("Collection admin: %v", err)
 	}
 	if _, err := s.AddAccount(ctx, "alice", "alice", "Alice"); err != nil {
@@ -257,7 +257,7 @@ func TestAccountLifecycle(t *testing.T) {
 		t.Error("grant/revoke im gesperrten Zustand zählt eine Revision")
 	}
 	// Eine gemerkte Collection lässt sich nicht entfernen.
-	if err := s.AddCollection(ctx, "neu", ""); err != nil {
+	if err := s.AddCollection(ctx, "neu", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GrantAccount(ctx, "bob", "neu", contract.Rights{}); err != nil {
@@ -595,7 +595,7 @@ func TestRemoveCollectionWithAccountTombstones(t *testing.T) {
 	}
 
 	// Gleichnamig neu: grant belebt die Marke von alice wieder.
-	if err := s.AddCollection(ctx, "privat", ""); err != nil {
+	if err := s.AddCollection(ctx, "privat", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GrantAccount(ctx, "alice", "privat", contract.Rights{}); err != nil {
@@ -642,7 +642,7 @@ func TestImportRemovesCollectionWithTombstones(t *testing.T) {
 		t.Errorf("Marken nach Import: %+v", after)
 	}
 	// Ebenso, wenn der Import die Accounts lässt.
-	if err := s.AddCollection(ctx, "privat", ""); err != nil {
+	if err := s.AddCollection(ctx, "privat", "", false); err != nil {
 		t.Fatal(err)
 	}
 	keep := tables
@@ -692,7 +692,7 @@ func TestAccountUser(t *testing.T) {
 
 	// bob: zwei lebende Zeilen, eine Löschmarke (revoke) und eine in einer
 	// entfernten Collection; dazu ein Dokument.
-	if err := s.AddCollection(ctx, "alt", ""); err != nil {
+	if err := s.AddCollection(ctx, "alt", "", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []string{"team-x", "privat", "alt"} {
@@ -706,7 +706,7 @@ func TestAccountUser(t *testing.T) {
 	if err := s.RemoveCollection(ctx, "alt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddCollection(ctx, "weg", ""); err != nil {
+	if err := s.AddCollection(ctx, "weg", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GrantAccount(ctx, "bob", "weg", contract.Rights{}); err != nil {

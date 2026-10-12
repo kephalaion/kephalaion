@@ -141,7 +141,7 @@ func TestImportRoundTripTables(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	data, _ := os.ReadFile(exp)
 	for _, want := range []string{"token_hash: " + ident.HashToken(tok), "token: " + tok, "node_collections:", "hub_collections:",
-		"format: 8", "node_name: laptop", "node_name: rechner-fern", "accounts:", "name: alice", "supersede: true",
+		"format: 9", "node_name: laptop", "node_name: rechner-fern", "accounts:", "name: alice", "supersede: true",
 		"user: alice", "user: kleist", "vendor: []", "dirs: []", "ca: \"\""} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("Export ohne %q", want)
@@ -599,11 +599,29 @@ func TestImportAccountsNull(t *testing.T) {
 	}
 }
 
-// toFormat7 macht aus einem Export im Format 8 einen im Format 7: ohne die
-// Verzeichnis-Scopes je Recht — die Zeile dirs: und die Einträge der Liste
-// darunter.
+// toFormat8 macht aus einem Export im Format 9 einen im Format 8: ohne
+// public je Collection.
+func toFormat8(t *testing.T, data string) string {
+	t.Helper()
+	if !strings.Contains(data, "format: 9") {
+		t.Fatalf("kein Export im Format 9:\n%s", data)
+	}
+	var out []string
+	for _, l := range strings.Split(data, "\n") {
+		if strings.HasPrefix(l, "        public: ") {
+			continue
+		}
+		out = append(out, l)
+	}
+	return strings.Replace(strings.Join(out, "\n"), "format: 9", "format: 8", 1)
+}
+
+// toFormat7 macht aus einem Export im Format 9 einen im Format 7: ohne
+// public und ohne die Verzeichnis-Scopes je Recht — die Zeile dirs: und die
+// Einträge der Liste darunter.
 func toFormat7(t *testing.T, data string) string {
 	t.Helper()
+	data = toFormat8(t, data)
 	var out []string
 	dropped, inList := 0, false
 	for _, l := range strings.Split(data, "\n") {

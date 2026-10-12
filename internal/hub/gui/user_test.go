@@ -41,7 +41,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	for name, desc := range map[string]string{"test": "Zum Probieren", "vorlagen": "Vorlagen <b>für alle</b>", "leer": ""} {
-		if err := st.AddCollection(ctx, name, desc); err != nil {
+		if err := st.AddCollection(ctx, name, desc, false); err != nil {
 			t.Fatal(err)
 		}
 	}

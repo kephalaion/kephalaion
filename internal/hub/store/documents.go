@@ -11,6 +11,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
@@ -196,7 +197,8 @@ func newDocTx(tx sqlitedb.Querier, by, account, carrier string) docTx {
 }
 
 // writeDocs führt fn als einen Schreibvorgang der CLI am Hub (admin, ohne
-// Träger) an den Dokumenten einer vorhandenen Collection aus.
+// Träger) an den Dokumenten einer vorhandenen Collection aus. In einer
+// Collection mit Quelle schreibt auch der Admin nicht (ErrForbidden).
 func (s *sqliteStore) writeDocs(ctx context.Context, collection string, fn func(w *docTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -205,6 +207,9 @@ func (s *sqliteStore) writeDocs(ctx context.Context, collection string, fn func(
 	defer func() { _ = tx.Rollback() }()
 	if err := requireCollection(ctx, tx, collection); err != nil {
 		return err
+	}
+	if _, ok := source.Lookup(collection); ok {
+		return sourceLocked(collection, "Dokumente schreiben")
 	}
 	w := newDocTx(tx, Admin, Admin, "")
 	if err := fn(&w); err != nil {

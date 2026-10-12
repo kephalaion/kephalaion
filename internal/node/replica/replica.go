@@ -35,8 +35,9 @@ const Role = "replica"
 
 // SchemaVersion ist die Schemafassung der Replica. Passt sie nicht, verwirft
 // der Abgleich die Replica und legt sie neu an; sie ist abgeleitet. Fassung 4
-// bringt die generation in db_info.
-const SchemaVersion = 4
+// bringt die generation in db_info, Fassung 5 die Merkmale public und
+// subscribed in sync_state (Task 031).
+const SchemaVersion = 5
 
 // KeyHubID ist der Schlüssel der hub_id in db_info. Sie ist maßgeblich; die
 // Spalte hubs.hub_id in node.db ist nur Kopie.
@@ -100,7 +101,9 @@ CREATE INDEX documents_system ON documents(name) WHERE name LIKE 'SYSTEM:%';
 CREATE TABLE sync_state (
   collection  TEXT PRIMARY KEY,
   revision    INTEGER NOT NULL,
-  synced_at   INTEGER NOT NULL
+  synced_at   INTEGER NOT NULL,
+  public      INTEGER NOT NULL DEFAULT 0,
+  subscribed  INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -138,15 +141,16 @@ const (
 	qCollectionsAll = `SELECT collection FROM sync_state
 		UNION SELECT DISTINCT collection FROM documents ORDER BY 1`
 
-	qStateAll = `SELECT collection, revision, synced_at FROM sync_state ORDER BY collection`
+	qStateAll = `SELECT collection, revision, synced_at, public, subscribed FROM sync_state ORDER BY collection`
 	qStateGet = `SELECT COUNT(*) FROM sync_state WHERE collection = ?`
 	// qStateRev liest den Stand einer Collection; ohne Zeile -1.
 	qStateRev = `SELECT COALESCE((SELECT revision FROM sync_state WHERE collection = ?), -1)`
 	// qStateUpsert schreibt den Stand fort, nie zurück — auch nicht, wenn ein
-	// zweiter Abgleich schon weiter ist.
-	qStateUpsert = `INSERT INTO sync_state (collection, revision, synced_at) VALUES (?, ?, ?)
+	// zweiter Abgleich schon weiter ist. Die Merkmale gelten wie die Seite
+	// sie nennt.
+	qStateUpsert = `INSERT INTO sync_state (collection, revision, synced_at, public, subscribed) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(collection) DO UPDATE SET revision = max(sync_state.revision, excluded.revision),
-			synced_at = excluded.synced_at`
+			synced_at = excluded.synced_at, public = excluded.public, subscribed = excluded.subscribed`
 	// qStateMin ist die Revision der Replica: der Stand, bis zu dem alle ihre
 	// Collections abgeglichen sind.
 	qStateMin       = `SELECT COUNT(*), COALESCE(MIN(revision), 0) FROM sync_state`
@@ -164,11 +168,17 @@ type Replica struct {
 
 // State ist der Stand des Abgleichs einer Collection: bis zu welcher
 // Revision die Replica alles hat und wann zuletzt eine Seite ankam (ms seit
-// Epoche).
+// Epoche), dazu die Merkmale aus der letzten Seite.
 type State struct {
 	Collection string
 	Revision   int64
 	SyncedAt   int64
+	// Public: jeder Account, der sich an diesem Hub gültig anmeldet, liest
+	// die Collection, ohne eigene Zeile darin.
+	Public bool
+	// Subscribed: der Node gleicht die Collection ab, auch wenn er sie nicht
+	// selbst will (fest abonniert).
+	Subscribed bool
 }
 
 // Document ist ein Dokument der Replica, so wie der Hub es geliefert hat.
@@ -301,12 +311,30 @@ func (r *Replica) States(ctx context.Context) ([]State, error) {
 	out := []State{}
 	for rows.Next() {
 		var s State
-		if err := rows.Scan(&s.Collection, &s.Revision, &s.SyncedAt); err != nil {
+		var public, subscribed int64
+		if err := rows.Scan(&s.Collection, &s.Revision, &s.SyncedAt, &public, &subscribed); err != nil {
 			return nil, fmt.Errorf("sync_state lesen: %w", err)
 		}
+		s.Public, s.Subscribed = public != 0, subscribed != 0
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// PublicCollections liest die Collections, die die letzte Seite als
+// öffentlich nannte, nach Name.
+func (r *Replica) PublicCollections(ctx context.Context) ([]string, error) {
+	states, err := r.States(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, s := range states {
+		if s.Public {
+			out = append(out, s.Collection)
+		}
+	}
+	return out, nil
 }
 
 // Revision ist die Revision der Replica: der Stand, bis zu dem alle ihre
@@ -438,6 +466,9 @@ type page struct {
 	// known lässt nur Zeilen aus Collections zu, die die Replica schon führt
 	// (Stand in sync_state); die übrigen übergeht apply.
 	known bool
+	// public und subscribed sind die Merkmale der Seite; sie gelten für
+	// jede Collection in advance.
+	public, subscribed map[string]bool
 }
 
 // dropped ist das Ergebnis des Entfernens einer Collection: wie viele
@@ -506,7 +537,8 @@ func (r *Replica) apply(ctx context.Context, p page) (map[string]dropped, error)
 			}
 		}
 		for c, since := range p.advance {
-			if _, err := tx.ExecContext(ctx, qStateUpsert, c, max(since, p.until), p.now); err != nil {
+			if _, err := tx.ExecContext(ctx, qStateUpsert, c, max(since, p.until), p.now,
+				flag(p.public[c]), flag(p.subscribed[c])); err != nil {
 				return fmt.Errorf("sync_state schreiben: %w", err)
 			}
 		}
@@ -516,6 +548,13 @@ func (r *Replica) apply(ctx context.Context, p page) (map[string]dropped, error)
 		return nil, err
 	}
 	return out, nil
+}
+
+func flag(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func dropCollection(ctx context.Context, tx *sql.Tx, collection string) (dropped, error) {

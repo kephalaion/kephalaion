@@ -26,9 +26,13 @@ import (
 // Hub-Eintrag des Nodes die CA (ca, PEM-Text, bei https); ein Export davor
 // darf sie nicht tragen und liest sich ohne CA. Format 8 bringt je Recht die
 // Verzeichnis-Scopes (dirs, eine Liste); ein Export davor darf sie nicht
-// tragen und liest sich ohne.
+// tragen und liest sich ohne. Format 9 bringt je Collection public; ein
+// Export davor darf es nicht tragen und liest sich mit false. Die Quelle
+// einer Collection folgt aus ihrem Namen und der Liste der Quellen, der
+// geholte Stand (fetched_tag, fetched_at) steht nie im Export — sonst gälte
+// eine leer angelegte Collection für immer als schon aktuell.
 const (
-	exportFormat    = 8
+	exportFormat    = 9
 	minExportFormat = 1
 	// accountsFormat ist die erste Fassung mit Accounts.
 	accountsFormat = 4
@@ -40,6 +44,8 @@ const (
 	caFormat = 7
 	// dirsFormat ist die erste Fassung mit den Verzeichnis-Scopes.
 	dirsFormat = 8
+	// publicFormat ist die erste Fassung mit public je Collection.
+	publicFormat = 9
 )
 
 // exportFile ist der Inhalt einer Exportdatei: die config, die settings je
@@ -94,9 +100,13 @@ type rightYAML struct {
 	Dirs       []string `yaml:"dirs"`
 }
 
+// collectionYAML ist eine Collection im Export. Public steht ab Format 9,
+// fehlend false; davor darf das Feld nicht dastehen — das prüft parseExport
+// am YAML-Knoten.
 type collectionYAML struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Public      bool   `yaml:"public"`
 	CreatedAt   int64  `yaml:"created_at"`
 	CreatedBy   string `yaml:"created_by"`
 }
@@ -146,7 +156,8 @@ func hubTablesToYAML(t hubstore.Tables) *hubTablesYAML {
 		NodeCollections: []grantYAML{},
 	}
 	for _, c := range t.Collections {
-		out.Collections = append(out.Collections, collectionYAML(c))
+		out.Collections = append(out.Collections, collectionYAML{Name: c.Name, Description: c.Description,
+			Public: c.Public, CreatedAt: c.CreatedAt, CreatedBy: c.CreatedBy})
 	}
 	for _, n := range t.Nodes {
 		out.Nodes = append(out.Nodes, nodeYAML{Name: n.Name, Description: n.Description, TokenHash: n.TokenHash,
@@ -192,7 +203,8 @@ func (y *hubTablesYAML) toStore(format int) hubstore.Tables {
 		t.Accounts = append(t.Accounts, acc)
 	}
 	for _, c := range y.Collections {
-		t.Collections = append(t.Collections, hubstore.Collection(c))
+		t.Collections = append(t.Collections, hubstore.Collection{Name: c.Name, Description: c.Description,
+			Public: c.Public, CreatedAt: c.CreatedAt, CreatedBy: c.CreatedBy})
 	}
 	for _, n := range y.Nodes {
 		t.Nodes = append(t.Nodes, hubstore.Node{Name: n.Name, Description: n.Description, TokenHash: n.TokenHash,
@@ -335,7 +347,30 @@ func parseExport(data []byte) (exportFile, error) {
 	if err := checkHubCA(&root, exp.Format); err != nil {
 		return exportFile{}, err
 	}
+	if err := checkCollectionPublic(&root, exp.Format); err != nil {
+		return exportFile{}, err
+	}
 	return exp, nil
+}
+
+// checkCollectionPublic prüft public je Collection gegen die Fassung, am
+// YAML-Knoten: Vor Format 9 darf es nicht dastehen, in keiner Form. Ab
+// Format 9 fehlend false.
+func checkCollectionPublic(root *yaml.Node, format int) error {
+	if format >= publicFormat {
+		return nil
+	}
+	colls := partNode(root, "tables", "hub", "collections")
+	if colls == nil || colls.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for i, item := range colls.Content {
+		if mappingValue(item, "public") != nil {
+			return fmt.Errorf("Format %d kennt kein public (tables.hub.collections[%d].public); ab Format %d",
+				format, i, publicFormat)
+		}
+	}
+	return nil
 }
 
 // checkHubCA prüft die CA je Hub-Eintrag gegen die Fassung, am YAML-Knoten:

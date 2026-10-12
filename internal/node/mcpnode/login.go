@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/ident"
@@ -100,10 +101,34 @@ type Login struct {
 	entry store.Hub
 }
 
-// Right ist das Recht eines Accounts in einer Collection.
+// Right ist das Recht eines Accounts in einer Collection. Public heißt: Der
+// Account hat dort keine Zeile, die Collection ist öffentlich — er liest
+// sie, Rechte darüber hinaus hat er keine.
 type Right struct {
 	Collection string
 	contract.Rights
+	Public bool
+}
+
+// withPublic ergänzt die Rechte eines gültig angemeldeten Accounts um die
+// öffentlichen Collections seines Hubs, in denen er keine Zeile hat — nach
+// Collection.
+func withPublic(rights []Right, public []string) []Right {
+	have := map[string]bool{}
+	for _, r := range rights {
+		have[r.Collection] = true
+	}
+	added := false
+	for _, c := range public {
+		if !have[c] {
+			rights = append(rights, Right{Collection: c, Public: true})
+			added = true
+		}
+	}
+	if added {
+		sort.SliceStable(rights, func(i, j int) bool { return rights[i].Collection < rights[j].Collection })
+	}
+	return rights
 }
 
 // Logins ist die Anmeldung einer Anfrage über alle Hubs: je Hub-Eintrag des
@@ -207,9 +232,10 @@ func (n *Node) check(ctx context.Context, h store.Hub, p HubHeader) (Login, erro
 	out := Login{Hub: h.Name, Node: h.NodeName, State: LoginInvalid}
 	hash := ident.HashToken(p.Token)
 	var rows []replica.Document
+	var public []string
 	if p.Complete && ident.CheckPrincipalName("Account", p.Account) == nil {
 		var err error
-		if rows, err = accountRows(ctx, n.nodes, h, p.Account); err != nil {
+		if rows, public, err = accountRows(ctx, n.nodes, h, p.Account); err != nil {
 			return out, err
 		}
 	}
@@ -235,7 +261,7 @@ func (n *Node) check(ctx context.Context, h store.Hub, p HubHeader) (Login, erro
 	if len(rights) == 0 {
 		return out, nil
 	}
-	out.State, out.Account, out.User, out.Rights = LoginOK, p.Account, user, rights
+	out.State, out.Account, out.User, out.Rights = LoginOK, p.Account, user, withPublic(rights, public)
 	return out, nil
 }
 
@@ -248,19 +274,25 @@ func decodeRow(row replica.Document) (contract.AccountContent, bool) {
 }
 
 // accountRows liest die lebenden Zeilen eines Accounts aus der Replica eines
-// Eintrags. Die Replica wird je Anfrage geöffnet: Der Abgleich kann sie
-// verwerfen und neu anlegen, node hub rm entfernt sie; eine offen gehaltene
-// Datei zeigte dann den alten Stand. Eine Replica, die zu einem früheren
-// Eintrag gleichen Namens gehört, zählt nicht. Lässt sie sich nicht lesen,
-// ist der Fehler ein UnreadableError.
-func accountRows(ctx context.Context, nodes store.Store, h store.Hub, account string) ([]replica.Document, error) {
+// Eintrags, dazu die öffentlichen Collections darin. Die Replica wird je
+// Anfrage geöffnet: Der Abgleich kann sie verwerfen und neu anlegen, node hub
+// rm entfernt sie; eine offen gehaltene Datei zeigte dann den alten Stand.
+// Eine Replica, die zu einem früheren Eintrag gleichen Namens gehört, zählt
+// nicht. Lässt sie sich nicht lesen, ist der Fehler ein UnreadableError.
+func accountRows(ctx context.Context, nodes store.Store, h store.Hub, account string) (rows []replica.Document, public []string, err error) {
 	rep, err := openReplica(ctx, nodes, h)
 	if err != nil || rep == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rep.Close()
-	rows, err := rep.AccountRows(ctx, account)
-	return rows, unreadable(ctx, h.Name, err)
+	if rows, err = rep.AccountRows(ctx, account); err != nil {
+		return nil, nil, unreadable(ctx, h.Name, err)
+	}
+	if len(rows) == 0 {
+		return rows, nil, nil
+	}
+	public, err = rep.PublicCollections(ctx)
+	return rows, public, unreadable(ctx, h.Name, err)
 }
 
 // openReplica öffnet die Replica eines Eintrags; fehlt sie oder gehört sie
@@ -295,7 +327,7 @@ func AccountLogins(ctx context.Context, nodes store.Store, account string) (Logi
 	out := Logins{Hubs: make([]Login, 0, len(hubs)), Unknown: []string{}}
 	for _, h := range hubs {
 		login := Login{Hub: h.Name, Node: h.NodeName, State: LoginMissing}
-		rows, err := accountRows(ctx, nodes, h, account)
+		rows, public, err := accountRows(ctx, nodes, h, account)
 		if ue := asUnreadable(err); ue != nil {
 			login.Unreadable = ue
 		} else if err != nil {
@@ -313,6 +345,7 @@ func AccountLogins(ctx context.Context, nodes store.Store, account string) (Logi
 		}
 		if len(login.Rights) > 0 {
 			login.State, login.Account = LoginOK, account
+			login.Rights = withPublic(login.Rights, public)
 		}
 		out.Hubs = append(out.Hubs, login)
 	}

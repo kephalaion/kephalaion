@@ -16,6 +16,7 @@ import (
 	"slices"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/ident"
 )
@@ -42,9 +43,52 @@ func New(st store.Store) *Hub {
 	return &Hub{st: st, maxPageSize: MaxPageSize}
 }
 
+// access sind die Collections, die ein Node abgleichen darf, und die
+// Merkmale unter ihnen — je sortiert, nie nil.
+type access struct {
+	allowed, public, subscribed []string
+}
+
+// nodeAccess meldet den Node an und liefert, was er abgleichen darf: die
+// Collections aus node_collections und jede aus der Liste der Quellen, die
+// es am Hub gibt (fest abonniert), dazu die öffentlichen darunter.
+func (h *Hub) nodeAccess(ctx context.Context, auth contract.NodeAuth) (access, error) {
+	grants, err := h.authenticate(ctx, auth)
+	if err != nil {
+		return access{}, err
+	}
+	colls, err := h.st.Collections(ctx)
+	if err != nil {
+		return access{}, err
+	}
+	granted := map[string]bool{}
+	for _, c := range grants {
+		granted[c] = true
+	}
+	out := access{allowed: []string{}, public: []string{}, subscribed: []string{}}
+	for _, c := range colls {
+		_, listed := source.Lookup(c.Name)
+		if !listed && !granted[c.Name] {
+			continue
+		}
+		out.allowed = append(out.allowed, c.Name)
+		if c.IsPublic() {
+			out.public = append(out.public, c.Name)
+		}
+		if listed {
+			out.subscribed = append(out.subscribed, c.Name)
+		}
+	}
+	// Collections liefert nach Name; sortiert bleibt es auch so.
+	slices.Sort(out.allowed)
+	slices.Sort(out.public)
+	slices.Sort(out.subscribed)
+	return out, nil
+}
+
 // authenticate prüft Name, Token und Sperre des Nodes und liefert seine
-// erlaubten Collections. Unbekannt, falsches Token und gesperrt ergeben
-// denselben Fehler; der Hash wird in jedem Fall in konstanter Zeit
+// Collections aus node_collections. Unbekannt, falsches Token und gesperrt
+// ergeben denselben Fehler; der Hash wird in jedem Fall in konstanter Zeit
 // verglichen.
 func (h *Hub) authenticate(ctx context.Context, auth contract.NodeAuth) ([]string, error) {
 	n, err := h.st.Node(ctx, auth.Node)
@@ -87,25 +131,26 @@ func (h *Hub) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.
 	if err := checkVersion(req.Version); err != nil {
 		return contract.WhoamiResponse{}, err
 	}
-	allowed, err := h.authenticate(ctx, req.Auth)
+	acc, err := h.nodeAccess(ctx, req.Auth)
 	if err != nil {
 		return contract.WhoamiResponse{}, err
 	}
+	allowed := acc.allowed
 	info, err := h.st.Info(ctx)
 	if err != nil {
 		return contract.WhoamiResponse{}, err
 	}
 	resp := contract.WhoamiResponse{HubID: info.HubID, Version: contract.Version, Node: req.Auth.Node,
-		Allowed: append([]string{}, allowed...), Public: []string{}, Subscribed: []string{}}
+		Allowed: allowed, Public: acc.public, Subscribed: acc.subscribed}
 	if req.Account != nil {
-		acc, ok, err := h.checkAccount(ctx, *req.Account)
+		a, ok, err := h.checkAccount(ctx, *req.Account)
 		if err != nil {
 			return contract.WhoamiResponse{}, err
 		}
 		st := &contract.AccountStatus{Account: req.Account.Account, Valid: ok, Collections: []string{}}
 		if ok {
-			st.User = acc.User
-			for _, r := range acc.Rights {
+			st.User = a.User
+			for _, r := range a.Rights {
 				if slices.Contains(allowed, r.Collection) {
 					st.Collections = append(st.Collections, r.Collection)
 				}
@@ -129,10 +174,11 @@ func (h *Hub) Rotate(ctx context.Context, req contract.RotateRequest) (contract.
 	if !contract.IsTokenHash(req.NewHash) {
 		return contract.RotateResponse{}, contract.Invalid("new_hash ist kein sha256 in Hex (64 Zeichen 0-9a-f)")
 	}
-	allowed, err := h.authenticate(ctx, req.Auth)
+	acc, err := h.nodeAccess(ctx, req.Auth)
 	if err != nil {
 		return contract.RotateResponse{}, err
 	}
+	allowed := acc.allowed
 	_, ok, err := h.checkAccount(ctx, contract.AccountAuth{Account: req.Account, Token: req.Token})
 	if err != nil {
 		return contract.RotateResponse{}, err
@@ -188,10 +234,11 @@ func (h *Hub) Sync(ctx context.Context, req contract.SyncRequest) (contract.Sync
 	if err := checkRequest(req); err != nil {
 		return contract.SyncResponse{}, err
 	}
-	allowed, err := h.authenticate(ctx, req.Auth)
+	acc, err := h.nodeAccess(ctx, req.Auth)
 	if err != nil {
 		return contract.SyncResponse{}, err
 	}
+	allowed := acc.allowed
 	info, err := h.st.Info(ctx)
 	if err != nil {
 		return contract.SyncResponse{}, err
@@ -200,9 +247,9 @@ func (h *Hub) Sync(ctx context.Context, req contract.SyncRequest) (contract.Sync
 		HubID:       info.HubID,
 		Version:     contract.Version,
 		Collections: make([]contract.CollectionStatus, 0, len(req.Collections)),
-		Allowed:     append([]string{}, allowed...),
-		Public:      []string{},
-		Subscribed:  []string{},
+		Allowed:     allowed,
+		Public:      acc.public,
+		Subscribed:  acc.subscribed,
 		Rows:        []contract.Row{},
 		HubRevision: info.Revision,
 	}

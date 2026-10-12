@@ -345,7 +345,13 @@ func checkResponse(req contract.SyncRequest, resp contract.SyncResponse) error {
 // für den Node“):
 //
 //   - Nicht mehr gewünschte Collections verlassen die Replica zuerst.
+//     Gewünscht sind die Collections des Eintrags und die, die die Replica
+//     als fest abonniert kennt (subscribed).
 //   - Je gewünschter Collection fragt der Node ab ihrem Stand (neu: 0).
+//   - Nennt der Hub eine fest abonnierte Collection, die nicht angefragt
+//     war, fragt der Node sie mit der nächsten Anfrage ab 0 mit, auch ohne
+//     more — höchstens einmal je Aufruf. Eine, die nur als fest abonniert
+//     angefragt war und es nicht mehr ist, entfernt er (NotWanted).
 //   - Die erste Antwort legt die Replica an, wenn es sie nicht gibt. Nennt
 //     sie eine andere hub_id als db_info der Replica, oder liegt ein Stand
 //     über der Revision des Hubs (Hub aus einer Sicherung), wird die Replica
@@ -443,20 +449,37 @@ func (s *Syncer) syncHub(ctx context.Context, h store.Hub, hub contract.Hub, res
 	}()
 
 	state := map[string]int64{}
+	wanted := slices.Clone(h.Collections)
+	// own sind die Collections, die der Eintrag selbst will; die übrigen
+	// gewünschten sind nur fest abonniert.
+	own := map[string]bool{}
+	for _, c := range h.Collections {
+		own[c] = true
+	}
 	if rep != nil {
-		if err := s.dropUnwanted(ctx, rep, h.Collections, prog, now()); err != nil {
-			return err
-		}
 		states, err := rep.States(ctx)
 		if err != nil {
 			return err
 		}
 		for _, st := range states {
-			state[st.Collection] = st.Revision
+			if st.Subscribed && !own[st.Collection] {
+				wanted = append(wanted, st.Collection)
+			}
+		}
+		if err := s.dropUnwanted(ctx, rep, wanted, prog, now()); err != nil {
+			return err
+		}
+		for _, st := range states {
+			if slices.Contains(wanted, st.Collection) {
+				state[st.Collection] = st.Revision
+			}
 		}
 	}
 
-	pending := slices.Clone(h.Collections)
+	pending := wanted
+	// added sind die fest abonnierten Collections, die dieser Aufruf auf
+	// Geheiß des Hubs dazugenommen hat — jede höchstens einmal.
+	added := map[string]bool{}
 	reset := false
 	for {
 		req := contract.SyncRequest{
@@ -509,16 +532,23 @@ func (s *Syncer) syncHub(ctx context.Context, h store.Hub, hub contract.Hub, res
 		res.HubID = resp.HubID
 		res.Allowed = resp.Allowed
 
-		p := page{rows: resp.Rows, advance: map[string]int64{}, until: resp.Until, now: now()}
+		p := page{rows: resp.Rows, advance: map[string]int64{}, until: resp.Until, now: now(),
+			public: set(resp.Public), subscribed: set(resp.Subscribed)}
 		next := make([]string, 0, len(pending))
+		var unsubscribed []string
 		for _, cs := range resp.Collections {
-			if cs.Allowed {
+			switch {
+			case cs.Allowed && !own[cs.Collection] && !p.subscribed[cs.Collection]:
+				// Nur fest abonniert angefragt, und das ist sie nicht mehr.
+				unsubscribed = append(unsubscribed, cs.Collection)
+			case cs.Allowed:
 				p.advance[cs.Collection] = state[cs.Collection]
 				next = append(next, cs.Collection)
-			} else {
+			default:
 				p.drop = append(p.drop, cs.Collection)
 			}
 		}
+		p.drop = append(p.drop, unsubscribed...)
 		for _, row := range resp.Rows {
 			if _, ok := p.advance[row.Collection]; !ok {
 				return withKind(KindProtocol, fmt.Errorf("der Hub liefert eine Zeile aus Collection %q, "+
@@ -537,7 +567,11 @@ func (s *Syncer) syncHub(ctx context.Context, h store.Hub, hub contract.Hub, res
 		}
 		res.Pages++
 		for c, d := range drops {
-			prog.get(c, NotAllowed).Removed += d.rows
+			st := NotAllowed
+			if slices.Contains(unsubscribed, c) {
+				st = NotWanted
+			}
+			prog.get(c, st).Removed += d.rows
 		}
 		for _, row := range resp.Rows {
 			prog.get(row.Collection, Synced).Rows++
@@ -546,7 +580,21 @@ func (s *Syncer) syncHub(ctx context.Context, h store.Hub, hub contract.Hub, res
 			state[c] = max(state[c], resp.Until)
 			prog.get(c, Synced).Revision = state[c]
 		}
-		pending = next
+		// Fest abonnierte Collections, die nicht angefragt waren: mit der
+		// nächsten Anfrage ab 0.
+		var extra []string
+		for _, c := range resp.Subscribed {
+			if !added[c] && !slices.Contains(next, c) && !slices.Contains(pending, c) {
+				added[c] = true
+				extra = append(extra, c)
+				state[c] = 0
+				prog.get(c, Synced)
+			}
+		}
+		pending = append(next, extra...)
+		if len(extra) > 0 {
+			continue
+		}
 		if !resp.More || len(pending) == 0 {
 			return nil
 		}
@@ -557,6 +605,15 @@ func (s *Syncer) syncHub(ctx context.Context, h store.Hub, hub contract.Hub, res
 				resp.Until))
 		}
 	}
+}
+
+// set macht aus einer Liste eine Menge.
+func set(list []string) map[string]bool {
+	out := make(map[string]bool, len(list))
+	for _, v := range list {
+		out[v] = true
+	}
+	return out
 }
 
 // mismatch sagt, warum die Replica nicht zur Antwort passt: andere hub_id,

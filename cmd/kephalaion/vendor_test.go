@@ -63,7 +63,7 @@ func TestExportImportVendor(t *testing.T) {
 	exportTo(t, cfgA, exp)
 	raw, _ := os.ReadFile(exp)
 	data := string(raw)
-	for _, want := range []string{"format: 8", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
+	for _, want := range []string{"format: 9", "vendor: []", "vendor:\n              - k-playbook", "vendor:\n              - zwei"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("Export ohne %q:\n%s", want, data)
 		}

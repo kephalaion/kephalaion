@@ -21,7 +21,7 @@ func newDocStore(t *testing.T) Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	for _, c := range []string{"a", "b"} {
-		if err := s.AddCollection(ctx, c, ""); err != nil {
+		if err := s.AddCollection(ctx, c, "", false); err != nil {
 			t.Fatal(err)
 		}
 	}

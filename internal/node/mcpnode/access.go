@@ -21,8 +21,11 @@ import (
 // changes): Anmeldung über alle Hubs (Authenticate), Adresse auflösen,
 // Replica des Hubs öffnen, Recht prüfen. Gelesen wird nur aus der Replica;
 // lesbar ist eine Collection, wenn der Client an ihrem Hub gültig angemeldet
-// ist und sein Account dort eine lebende Zeile SYSTEM:A: hat — es zählen also
-// nur Collections, die der Node führt.
+// ist und sein Account dort eine lebende Zeile SYSTEM:A: hat oder die
+// Collection öffentlich ist (sync_state.public, Task 031) — es zählen also
+// nur Collections, die der Node führt. Gültig angemeldet ist nur, wer in
+// dieser Replica irgendeine lebende Zeile hat: Eine öffentliche Collection
+// allein, ohne eigene, liest niemand.
 
 // toolError ist ein Fehler, dessen Meldung der Client sieht. Sie nennt nie
 // einen Pfad, ein Token oder einen Hash. code ist der Code, den die

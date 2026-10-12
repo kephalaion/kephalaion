@@ -13,6 +13,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
@@ -776,6 +777,10 @@ func (s *sqliteStore) GrantAccount(ctx context.Context, name, collection string,
 		}
 		if err := requireCollection(ctx, w.tx, collection); err != nil {
 			return err
+		}
+		if _, ok := source.Lookup(collection); ok {
+			return &kindError{ErrForbidden, fmt.Sprintf("Collection %s wird aus einem Release gefüllt: lesen darf sie "+
+				"jeder Account des Hubs ohnehin, Rechte zum Schreiben gibt es darin nicht", collection)}
 		}
 		if a.Locked {
 			// Gesperrt: nur die gemerkten Rechte ändern; die Zeile entsteht mit

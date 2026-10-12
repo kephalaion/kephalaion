@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
@@ -36,8 +37,56 @@ func (e *kindError) Unwrap() error { return e.kind }
 type Collection struct {
 	Name        string
 	Description string
-	CreatedAt   int64
-	CreatedBy   string
+	// Public ist die Spalte public: Jeder Account des Hubs liest die
+	// Collection. Bei einer Collection aus der Liste der Quellen gilt sie
+	// immer (IsPublic), maßgeblich ist die Liste.
+	Public bool
+	// FetchedTag und FetchedAt sind der zuletzt geholte Stand einer
+	// Collection mit Quelle (fetch): Tag des Releases und Zeitpunkt, ms seit
+	// Epoche; leer bzw. 0, solange nichts geholt ist. Nicht im Export.
+	FetchedTag string
+	FetchedAt  int64
+	CreatedAt  int64
+	CreatedBy  string
+}
+
+// IsPublic sagt, ob die Collection öffentlich ist: die Spalte public, oder
+// sie steht in der Liste der Quellen.
+func (c Collection) IsPublic() bool {
+	if e, ok := source.Lookup(c.Name); ok && e.Public {
+		return true
+	}
+	return c.Public
+}
+
+// CollectionChange ist eine Änderung an einer Collection: nil heißt
+// unverändert.
+type CollectionChange struct {
+	Description *string
+	Public      *bool
+}
+
+// collectionColumns sind die Spalten von collections in der Reihenfolge, die
+// scanCollection erwartet.
+const collectionColumns = `name, COALESCE(description, ''), public, COALESCE(fetched_tag, ''), COALESCE(fetched_at, 0),
+	created_at, created_by`
+
+func scanCollection(sc interface{ Scan(...any) error }) (Collection, error) {
+	var c Collection
+	var public int64
+	if err := sc.Scan(&c.Name, &c.Description, &public, &c.FetchedTag, &c.FetchedAt, &c.CreatedAt, &c.CreatedBy); err != nil {
+		return Collection{}, err
+	}
+	c.Public = public != 0
+	return c, nil
+}
+
+// sourceLocked meldet, dass in einer Collection mit Quelle niemand schreibt
+// — what nennt den Vorgang.
+func sourceLocked(collection, what string) error {
+	e, _ := source.Lookup(collection)
+	return &kindError{ErrForbidden, fmt.Sprintf("%s: Collection %s wird aus dem Release von %s gefüllt; "+
+		"ihren Inhalt ändert allein kephalaion hub collection fetch %s", what, collection, e.Git, collection)}
 }
 
 // Node ist eine Zeile in nodes. Collections sind die erlaubten Collections
@@ -150,6 +199,11 @@ func CheckTables(t Tables) error {
 			if !colls[r.Collection] {
 				return fmt.Errorf("Account %s: Collection %s %w", a.Name, r.Collection, ErrNotFound)
 			}
+			if _, ok := source.Lookup(r.Collection); ok {
+				return fmt.Errorf("Account %s hat Rechte in %s; %s wird aus einem Release gefüllt und ist für jeden "+
+					"Account lesbar, Rechte darauf gibt es nicht. Eine eigene Collection dieses Namens vor dem Export "+
+					"umbenennen (etwa %s-dev) und die Rechte dorthin geben", a.Name, r.Collection, r.Collection, r.Collection)
+			}
 			if seen[r.Collection] {
 				return fmt.Errorf("Account %s: Rechte in %s stehen zweimal", a.Name, r.Collection)
 			}
@@ -233,8 +287,8 @@ func readCollections(ctx context.Context, db sqlitedb.Querier) ([]Collection, er
 	defer rows.Close()
 	out := []Collection{}
 	for rows.Next() {
-		var c Collection
-		if err := rows.Scan(&c.Name, &c.Description, &c.CreatedAt, &c.CreatedBy); err != nil {
+		c, err := scanCollection(rows)
+		if err != nil {
 			return nil, fmt.Errorf("Collections lesen: %w", err)
 		}
 		out = append(out, c)
@@ -242,19 +296,44 @@ func readCollections(ctx context.Context, db sqlitedb.Querier) ([]Collection, er
 	return out, rows.Err()
 }
 
-func collectionExists(ctx context.Context, db sqlitedb.Querier, name string) (bool, error) {
-	var c Collection
-	err := db.QueryRowContext(ctx, q(queries.CollectionGet), name).
-		Scan(&c.Name, &c.Description, &c.CreatedAt, &c.CreatedBy)
+// getCollection liest eine Collection oder meldet ErrNotFound.
+func getCollection(ctx context.Context, db sqlitedb.Querier, name string) (Collection, error) {
+	c, err := scanCollection(db.QueryRowContext(ctx, q(queries.CollectionGet), name))
 	if errors.Is(err, sql.ErrNoRows) {
+		return Collection{}, fmt.Errorf("Collection %s %w", name, ErrNotFound)
+	}
+	if err != nil {
+		return Collection{}, fmt.Errorf("Collection %s lesen: %w", name, err)
+	}
+	return c, nil
+}
+
+func collectionExists(ctx context.Context, db sqlitedb.Querier, name string) (bool, error) {
+	_, err := getCollection(ctx, db, name)
+	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (s *sqliteStore) AddCollection(ctx context.Context, name, description string) error {
+func (s *sqliteStore) Collection(ctx context.Context, name string) (Collection, error) {
+	return getCollection(ctx, s.db, name)
+}
+
+// dbBool ist ein Wahrheitswert als INTEGER-Spalte.
+func dbBool(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func (s *sqliteStore) AddCollection(ctx context.Context, name, description string, public bool) error {
 	if err := ident.CheckName("Collection", name); err != nil {
 		return err
+	}
+	if e, ok := source.Lookup(name); ok {
+		public = public || e.Public
 	}
 	return s.write(ctx, "collection.add", name, func(tx *sql.Tx) error {
 		ok, err := collectionExists(ctx, tx, name)
@@ -264,15 +343,33 @@ func (s *sqliteStore) AddCollection(ctx context.Context, name, description strin
 		if ok {
 			return fmt.Errorf("Collection %s %w", name, ErrExists)
 		}
-		_, err = tx.ExecContext(ctx, q(queries.CollectionInsert), name, nullable(description), sqlitedb.NowMillis(), Admin)
+		_, err = tx.ExecContext(ctx, q(queries.CollectionInsert), name, nullable(description), dbBool(public),
+			sqlitedb.NowMillis(), Admin)
 		return err
 	})
 }
 
-func (s *sqliteStore) SetCollectionDescription(ctx context.Context, name, description string) error {
+func (s *sqliteStore) SetCollection(ctx context.Context, name string, change CollectionChange) error {
+	if change.Public != nil && !*change.Public {
+		if e, ok := source.Lookup(name); ok && e.Public {
+			return fmt.Errorf("Collection %s steht in der Liste der Quellen dieses Binarys und bleibt öffentlich", name)
+		}
+	}
 	return s.write(ctx, "collection.set", name, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, q(queries.CollectionSetDesc), name, nullable(description))
-		return mustAffect(res, err, "Collection "+name)
+		if _, err := getCollection(ctx, tx, name); err != nil {
+			return err
+		}
+		if change.Description != nil {
+			if _, err := tx.ExecContext(ctx, q(queries.CollectionSetDesc), name, nullable(*change.Description)); err != nil {
+				return err
+			}
+		}
+		if change.Public != nil {
+			if _, err := tx.ExecContext(ctx, q(queries.CollectionSetPublic), name, dbBool(*change.Public)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -285,7 +382,18 @@ func (s *sqliteStore) RemoveCollection(ctx context.Context, name string) error {
 		if !ok {
 			return fmt.Errorf("Collection %s %w", name, ErrNotFound)
 		}
-		if err := collectionRemovable(ctx, tx, name, true, true); err != nil {
+		if _, ok := source.Lookup(name); ok {
+			// Erst die Rechte prüfen, dann die geholten Dokumente
+			// entfernen: Ein Node, der sie noch abgleichen darf (grant),
+			// hält die Collection.
+			if err := collectionRemovable(ctx, tx, name, true, true, true); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, q(queries.CollectionDeleteDocs), name); err != nil {
+				return fmt.Errorf("Dokumente von %s entfernen: %w", name, err)
+			}
+		}
+		if err := collectionRemovable(ctx, tx, name, true, true, false); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, q(queries.CollectionDelete), name)
@@ -295,10 +403,11 @@ func (s *sqliteStore) RemoveCollection(ctx context.Context, name string) error {
 
 // collectionRemovable prüft, ob eine Collection entfernt werden darf: keine
 // Dokumente in ihr (jede Zeile zählt, auch Löschmarken und lebende
-// SYSTEM:-Zeilen; nur Löschmarken von Account-Zeilen nicht — sie bleiben),
-// wenn checkGrants, kein Node, der sie abgleichen darf, und wenn
-// checkAccounts, kein gesperrter Account, der sich Rechte in ihr gemerkt hat.
-func collectionRemovable(ctx context.Context, tx sqlitedb.Querier, name string, checkGrants, checkAccounts bool) error {
+// SYSTEM:-Zeilen; nur Löschmarken von Account-Zeilen nicht — sie bleiben;
+// mit skipDocs nicht geprüft), wenn checkGrants, kein Node, der sie
+// abgleichen darf, und wenn checkAccounts, kein gesperrter Account, der sich
+// Rechte in ihr gemerkt hat.
+func collectionRemovable(ctx context.Context, tx sqlitedb.Querier, name string, checkGrants, checkAccounts, skipDocs bool) error {
 	if checkAccounts {
 		accounts, err := lockedAccountsUsing(ctx, tx, name)
 		if err != nil {
@@ -318,6 +427,9 @@ func collectionRemovable(ctx context.Context, tx sqlitedb.Querier, name string, 
 			return fmt.Errorf("Collection %s %w: erlaubt für Node %s (zuerst hub node revoke)",
 				name, ErrInUse, strings.Join(nodes, ", "))
 		}
+	}
+	if skipDocs {
+		return nil
 	}
 	n, err := count(ctx, tx, queries.CollectionCountDocs, name)
 	if err != nil {
@@ -640,7 +752,7 @@ func checkImport(ctx context.Context, tx sqlitedb.Querier, t Tables) error {
 		if keep[c.Name] {
 			continue
 		}
-		if err := collectionRemovable(ctx, tx, c.Name, false, t.KeepAccounts); err != nil {
+		if err := collectionRemovable(ctx, tx, c.Name, false, t.KeepAccounts, false); err != nil {
 			return fmt.Errorf("%w — der Import würde sie entfernen", err)
 		}
 	}
@@ -663,7 +775,7 @@ func replaceTables(ctx context.Context, tx sqlitedb.Querier, t Tables) error {
 	}
 	for _, c := range t.Collections {
 		if _, err := tx.ExecContext(ctx, q(queries.CollectionInsert),
-			c.Name, nullable(c.Description), c.CreatedAt, c.CreatedBy); err != nil {
+			c.Name, nullable(c.Description), dbBool(c.IsPublic()), c.CreatedAt, c.CreatedBy); err != nil {
 			return fmt.Errorf("Collection %s: %w", c.Name, err)
 		}
 	}
