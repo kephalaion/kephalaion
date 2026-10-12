@@ -16,6 +16,7 @@ import (
 
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 	"github.com/kephalaion/kephalaion/internal/sqlq"
 )
@@ -73,6 +74,10 @@ type Store interface {
 	// einem Schreibvorgang. public abschalten lehnt es bei einer Collection
 	// aus der Liste der Quellen ab.
 	SetCollection(ctx context.Context, name string, change CollectionChange) error
+	// FetchedTag und ReplaceDefaults sind die Seite des Stores beim Holen
+	// (source.Target, fetch.go).
+	FetchedTag(ctx context.Context, collection string) (string, error)
+	ReplaceDefaults(ctx context.Context, collection, tag string, files []source.File, by source.Actor) (source.Result, error)
 	// RemoveCollection entfernt eine Collection, die kein Node erlaubt hat, in
 	// der kein gesperrter Account Rechte gemerkt hat und in der keine
 	// Dokumente stehen. Löschmarken von Account-Zeilen zählen nicht; sie
@@ -244,6 +249,8 @@ var queries = struct {
 	CollectionInsert      string
 	CollectionSetDesc     string
 	CollectionSetPublic   string
+	CollectionLock        string
+	CollectionSetFetched  string
 	CollectionDelete      string
 	CollectionDeleteDocs  string
 	CollectionsDeleteAll  string
@@ -358,7 +365,13 @@ var queries = struct {
 		VALUES ($1, $2, $3, $4, $5)`,
 	CollectionSetDesc:   `UPDATE collections SET description = $2 WHERE name = $1`,
 	CollectionSetPublic: `UPDATE collections SET public = $2 WHERE name = $1`,
-	CollectionDelete:    `DELETE FROM collections WHERE name = $1`,
+	// CollectionLock sperrt die Zeile einer Collection schreibend — die erste
+	// Anweisung von fetch (wie AccountLock): Von zwei Läufen schreibt so nur
+	// einer, auch unter PostgreSQL (READ COMMITTED); der zweite sieht danach
+	// den neuen Tag.
+	CollectionLock:       `UPDATE collections SET name = name WHERE name = $1`,
+	CollectionSetFetched: `UPDATE collections SET fetched_tag = $2, fetched_at = $3 WHERE name = $1`,
+	CollectionDelete:     `DELETE FROM collections WHERE name = $1`,
 	// CollectionDeleteDocs entfernt die Dokumentzeilen einer Collection mit
 	// Quelle samt Löschmarken, vor hub collection rm. SYSTEM:-Zeilen bleiben
 	// (Löschmarken von Account-Zeilen sollen stehen bleiben; lebende

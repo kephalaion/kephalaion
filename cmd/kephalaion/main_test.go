@@ -14,6 +14,8 @@ import (
 
 	"github.com/kephalaion/kephalaion/internal/assistant/assistanttest"
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
+	"github.com/kephalaion/kephalaion/internal/hub/source/sourcetest"
 	"github.com/kephalaion/kephalaion/internal/service"
 	"github.com/kephalaion/kephalaion/internal/upgrade"
 )
@@ -51,7 +53,16 @@ func TestMain(m *testing.M) {
 		u.Now = func() time.Time { return testNow }
 		return u
 	}
+	// Kein Test holt bei GitHub (Task 031): ohne eigenen Ersatz ein
+	// nachgespieltes GitHub ohne Release.
+	src := sourcetest.New("kascada/k-playbook", "k-playbook-defaults.tar.gz")
+	newSourceClient = func() *source.Client {
+		c := source.NewClient("test")
+		c.Base = src.URL
+		return c
+	}
 	code := m.Run()
+	src.Close()
 	gh.Close()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

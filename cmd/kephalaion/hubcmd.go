@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/hub/source"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 )
@@ -16,18 +17,25 @@ const hubCollectionUsage = `Aufruf:
   kephalaion hub collection list
   kephalaion hub collection show <name>
   kephalaion hub collection set  <name> [--description text] [--public[=false]]
+  kephalaion hub collection fetch <name>
   kephalaion hub collection rm   <name>
 
 Kommandos:
   add    legt eine Collection an. Steht der Name in der Liste der Quellen
          dieses Binarys (etwa k-playbook), bekommt sie deren Vorgaben:
          öffentlich, fest abonniert, Inhalt aus dem Release der Quelle
-         unter defaults/ — niemand schreibt darin.
+         unter defaults/ — niemand schreibt darin. add holt das Release
+         gleich; ohne Netz entsteht sie leer, dann später fetch.
   list   zeigt alle Collections
   show   zeigt eine Collection, bei einer mit Quelle auch Quelle und
          geholten Stand
   set    ändert Beschreibung und/oder öffentlich; bei einer Collection aus
          der Liste der Quellen bleibt sie öffentlich
+  fetch  holt das neueste Release der Quelle nach defaults/ und ersetzt es
+         als Ganzes, in einem Schreibvorgang (Urheber system). Ist es schon
+         geholt, ist nichts zu tun. Tag aus der Weiterleitung von
+         releases/latest, ohne GitHub-API und Token; Proxy aus der Umgebung
+         (HTTPS_PROXY). Höchstens 20 s für Tag und Laden.
   rm     entfernt eine Collection — nur, wenn kein Node sie abgleichen darf,
          kein Account Rechte in ihr hat (auch kein gesperrter) und keine
          Dokumente in ihr stehen, auch keine Löschmarken. Löschmarken von
@@ -100,6 +108,13 @@ func runHubCollection(args []string, stdout, stderr io.Writer) int {
 				if e, ok := source.Lookup(pos[0]); ok {
 					fmt.Fprintf(stdout, "Aus der Liste der Quellen: öffentlich, fest abonniert, Inhalt aus %s (%s) unter %s/.\n",
 						e.Git, e.Asset, source.DefaultsDir)
+					// Holen beim Anlegen; ohne Netz bleibt sie leer.
+					res, err := source.Fetch(ctx, newSourceClient(), s, pos[0], source.Actor{Account: hubstore.Admin})
+					if err != nil {
+						fmt.Fprintf(stdout, "Noch nichts geholt: %v\nHolen mit: kephalaion hub collection fetch %s\n", err, pos[0])
+						return nil
+					}
+					printFetch(stdout, pos[0], res)
 				}
 				return nil
 			})
@@ -172,6 +187,20 @@ func runHubCollection(args []string, stdout, stderr io.Writer) int {
 					return err
 				}
 				fmt.Fprintf(stdout, "Collection %s geändert.\n", pos[0])
+				return nil
+			})
+		},
+		"fetch": func(a []string) int {
+			c := newCommand("hub collection fetch", u, stdout, stderr, "<name>")
+			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
+				if _, err := s.Collection(ctx, pos[0]); err != nil {
+					return err
+				}
+				res, err := source.Fetch(ctx, newSourceClient(), s, pos[0], source.Actor{Account: hubstore.Admin})
+				if err != nil {
+					return err
+				}
+				printFetch(stdout, pos[0], res)
 				return nil
 			})
 		},
@@ -306,6 +335,26 @@ func runHubNode(args []string, stdout, stderr io.Writer) int {
 			})
 		},
 	})
+}
+
+// newSourceClient liefert den Client, mit dem der Hub Releases holt; Tests
+// lenken ihn auf ein nachgespieltes GitHub (TestMain).
+var newSourceClient = func() *source.Client {
+	return source.NewClient("kephalaion/" + buildinfo.Version)
+}
+
+// printFetch zeigt das Ergebnis eines Holens.
+func printFetch(w io.Writer, name string, res source.Result) {
+	if res.Current {
+		fmt.Fprintf(w, "Collection %s: schon aktuell (%s).\n", name, res.Tag)
+		return
+	}
+	fmt.Fprintf(w, "Collection %s: %s geholt — %d angelegt, %d ersetzt, %d gelöscht", name, res.Tag,
+		res.Created, res.Updated, res.Deleted)
+	if res.Revision > 0 {
+		fmt.Fprintf(w, " (Revision %d)", res.Revision)
+	}
+	fmt.Fprintln(w, ".")
 }
 
 // hubDo wertet die Argumente aus, öffnet den Hub und führt fn aus.

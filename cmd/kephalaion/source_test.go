@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kephalaion/kephalaion/internal/hub/source"
+	"github.com/kephalaion/kephalaion/internal/hub/source/sourcetest"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
 	"github.com/kephalaion/kephalaion/internal/upgrade"
 )
@@ -112,4 +114,52 @@ func TestPublicAndSourceCollections(t *testing.T) {
 	}
 	e.run(t, "config", "import", exp).want(t, 0,
 		"hub: Collection k-playbook hat eine Quelle; holen mit: kephalaion hub collection fetch k-playbook")
+}
+
+// withGitHub lenkt das Holen für einen Test auf ein nachgespieltes GitHub.
+func withGitHub(t *testing.T) *sourcetest.GitHub {
+	t.Helper()
+	gh := sourcetest.New("kascada/k-playbook", "k-playbook-defaults.tar.gz")
+	t.Cleanup(gh.Close)
+	old := newSourceClient
+	newSourceClient = func() *source.Client {
+		c := source.NewClient("test")
+		c.Base = gh.URL
+		return c
+	}
+	t.Cleanup(func() { newSourceClient = old })
+	return gh
+}
+
+// Task 031, Etappe 3: Holen beim Anlegen und von Hand; schon aktuell;
+// ohne Release bleibt die Collection leer und die Meldung nennt fetch.
+func TestHubCollectionFetch(t *testing.T) {
+	dir := isolate(t)
+	cfg := setup(t, dir)
+	gh := withGitHub(t)
+	runT(t, "hub", "collection", "add", "k-playbook", "--config", cfg).want(t, 0, "Collection k-playbook angelegt",
+		"Noch nichts geholt: https://github.com/kascada/k-playbook hat kein veröffentlichtes Release",
+		"Holen mit: kephalaion hub collection fetch k-playbook")
+	runT(t, "hub", "collection", "fetch", "k-playbook", "--config", cfg).want(t, 1, "kein veröffentlichtes Release")
+	gh.Release("v1.0.0", nil)
+	runT(t, "hub", "collection", "fetch", "k-playbook", "--config", cfg).want(t, 1,
+		"dem Release v1.0.0 von https://github.com/kascada/k-playbook fehlt das Asset k-playbook-defaults.tar.gz")
+	gh.Release("v1.0.0", sourcetest.Archive(map[string]string{"README.md": "# k-playbook\n", "rules/a.md": "a"}))
+	runT(t, "hub", "collection", "fetch", "k-playbook", "--config", cfg).want(t, 0,
+		"Collection k-playbook: v1.0.0 geholt — 2 angelegt, 0 ersetzt, 0 gelöscht (Revision")
+	runT(t, "hub", "collection", "fetch", "k-playbook", "--config", cfg).want(t, 0,
+		"Collection k-playbook: schon aktuell (v1.0.0).")
+	runT(t, "hub", "doc", "get", "k-playbook", "defaults/README.md", "--config", cfg).want(t, 0, "# k-playbook")
+	runT(t, "hub", "collection", "show", "k-playbook", "--config", cfg).want(t, 0, "geholt:       v1.0.0 am ")
+	runT(t, "hub", "collection", "add", "team", "--config", cfg).want(t, 0)
+	runT(t, "hub", "collection", "fetch", "team", "--config", cfg).want(t, 1, "Collection team hat keine Quelle")
+	runT(t, "hub", "collection", "fetch", "fehlt", "--config", cfg).want(t, 1, "Collection fehlt gibt es nicht")
+
+	// Eine zweite Collection gleich beim Anlegen: geholt.
+	runT(t, "hub", "collection", "rm", "k-playbook", "--config", cfg).want(t, 0)
+	runT(t, "hub", "collection", "add", "k-playbook", "--config", cfg).want(t, 0,
+		"Collection k-playbook: v1.0.0 geholt — 2 angelegt")
+	if _, loads := gh.Calls(); loads != 3 {
+		t.Errorf("Archiv %d-mal geladen", loads)
+	}
 }
