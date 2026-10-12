@@ -312,7 +312,8 @@ func TestCodes(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	for _, c := range []Code{CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict, CodeStaleRevision} {
+	for _, c := range []Code{CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict, CodeStaleRevision,
+		CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable} {
 		if !seen[c] {
 			t.Errorf("Code %s fehlt in Codes", c)
 		}
@@ -486,5 +487,42 @@ func TestDirScope(t *testing.T) {
 	c, err = DecodeAccountContent(`{"hash":"` + hash + `","user":"kleist","rights":{"write":true,"supersede":false}}`)
 	if err != nil || c.Rights.Dirs != nil || !c.Rights.Write {
 		t.Errorf("Zeile ohne dirs gelesen = %+v, %v", c, err)
+	}
+}
+
+// fetch und die Merkmale public und subscribed (Task 031) laufen in der Form
+// von docs/vertrag.md als JSON; ein Hub vor Task 031 schickt die Merkmale
+// nicht, der Node liest dann keine.
+func TestFetchAndFlagsJSON(t *testing.T) {
+	b, err := json.Marshal(FetchRequest{Version: Version, Auth: NodeAuth{Node: "n", Token: "geheim"},
+		Account: AccountAuth{Account: "a", Token: "t"}, Collection: "k-playbook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"account":{"account":"a","token":"t"},"collection":"k-playbook"}` {
+		t.Errorf("Anfrage als JSON: %s", b)
+	}
+	b, _ = json.Marshal(FetchResponse{HubID: "01H", Version: Version, Collection: "k-playbook", Status: FetchFetched,
+		Tag: "v1.0.0", Revision: 7, Created: 2, Updated: 1, Deleted: 3})
+	want := `{"hub_id":"01H","version":1,"collection":"k-playbook","status":"fetched","tag":"v1.0.0",` +
+		`"revision":7,"created":2,"updated":1,"deleted":3}`
+	if string(b) != want {
+		t.Errorf("Antwort als JSON: %s", b)
+	}
+	b, _ = json.Marshal(SyncResponse{Allowed: []string{"a", "k"}, Public: []string{"k"}, Subscribed: []string{"k"}})
+	if !strings.Contains(string(b), `"allowed":["a","k"],"public":["k"],"subscribed":["k"]`) {
+		t.Errorf("sync als JSON: %s", b)
+	}
+	var old SyncResponse
+	if err := json.Unmarshal([]byte(`{"hub_id":"01H","version":1,"allowed":["a"]}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.Public != nil || old.Subscribed != nil {
+		t.Errorf("Antwort eines älteren Hubs: %+v", old)
+	}
+	var w WhoamiResponse
+	if err := json.Unmarshal([]byte(`{"allowed":["k"],"public":["k"],"subscribed":["k"]}`), &w); err != nil ||
+		len(w.Public) != 1 || len(w.Subscribed) != 1 {
+		t.Errorf("whoami: %+v, %v", w, err)
 	}
 }

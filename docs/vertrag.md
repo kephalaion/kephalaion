@@ -8,9 +8,10 @@ Prozess, `http` ist HTTP mit JSON (`internal/contract/httpapi`, siehe „HTTP“
 dasselbe; die Tests des Vertrags laufen gegen beide.
 
 Die Vorgänge: `whoami` (wer bin ich, gilt dieser Account und wem gehört er), `rotate` (Token
-eines Accounts ersetzen), `sync` (Abgleich) und die Schreibvorgänge `create`, `write`, `delete`
+eines Accounts ersetzen), `sync` (Abgleich), die Schreibvorgänge `create`, `write`, `delete`
 und `rename` (ein Dokument anlegen, ersetzen, löschen, umbenennen — `delete` und `rename` auch
-ein Verzeichnis als Ganzes —, im Namen eines Accounts). Begriffe:
+ein Verzeichnis als Ganzes —, im Namen eines Accounts) und `fetch` (der Hub holt das neueste
+Release der Quelle einer Collection nach `defaults/`, angestoßen von einem Account). Begriffe:
 [`begriffe.md`](begriffe.md); Hintergrund: [`konzept.md`](konzept.md), „Abgleich“,
 „Authentifizierung“ und „Transport, Token und Fehlschläge“.
 
@@ -27,6 +28,13 @@ Schreibvorgänge mit Task 014 hinzu. Ein Hub, der älter ist als sie, kennt sie 
 antwortet wie auf jeden unbekannten Vorgang (über HTTP 404 mit `invalid`); ausgeführt hat er
 nichts. Der Transport meldet das als eigenen Fall (`contract.ErrUnknownOperation`), nicht als
 `invalid`, und der Node meldet, dass der Hub noch nicht schreiben kann.
+
+Mit Task 031 kamen, ebenfalls ohne neue Fassung, die Merkmale `public` und `subscribed` in den
+Antworten von `whoami` und `sync` (siehe „Öffentliche und fest abonnierte Collections“) und der
+Vorgang `fetch` hinzu. Ein Node, der die Merkmale nicht kennt, übergeht sie: Er gleicht nur die
+Collections ab, die er selbst will, und lässt einen Account eine Collection nur mit eigener
+Zeile darin lesen — eine öffentliche ohne Zeile sieht er nicht, er bricht aber nicht. Ein Hub
+vor Task 031 kennt `fetch` nicht und antwortet wie auf jeden unbekannten Vorgang.
 
 ## Anmeldung
 
@@ -67,7 +75,9 @@ Antwort:
 | Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
 | Fassung | `version` | 1 |
 | Node | `node` | der Name des Nodes am Hub |
-| Erlaubte Collections | `allowed` | alle Collections, die der Node abgleichen darf, sortiert |
+| Erlaubte Collections | `allowed` | alle Collections, die der Node abgleichen darf, sortiert — wie bei `sync` |
+| Öffentlich | `public` | die öffentlichen unter `allowed`, sortiert — wie bei `sync` |
+| Fest abonniert | `subscribed` | die fest abonnierten unter `allowed`, sortiert — wie bei `sync` |
 | Account | `account` | nur mit Account-Teil: `{"account", "valid", "user", "collections"}`. `valid` falsch heißt unbekannt, falsches Token oder gesperrt — dieselbe Antwort, kein Fehler. `user` ist der User des Accounts (aus `accounts`), nur wenn `valid` wahr ist, sonst leer (`""`). `collections` sind die Collections des Accounts, die dieser Node abgleichen darf, sortiert; leer, wenn `valid` falsch ist. |
 
 ## rotate
@@ -132,7 +142,9 @@ Hash kennt, kann das allein nicht klären; er meldet dem Client den unklaren Aus
 | Hub-Kennung | `hub_id` | die `hub_id` aus `db_info` des Hubs |
 | Fassung | `version` | Fassung der Antwort, 1 |
 | Status je Collection | `collections` | jede angefragte Collection in der Reihenfolge der Anfrage, mit `allowed` wahr oder falsch. Eine unbekannte Collection und eine nicht erlaubte sind dieselbe Antwort (falsch). |
-| Erlaubte Collections | `allowed` | alle Collections, die der Node abgleichen darf (`node_collections`), sortiert — auch nicht angefragte |
+| Erlaubte Collections | `allowed` | alle Collections, die der Node abgleichen darf, sortiert — auch nicht angefragte: die aus `node_collections` und jede Collection aus der Liste der Quellen, die es am Hub gibt |
+| Öffentlich | `public` | die Collections unter `allowed`, die öffentlich sind, sortiert (siehe „Öffentliche und fest abonnierte Collections“) |
+| Fest abonniert | `subscribed` | die Collections unter `allowed`, die jeder Node von selbst abgleicht — die aus der Liste der Quellen —, sortiert |
 | Zeilen | `rows` | siehe unten |
 | Hub-Revision | `hub_revision` | die Revision H des Hubs |
 | bis | `until` | die Revision, bis zu der der Node nach dieser Seite alles hat |
@@ -191,6 +203,37 @@ mit der nächsten Seite. So passen Seite und H zusammen, ohne Lese-Transaktion.
   Kommando gibt, verwirft der Node die Replica selbst (`node hub rm` und `node hub add`).
 - Collections mit `allowed` falsch — nicht erlaubt, nicht mehr erlaubt oder unbekannt — entfernt
   der Node aus seiner Replica.
+- **Fest abonniert:** Eine Collection aus `subscribed` gleicht der Node ab, auch wenn er sie
+  nicht selbst will: Fehlt sie in seiner Anfrage, fragt er sie mit der nächsten Anfrage ab 0
+  mit, auch wenn `more` falsch ist. Fällt sie aus `subscribed` und will er sie nicht selbst,
+  entfernt er sie wie eine nicht mehr gewünschte.
+- **Merkmale merken:** `public` und `subscribed` schreibt der Node je Seite zum Stand jeder
+  angefragten Collection in seine Replica; dort gelten sie, bis die nächste Seite etwas anderes
+  sagt.
+
+### Öffentliche und fest abonnierte Collections
+
+**Öffentlich** (`public`) ist eine Eigenschaft einer Collection am Hub (`hub collection add|set
+… --public`). Jede Collection aus der Liste der Quellen, die der Hub im Binary trägt, ist
+öffentlich, ohne dass sich das abschalten ließe. Öffentlich heißt lesbar für jeden Account des
+Hubs, ohne eigene Zeile in der Collection:
+
+- **Am Hub** ist sie für jeden Account lesbar, der sich gültig anmeldet (siehe
+  „Schreibvorgänge“, Lesbarkeit). Schreiben braucht weiter das Recht aus einer eigenen Zeile;
+  ohne Zeile hat der Account keines — `forbidden`, nicht `not_readable`.
+- **Am Node** ist sie für jeden Account lesbar, der sich an diesem Hub gültig anmeldet: Er hat
+  eine lebende `SYSTEM:A:`-Zeile in irgendeiner Collection desselben Hubs in dieser Replica —
+  anders kennt ihn der Node nicht. **Grenze:** Ein Account ohne eine solche Zeile auf diesem
+  Node liest die öffentliche Collection dort nicht; eine öffentliche Collection allein, ohne
+  eine eigene, bekommt man nicht (hingenommen am 2026-10-12).
+
+Abgleichen darf ein Node eine öffentliche Collection nur, wenn er sie darf — über
+`node_collections` oder als Collection aus der Liste.
+
+**Fest abonniert** (`subscribed`) ist jede Collection aus der Liste der Quellen, die es am Hub
+gibt: Sie steht für jeden Node in `allowed`, ohne Zeile in `node_collections`, und jeder Node
+gleicht sie von selbst ab (siehe „Regeln für den Node“). Eine Collection, die nur öffentlich
+ist, ist nicht fest abonniert.
 
 ## Account-Zeilen
 
@@ -275,10 +318,14 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
    in `accounts`; danach:
    - **Account** gegen `accounts` wie oben — unbekannt, falsches Token, gesperrt:
      `account_unauthenticated`.
-   - **Lesbarkeit:** Die Collection gibt es, der Node darf sie abgleichen (`node_collections`),
-     und der Account hat eine lebende `SYSTEM:A:`-Zeile in ihr. Sonst `not_readable`, dieselbe
-     Antwort für alle drei.
-   - **Recht** aus dieser Zeile, je Dokument nach seinem Namen (`contract.Rights.MayWrite`):
+   - **Lesbarkeit:** Die Collection gibt es, der Node darf sie abgleichen (`node_collections`,
+     oder sie steht in der Liste der Quellen), und der Account hat eine lebende
+     `SYSTEM:A:`-Zeile in ihr oder die Collection ist öffentlich — jede aus der Liste ist es.
+     Sonst `not_readable`, dieselbe Antwort für alle drei.
+   - **Quelle:** In einer Collection mit Quelle (aus der Liste) schreibt niemand; ihren Inhalt
+     ändert allein `fetch`. Jeder Schreibvorgang darin ist `forbidden`, die Meldung sagt es.
+   - **Recht** aus der Zeile des Accounts — ohne Zeile (öffentliche Collection) hat er keines —,
+     je Dokument nach seinem Namen (`contract.Rights.MayWrite`):
      `write` für `create` und für Eigenes — `created_by` ist der User des Accounts, gleich
      über welchen seiner Accounts es angelegt wurde —, `supersede` für Fremdes; `write` ist
      dafür nicht nötig. Unter `vendor/<name>/` zählt allein der Scope `vendor/<name>` (siehe
@@ -370,11 +417,81 @@ Die Antwort ist die Wahrheit, nicht die Anfrage: Der Node übernimmt `rows` in s
 Alles, was sie braucht, liest der Hub vor dem Commit — die `hub_id` vor der Transaktion, die
 Zeilen in ihr; danach stellt er sie nur noch zusammen.
 
+## fetch
+
+Der Hub holt das neueste Release der Quelle einer Collection nach `defaults/` (siehe
+[`begriffe.md`](begriffe.md), „source“ und „fetch“), angestoßen von einem Account über einen
+Node. Die Quelle kennt allein der Hub, aus seiner Liste der Quellen; der Node nennt nur die
+Collection. Den Inhalt schreibt der Hub als `system`, nicht im Namen des Accounts.
+
+| Feld | JSON | Bedeutung |
+|---|---|---|
+| Fassung, Node, Token | — (Pfad, Header) | wie bei `sync`; der Node ist der Träger |
+| Account | `account` | `{"account": <name>, "token": <token>}`, wie bei `whoami` |
+| Collection | `collection` | die Collection am Hub |
+
+Der Hub prüft in dieser Reihenfolge:
+
+1. **Fassung** (`unsupported_version`).
+2. **Anmeldung des Nodes** (`unauthenticated`). Die Collection gehört nicht zur Form: Eine
+   ungültige gibt es nicht, das ist `not_readable`.
+3. **Account** gegen `accounts` wie bei `whoami` — unbekannt, falsches Token, gesperrt:
+   `account_unauthenticated`.
+4. **Lesbarkeit** wie bei den Schreibvorgängen (`not_readable`): Die Collection gibt es, der
+   Node darf sie abgleichen, und der Account hat eine Zeile in ihr oder sie ist öffentlich —
+   jede Collection aus der Liste ist für jeden Node erlaubt und öffentlich, also für jeden
+   gültigen Account lesbar.
+5. **Quelle:** Steht die Collection nicht in der Liste der Quellen, `no_source`.
+6. **Holen:** Den Tag des neuesten Releases liest der Hub aus der Weiterleitung von
+   `releases/latest`. Ist es der Tag, den er zuletzt geholt hat, ist nichts zu tun: Antwort
+   `current`. Sonst lädt er das Archiv (das Asset aus der Liste), entpackt es im Speicher und
+   prüft jede Datei. Gibt es an der Quelle kein Release oder fehlt das Asset: `source_missing`;
+   ist die Quelle nicht erreichbar oder antwortet sie unbrauchbar, auch nach Ablauf der
+   Zeitgrenze: `source_unreachable`; ist das Archiv größer als erlaubt oder enthält es
+   anderes als Dateien und Verzeichnisse, einen ungültigen Namen, eine Datei über 1 MiB, kein
+   UTF-8 oder ein NUL-Byte: `source_invalid`. In allen drei Fällen bleibt `defaults/`, wie es
+   war.
+7. **Schreiben** in einer Transaktion: Ihre erste Anweisung sperrt die Zeile der Collection in
+   `collections`; danach prüft der Hub den Tag erneut — hat inzwischen ein anderer Lauf ihn
+   geholt, ist die Antwort `current`. Sonst ersetzt er `defaults/` als Ganzes unter einer
+   Revision: löscht, was im Archiv fehlt, ersetzt, was abweicht, legt an, was neu ist; was
+   gleich ist, bleibt unberührt. `created_by`/`updated_by` ist `system`, `actions` bekommt je
+   Dokument eine Zeile (`account` = der Account, `carrier` = der Node) und eine Zeile
+   `collection.fetch` für den ganzen Vorgang. Tag und Zeitpunkt merkt sich der Hub in
+   `collections`.
+
+Ein Node sieht `defaults/` deshalb ganz im alten oder ganz im neuen Stand: Eine Seite des
+Abgleichs endet an einer Revisionsgrenze.
+
+Antwort:
+
+| Feld | JSON | Bedeutung |
+|---|---|---|
+| Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
+| Fassung | `version` | 1 |
+| Collection | `collection` | die Collection |
+| Ergebnis | `status` | `fetched` (geholt) oder `current` (schon aktuell) |
+| Tag | `tag` | der Tag des Releases, das jetzt in `defaults/` steht |
+| Revision | `revision` | die Revision des Vorgangs; 0, wenn sich kein Dokument geändert hat |
+| Zahlen | `created`, `updated`, `deleted` | wie viele Dokumente angelegt, ersetzt und gelöscht wurden |
+
+Zeilen trägt die Antwort nicht — ein Release kann groß sein; der Node stößt danach den Abgleich
+an.
+
+**Ein Schreibvorgang, nie wiederholt.** Ein Transport schickt `fetch` genau einmal (siehe
+„Ausgang und Wiederholung“). Bei unklarem Ausgang darf der **Aufrufer** `fetch` erneut
+anstoßen: Den Tag sieht er nicht, aber der Vorgang ist idempotent — hat der erste geholt,
+antwortet der zweite `current`. Zwei gleichzeitige Läufe laden womöglich beide; schreiben kann
+nur einer (Schritt 7).
+
+**Zeitgrenze.** Lesen des Tags, Laden und Entpacken dürfen zusammen höchstens 20 s dauern,
+unter den 30 s, die der Client auf die Antwort wartet; danach `source_unreachable`.
+
 ## Ausgang und Wiederholung
 
 `whoami` und `sync` ändern nichts; ein Transport darf sie wiederholen (über HTTP siehe
-„Wiederholung“). `rotate` und die Schreibvorgänge schickt ein Transport **genau einmal**, nie
-ein zweites Mal: Nach `rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch
+„Wiederholung“). `rotate`, die Schreibvorgänge und `fetch` schickt ein Transport **genau
+einmal**, nie ein zweites Mal: Nach `rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch
 ergäbe `name_taken`, `not_found` oder einen Konflikt mit sich selbst. Einen Schlüssel, an dem
 der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier:
 
@@ -390,7 +507,9 @@ der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier
   Verbindung, unlesbare Antwort, 5xx; über `local` jeder Fehler, der kein Fehler des Vertrags
   ist, auch einer der Datenbank nach dem Commit. Der Hub kann ausgeführt haben. Nach `rotate`
   prüft mit `whoami`, wer das neue Token hält (der Node oder der Client über ihn); nach einem
-  Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach.
+  Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach; nach `fetch`
+  stößt der Node den Abgleich an, und der Aufrufer darf `fetch` erneut anstoßen (siehe
+  „fetch“).
 
 In Go: ein `*contract.Error` ist abgelehnt, `contract.ErrOutcomeUnknown` unklar,
 `contract.ErrUnknownOperation` der unbekannte Vorgang; jeder andere Fehler heißt nicht
@@ -408,17 +527,24 @@ nichts geändert.
 | `unauthenticated` | 401 | nicht angemeldet: Node unbekannt, Token falsch oder Node gesperrt — dieselbe Meldung für alle drei |
 | `account_unauthenticated` | 403 | der Node ist angemeldet, der Account nicht: unbekannt, Token falsch oder gesperrt (`rotate`, Schreibvorgänge) |
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
-| `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr — dieselbe Meldung für alle drei (Schreibvorgänge) |
-| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand. Die Meldung nennt den Grund |
+| `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr und sie ist nicht öffentlich — dieselbe Meldung für alle drei (Schreibvorgänge, `fetch`) |
+| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand, in einer Collection mit Quelle ebenso; ohne Zeile in einer öffentlichen Collection hat er keines. Die Meldung nennt den Grund |
 | `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |
 | `stale_revision` | 409 | das Dokument hat nicht die Revision `base_revision`; die Meldung nennt die aktuelle |
 | `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
 | `unsupported_version` | 404 | Fassung nicht unterstützt |
+| `no_source` | 409 | die Collection hat keine Quelle (`fetch`) |
+| `source_missing` | 409 | an der Quelle nicht vorhanden: kein Release, oder dem neuesten fehlt das Asset (`fetch`) |
+| `source_invalid` | 422 | das Archiv an der Quelle lässt sich nicht übernehmen: zu groß, ein Eintrag, der weder Datei noch Verzeichnis ist, ein ungültiger Name, eine Datei über 1 MiB, kein UTF-8 oder ein NUL-Byte (`fetch`) |
+| `source_unreachable` | 424 | die Quelle ist nicht erreichbar, antwortet unbrauchbar oder nicht innerhalb der Zeitgrenze (`fetch`) |
+
+Alle Codes haben einen Status unter 500: Ein 5xx hieße für den Client „Ausgang unklar“.
 
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
-`sync` versucht der Node es später wieder; `rotate` und die Schreibvorgänge wiederholt niemand,
+`sync` versucht der Node es später wieder; `rotate`, die Schreibvorgänge und `fetch` wiederholt
+niemand,
 ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP antwortet der Hub mit
 500 und dem Code `internal`, der kein Code des Vertrags ist — hat der Node die Anfrage
 abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
@@ -426,7 +552,7 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 ## HTTP
 
 - **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/sync`,
-  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename` — relativ zur Adresse des
+  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`, `/v1/fetch` — relativ zur Adresse des
   Hub-Eintrags: Ihr Pfad ist ein Präfix, der Client schickt `<adresse>/v1/<vorgang>`. Die
   Adresse eines `kephalaion serve` endet auf `/hub` (`http://localhost:7434/hub`; hinter einem
   Reverse-Proxy etwa `https://host/kephalaion/hub`, der Proxy nimmt seinen Anteil weg, Caddy:
@@ -451,14 +577,16 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   `{"code": …, "message": …}`. Der Client unterscheidet Fehler am Code im Body, nicht am
   Status: 404 ist `not_found`, `unsupported_version` oder mit `invalid` ein unbekannter
   Vorgang. Diesen meldet er als `contract.ErrUnknownOperation`, nicht als `invalid`.
-- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate` und `sync` darf höchstens 1 MiB
-  groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
+- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate`, `sync` und `fetch` darf höchstens
+  1 MiB groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
   größere Grenze trägt jedes Dokument, das der Hub annimmt (1 MiB), auch wenn JSON jedes Byte
   als `\u00XX` schreibt (sechs Byte je Byte), dazu 1 MiB für alles andere. Einen zu großen
   Inhalt lehnt der Hub selbst ab (`invalid`). Antworten sind nicht begrenzt — eine Seite des
   Abgleichs kann eine große Revision ganz tragen. Der Server liest Kopf und Body innerhalb von
   10 s bzw. 60 s und darf eine Antwort bis zu 10 Minuten lang schreiben. Der Client wartet auf
-  `whoami`, `rotate` und die Schreibvorgänge 30 s, auf eine Seite von `sync` 10 Minuten.
+  `whoami`, `rotate`, die Schreibvorgänge und `fetch` 30 s, auf eine Seite von `sync` 10
+  Minuten. Ein Reverse-Proxy vor dem Hub darf eine Antwort nicht früher abbrechen (Caddy setzt
+  für `reverse_proxy` von sich aus keine Frist).
 - **TLS (Transport `https`):** Der Client prüft das Zertifikat des Hubs gegen die System-Roots
   oder, wenn der Hub-Eintrag eine CA trägt (`--ca-file`), nur gegen diese; TLS mindestens 1.2,
   HTTP/1.1, kein Client-Zertifikat — die Identität bleibt das Token. Scheitert die Prüfung
@@ -467,12 +595,13 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   Nodes anderer Rechner“); der Hub selbst spricht nur `http` auf Loopback.
 - **Wiederholung:** `whoami` und `sync` wiederholt der Client bei Fehlern des Transports und
   bei 5xx bis zu dreimal, mit wachsendem Abstand (0,5 s, 1 s, 2 s) — nicht bei einem
-  Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate` und die Schreibvorgänge nie.
+  Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate`, die Schreibvorgänge und `fetch`
+  nie.
 - **Weiterleitungen:** Der Client folgt keiner Weiterleitung. Eine 3xx-Antwort ist ein Fehler,
-  ohne Wiederholung; bei `rotate` und den Schreibvorgängen ein eindeutiger — der Hub hat nicht
-  ausgeführt, und Body und Token gehen an kein anderes Ziel.
-- **Unklarer Ausgang bei `rotate` und den Schreibvorgängen:** Kam die Verbindung nicht zustande,
-  scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
+  ohne Wiederholung; bei `rotate`, den Schreibvorgängen und `fetch` ein eindeutiger — der Hub
+  hat nicht ausgeführt, und Body und Token gehen an kein anderes Ziel.
+- **Unklarer Ausgang bei `rotate`, den Schreibvorgängen und `fetch`:** Kam die Verbindung nicht
+  zustande, scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
   antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code des
   Vertrags, bei 404 mit `invalid` (unbekannter Vorgang) und bei 404 ohne Vertragsform (ein
   Proxy ohne Route, die Wurzel des Binarys — der Hub antwortet 404 nur in Vertragsform). Jeder

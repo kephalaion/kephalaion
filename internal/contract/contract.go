@@ -97,6 +97,9 @@ type WhoamiResponse struct {
 	Node string `json:"node"`
 	// Allowed sind die Collections, die der Node abgleichen darf, sortiert.
 	Allowed []string `json:"allowed"`
+	// Public und Subscribed wie in SyncResponse.
+	Public     []string `json:"public"`
+	Subscribed []string `json:"subscribed"`
 	// Account ist gesetzt, wenn die Anfrage einen Account-Teil hatte.
 	Account *AccountStatus `json:"account,omitempty"`
 }
@@ -227,6 +230,48 @@ type WriteResponse struct {
 	Rows []Row `json:"rows"`
 }
 
+// FetchRequest lässt den Hub das neueste Release der Quelle einer
+// Collection nach defaults/ holen (Task 031). Ein Schreibvorgang: nie
+// wiederholt; idempotent, ein zweiter Lauf antwortet FetchCurrent.
+type FetchRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth NodeAuth `json:"-"`
+	// Account ist der Account, der das Holen anstößt; geschrieben wird als
+	// system.
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+}
+
+// Die Werte von FetchResponse.Status.
+const (
+	// FetchFetched: das neueste Release ist geholt.
+	FetchFetched = "fetched"
+	// FetchCurrent: das neueste Release war schon geholt; nichts geändert.
+	FetchCurrent = "current"
+)
+
+// FetchResponse ist die Antwort von fetch. Zeilen trägt sie nicht; der Node
+// gleicht danach ab.
+type FetchResponse struct {
+	HubID      string `json:"hub_id"`
+	Version    int    `json:"version"`
+	Collection string `json:"collection"`
+	// Status ist FetchFetched oder FetchCurrent.
+	Status string `json:"status"`
+	// Tag ist der Tag des Releases, das jetzt in defaults/ steht.
+	Tag string `json:"tag"`
+	// Revision ist die Revision des Vorgangs; 0, wenn sich kein Dokument
+	// geändert hat.
+	Revision int64 `json:"revision"`
+	// Created, Updated und Deleted zählen die angelegten, ersetzten und
+	// gelöschten Dokumente.
+	Created int `json:"created"`
+	Updated int `json:"updated"`
+	Deleted int `json:"deleted"`
+}
+
 // Since ist ein Paar der Anfrage: alles aus Collection mit einer Revision
 // größer als Since.
 type Since struct {
@@ -282,8 +327,18 @@ type SyncResponse struct {
 	// Collections nennt jede angefragte Collection, in der Reihenfolge der
 	// Anfrage, mit erlaubt oder nicht erlaubt.
 	Collections []CollectionStatus `json:"collections"`
-	// Allowed sind alle Collections, die der Node abgleichen darf, sortiert.
+	// Allowed sind alle Collections, die der Node abgleichen darf, sortiert:
+	// die aus node_collections und jede Collection aus der Liste der Quellen,
+	// die es am Hub gibt.
 	Allowed []string `json:"allowed"`
+	// Public sind die öffentlichen Collections unter Allowed, sortiert: Jeder
+	// Account, der sich an diesem Hub gültig anmeldet, liest sie, ohne eigene
+	// Zeile darin. Ein Hub vor Task 031 schickt das Feld nicht (nil).
+	Public []string `json:"public"`
+	// Subscribed sind die fest abonnierten Collections unter Allowed,
+	// sortiert: Der Node gleicht sie ab, auch wenn er sie nicht selbst will.
+	// Ein Hub vor Task 031 schickt das Feld nicht (nil).
+	Subscribed []string `json:"subscribed"`
 	// Rows sind die Zeilen der erlaubten angefragten Collections mit
 	// revision > Since der jeweiligen Collection und ≤ HubRevision, sortiert
 	// nach Revision, dann id. Die Seite endet an einer Revisionsgrenze.
@@ -340,12 +395,27 @@ const (
 	// CodeStaleRevision: das Dokument hat nicht die Revision, auf der der
 	// Vorgang beruht; die Meldung nennt die aktuelle.
 	CodeStaleRevision Code = "stale_revision"
+
+	// Codes von fetch; alle endgültig, der Hub hat nichts geändert.
+
+	// CodeNoSource: die Collection hat keine Quelle.
+	CodeNoSource Code = "no_source"
+	// CodeSourceMissing: an der Quelle nicht vorhanden — kein Release, oder
+	// dem neuesten fehlt das Asset.
+	CodeSourceMissing Code = "source_missing"
+	// CodeSourceInvalid: das Archiv an der Quelle lässt sich nicht
+	// übernehmen (zu groß, ein Eintrag, der weder Datei noch Verzeichnis ist,
+	// ein ungültiger Name oder Inhalt).
+	CodeSourceInvalid Code = "source_invalid"
+	// CodeSourceUnreachable: die Quelle ist nicht erreichbar, antwortet
+	// unbrauchbar oder nicht innerhalb der Zeitgrenze.
+	CodeSourceUnreachable Code = "source_unreachable"
 )
 
 // Codes sind alle Fehlercodes des Vertrags.
 var Codes = []Code{CodeUnauthenticated, CodeInvalid, CodeUnsupportedVersion, CodeAccountUnauthenticated,
 	CodeNoSharedCollection, CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict,
-	CodeStaleRevision}
+	CodeStaleRevision, CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable}
 
 // Error ist ein Fehler des Vertrags: ein Code und eine Meldung. errors.Is
 // vergleicht nur den Code, so dass jeder *Error mit gleichem Code die
@@ -378,6 +448,11 @@ var (
 	ErrNameTaken     = &Error{Code: CodeNameTaken, Message: "Name vergeben"}
 	ErrPathConflict  = &Error{Code: CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
 	ErrStaleRevision = &Error{Code: CodeStaleRevision, Message: "Revision veraltet"}
+
+	ErrNoSource          = &Error{Code: CodeNoSource, Message: "die Collection hat keine Quelle"}
+	ErrSourceMissing     = &Error{Code: CodeSourceMissing, Message: "an der Quelle nicht vorhanden"}
+	ErrSourceInvalid     = &Error{Code: CodeSourceInvalid, Message: "Archiv an der Quelle nicht übernehmbar"}
+	ErrSourceUnreachable = &Error{Code: CodeSourceUnreachable, Message: "Quelle nicht erreichbar"}
 )
 
 // ErrOutcomeUnknown meldet einen Transportfehler, nach dem offen ist, ob der

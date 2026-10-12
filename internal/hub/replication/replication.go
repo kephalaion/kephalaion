@@ -96,7 +96,7 @@ func (h *Hub) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.
 		return contract.WhoamiResponse{}, err
 	}
 	resp := contract.WhoamiResponse{HubID: info.HubID, Version: contract.Version, Node: req.Auth.Node,
-		Allowed: append([]string{}, allowed...)}
+		Allowed: append([]string{}, allowed...), Public: []string{}, Subscribed: []string{}}
 	if req.Account != nil {
 		acc, ok, err := h.checkAccount(ctx, *req.Account)
 		if err != nil {
@@ -201,6 +201,8 @@ func (h *Hub) Sync(ctx context.Context, req contract.SyncRequest) (contract.Sync
 		Version:     contract.Version,
 		Collections: make([]contract.CollectionStatus, 0, len(req.Collections)),
 		Allowed:     append([]string{}, allowed...),
+		Public:      []string{},
+		Subscribed:  []string{},
 		Rows:        []contract.Row{},
 		HubRevision: info.Revision,
 	}

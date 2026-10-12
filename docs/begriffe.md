@@ -439,6 +439,56 @@ Ausführlich: [`konzept.md`](konzept.md).
   Vorlagen, etwa `vendor/k-playbook/`. Lesen darf jeder mit `read`; schreiben unter
   `vendor/<name>/` nur mit dem Scope `vendor/<name>` (siehe „scope“), direkt in `vendor/`
   niemand über einen Node.
+- **public** (öffentlich) — Eigenschaft einer Collection: Jeder Account des Hubs liest sie, ohne
+  eigene Zeile darin; schreiben braucht weiter das Recht aus einer eigenen Zeile (ohne:
+  `forbidden`). Gesetzt mit `hub collection add|set … --public`, bei einer Collection aus der
+  **source list** immer, nicht abschaltbar. Steht am Hub in `collections.public`; der Hub nennt
+  sie in `sync` und `whoami` (`public`), der Node merkt sie sich in `sync_state`. Am Node liest
+  sie nur ein Account, der sich an diesem Hub gültig anmeldet — mit einer lebenden
+  `SYSTEM:A:`-Zeile in irgendeiner Collection desselben Hubs in dieser Replica, anders kennt
+  ihn der Node nicht. **Grenze** (hingenommen am 2026-10-12): Eine öffentliche Collection allein,
+  ohne eine eigene auf diesem Node, bekommt man nicht. Abgleichen darf ein Node eine Collection,
+  die nur öffentlich ist, weiter nur nach `hub node grant` und `node collection add` (Task 031).
+- **source** (Quelle) — woraus der Hub eine Collection selbst füllt: ein Archiv (**asset**) im
+  neuesten **release** eines öffentlichen GitHub-Repos. Eine Collection mit Quelle entsteht nur
+  über die **source list**: `hub collection add <name>` mit einem Namen aus der Liste bekommt
+  deren Vorgaben, ohne Flag. In ihr schreibt niemand — kein Account über einen Node
+  (`forbidden`), auch nicht der Admin mit `hub doc put|rm` oder `hub import`; `hub account
+  grant` auf sie lehnt der Hub ab (lesen ist ohnehin öffentlich). Den Inhalt ändert allein
+  **fetch**. `hub collection rm` bleibt möglich und entfernt die geholten Dokumente samt
+  Löschmarken in derselben Transaktion; die Nodes lassen die Collection über `allowed` fallen.
+- **source list** (Liste der Quellen) — eine YAML-Datei im Binary (`go:embed`,
+  `internal/hub/source/sources.yaml`), strikt gelesen: je Collection-Name die festen Vorgaben
+  `public`, die Quelle (`source.git`: URL des Repos, `source.asset`: Name des Archivs im
+  Release) und `max_bytes` (Obergrenze für Archiv und entpackten Inhalt). Erster und einziger
+  Eintrag: `k-playbook` aus `kascada/k-playbook` mit `k-playbook-defaults.tar.gz` — die einzige
+  Stelle, an der Kephalaion k-playbook beim Namen kennt, eine bewusste Ausnahme von der
+  Trennung beider Projekte. Maßgeblich für Quelle, Sperre, `public` und **subscribed** ist zur
+  Laufzeit die Liste, nicht die Datenbank; eine geänderte URL braucht ein neues Release von
+  Kephalaion.
+- **subscribed** (fest abonniert) — eine Collection aus der **source list**, die es am Hub
+  gibt: Sie steht für jeden Node in `allowed`, ohne Zeile in `node_collections`, und jeder Node
+  gleicht sie von selbst ab, ohne `node collection add`; `node collection rm` darauf lehnt ab.
+  Der Hub sagt es in `sync` und `whoami` (`subscribed`), der Node merkt es sich in
+  `sync_state`. Vorerst immer eingeschaltet (Todo #20).
+- **defaults/** — Verzeichnis an der Wurzel einer Collection mit Quelle
+  (`<hub>:k-playbook/defaults/…`): der Inhalt des zuletzt geholten Releases, immer genau einer,
+  ohne Versionsebene. Der Name sagt „Vorgabe“: Eine gleichnamige Datei im eigenen Projekt
+  ersetzt die aus `defaults/` — das regelt k-playbook, Kephalaion merkt davon nichts.
+- **fetch** (holen) — der Hub holt das neueste Release der Quelle einer Collection nach
+  `defaults/`: Tag aus der Weiterleitung von `releases/latest` (ohne API, ohne Token), dann das
+  Archiv, entpackt im Speicher. Bewusst nicht „Abgleich“ — das ist `sync`. Ist der Tag schon
+  geholt, ist nichts zu tun (**current**). Sonst ersetzt der Hub `defaults/` als Ganzes in einer
+  Transaktion unter einer Revision (löschen, ersetzen, anlegen nur, was sich unterscheidet);
+  Urheber **system**. Geholt wird beim Anlegen der Collection, von Hand (`kephalaion hub
+  collection fetch <name>`) und auf Anfrage eines Accounts über einen Node (Vorgang des
+  Vertrags `fetch`, Werkzeug **fetch_release**); **Lesen holt nie**. Den geholten Tag und den
+  Zeitpunkt merkt sich der Hub in `collections` (`fetched_tag`, `fetched_at`; nicht im Export),
+  `hub collection show` zeigt sie. Nicht ausführbar übernommen: Modus-Bits und leere
+  Verzeichnisse gehen nicht mit, Dokumente kennen beides nicht.
+- **system** (Urheber) — `created_by`/`updated_by` der Dokumente, die **fetch** schreibt. Kein
+  User kann so heißen (Namensregel: kein Präfix `system`). In `actions` steht trotzdem, wer
+  angestoßen hat: der Account bzw. `admin`, dazu der Node als Träger.
 - **dir push** / **dir pull** — `kephalaion node dir push|pull`: gleicht
   einen lokalen Ordner mit einem Verzeichnis einer Collection ab, als Client des Nodes über
   MCP, mit Account und Token des Aufrufers. Vergleich über den Inhalt, Einzelvorgänge,
@@ -523,10 +573,18 @@ Ausführlich: [`konzept.md`](konzept.md).
   `unsupported` (**noch nicht unterstützt**: der Hub kennt den Vorgang nicht, oder der Node
   erreicht ihn über einen Transport, den er noch nicht kann — nichts gespeichert) und
   `internal` (ein Fehler des Nodes selbst, etwa `node.db` oder eine Replica nicht lesbar —
-  nichts abgeschickt). `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
+  nichts abgeschickt). Für **fetch** dazu `no_source` (Collection ohne Quelle),
+  `source_missing` (an der Quelle nicht vorhanden), `source_invalid` (Archiv nicht übernehmbar)
+  und `source_unreachable` (Quelle nicht erreichbar), alle mit einem Status unter 500. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
   `unauthenticated` und `unsupported_version` reicht er durch. Die Werkzeuge melden einen
   Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
   `message`; Clients entscheiden nach dem Code, nicht nach der Meldung.
+- **fetch_release** — Werkzeug des Nodes: lässt den Hub das neueste Release in `defaults/` einer
+  Collection mit Quelle holen (Adresse `<hub>:<collection>`), danach stößt der Node den Abgleich
+  an. Liest keine URLs — der Name ist bewusst nicht `fetch`, das bei Assistenten üblich zum Lesen
+  von URLs gehört; der Vorgang im Vertrag heißt weiter `fetch`. Vorerst darf es jeder Account,
+  der am Hub angemeldet ist (Todo #19). Nie wiederholt; bei unklarem Ausgang darf der Aufrufer
+  es erneut anstoßen — dann antwortet der Hub „schon aktuell“.
 - **tool** (Werkzeug) — ein MCP-Werkzeug des Nodes für Clients. Gesammelt in `konzept.md`,
   „Werkzeuge“.
 - **id** (Kennung) — stabile Kennung eines Dokuments, vom Hub vergeben.
@@ -547,14 +605,17 @@ Ausführlich: [`konzept.md`](konzept.md).
   wechselt bei jeder Neuanlage und jedem Leeren der Replica (andere `hub_id`, Hub aus einer
   Sicherung), sonst nie — auch bei gleicher `hub_id`. `changes` trägt sie je Hub im Cursor und
   meldet `reset`, wenn sie nicht mehr passt.
-- **sync_state** — Tabelle der Replica: je Collection der Stand des Abgleichs (`revision`) und
-  der Zeitpunkt der letzten Seite (`synced_at`).
+- **sync_state** — Tabelle der Replica: je Collection der Stand des Abgleichs (`revision`), der
+  Zeitpunkt der letzten Seite (`synced_at`) und die Merkmale aus der letzten Seite, **public**
+  und **subscribed**.
 - **contract** (Vertrag) — die Schnittstelle zwischen Node und Hub, beschrieben in
   [`vertrag.md`](vertrag.md), im Code das neutrale Paket `internal/contract`. Trägt eine
   **Fassung** (`version`, derzeit 1); der Hub nennt sie in jeder Antwort.
 - **sync** (Abgleich) — der Vorgang des Vertrags, mit dem ein Node je Collection alles seit
-  einer Revision holt, in Seiten; jede Seite ist eine Transaktion in der Replica. Collections,
-  die der Hub nicht erlaubt oder der Node nicht mehr will, entfernt er aus der Replica; bei
+  einer Revision holt, in Seiten; jede Seite ist eine Transaktion in der Replica. Dazu gleicht
+  er jede Collection ab, die der Hub als **subscribed** nennt. Collections, die der Hub nicht
+  erlaubt oder der Node nicht mehr will (und die nicht fest abonniert sind), entfernt er aus der
+  Replica; bei
   anderer `hub_id` oder einem Stand über der Revision des Hubs gleicht er von vorn ab.
   Kommando: `kephalaion node sync [<alias>]`, über `transport local`, `http` oder `https`;
   scheitert ein Hub-Eintrag, laufen die übrigen weiter, der Exit-Code ist 1. **Im
@@ -625,7 +686,8 @@ Ausführlich: [`konzept.md`](konzept.md).
     Liste `rights.dirs`, im Export ab Format 8. Das einzige Ziel von **dir push** außer
     `vendor/<name>` (Task 021).
   - `replicate` — kein Scope eines Accounts, sondern das Recht eines Nodes: Inhalt und
-    Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections`.
+    Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections`; eine
+    Collection aus der **source list** darf jeder Node abgleichen, ohne Zeile dort.
 - **node entry** (Node-Eintrag) — ein Node am Hub: Zeile in `nodes`, Name vom Admin, Token
   (nur der Hash), gesperrt ja/nein. Name gemeinsam mit den Accounts eindeutig.
 - **principal_names** (belegte Namen) — Tabelle des Hubs: je Node und Account eine Zeile
@@ -725,7 +787,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   über den Node: **node account setup** und **/account/rotate**; das neue Token erzeugt dann
   der Client.
 - **whoami** — Vorgang des Vertrags: bestätigt den Node, nennt die `hub_id` und seine
-  erlaubten Collections und prüft wahlweise einen Account (`valid`). Am Node auch ein
+  erlaubten Collections (dazu `public` und `subscribed` unter ihnen) und prüft wahlweise einen
+  Account (`valid`). Am Node auch ein
   MCP-Werkzeug für Clients: Version, `update` (neueste Version und Weg, aus der Antwort, die
   `serve` höchstens einmal am Tag bei GitHub holt), je Hub-Eintrag `login` (`ok`, `invalid`, `missing`),
   Node-Name und Stand des Abgleichs (`sync`), bei `ok` Account, User und Collections mit

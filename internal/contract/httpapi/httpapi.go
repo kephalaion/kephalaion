@@ -86,8 +86,12 @@ func Status(c contract.Code) int {
 	case contract.CodeUnsupportedVersion, contract.CodeNotFound:
 		return http.StatusNotFound
 	case contract.CodeNoSharedCollection, contract.CodeNameTaken, contract.CodePathConflict,
-		contract.CodeStaleRevision:
+		contract.CodeStaleRevision, contract.CodeNoSource, contract.CodeSourceMissing:
 		return http.StatusConflict
+	case contract.CodeSourceInvalid:
+		return http.StatusUnprocessableEntity
+	case contract.CodeSourceUnreachable:
+		return http.StatusFailedDependency
 	case contract.CodeInvalid:
 		return http.StatusBadRequest
 	}
