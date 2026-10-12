@@ -20,3 +20,6 @@
 
 # Protokolle und Seiten-Snapshots des Playwright-MCP-Servers
 /.playwright-mcp/
+
+# Ausgabe eines go build ./cmd/kephalaion im Wurzelverzeichnis
+/kephalaion
