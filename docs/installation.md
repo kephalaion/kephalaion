@@ -261,6 +261,12 @@ $K node collection add team:wissen
 # dem User (es gilt nur, bis der User es eingetauscht hat).
 $K hub account add alice --user alice
 $K hub account grant alice wissen --write
+
+# Die mitgelieferten Dateien von k-playbook: eine Collection aus der Liste der Quellen im
+# Binary. Der Hub holt das neueste Release selbst, jeder Node gleicht sie von selbst ab (ohne
+# grant und node collection add), lesen darf sie jeder Account mit einer Collection auf diesem
+# Node; schreiben niemand.
+$K hub collection add k-playbook
 ```
 
 **Einrichten durch den User — der Regelweg.** Der User tauscht das Einrichtungstoken mit einem
@@ -441,6 +447,15 @@ https://9.141.8.157 {
   mit `/hub` am Ende ein (`--address https://<name>/kephalaion/hub`), der Client hängt
   `/v1/<vorgang>` an. Ein anderer Präfix als `/kephalaion` geht ebenso; `/hub` gehört dem
   Binary.
+- **Fristen.** Der Block setzt für `reverse_proxy` keine Frist, und Caddy hat für die Antwort
+  des Hubs von sich aus keine. Das braucht `fetch` (Task 031): Der Hub holt dabei bis zu 20 s
+  bei GitHub, der Node wartet 30 s. Wer eine Frist setzt (`transport http {
+  response_header_timeout … }`), nimmt mindestens 30 s.
+- **Holen bei GitHub.** Eine Collection mit Quelle (`k-playbook`) holt der Hub selbst über
+  HTTPS von `github.com` und dem Speicher, auf den GitHub für Release-Assets weiterleitet. Ein
+  Proxy für ausgehende Verbindungen kommt aus der Umgebung des Dienstes (`HTTPS_PROXY`,
+  `NO_PROXY`, in der Unit über `Environment=`). Ohne Netz bleibt die Collection leer; `hub
+  collection fetch` holt später nach.
 - **Option — der Rest von `/kephalaion/*` nach außen: die Weboberfläche.** Unter
   `https://<name>/kephalaion/` liegt dann die Weboberfläche des Hubs (seit Task 020; `curl`
   bekommt an derselben Stelle die Begrüßung), ihre Teile unter `/kephalaion/gui/…`. Seit Task
@@ -1126,7 +1141,7 @@ nennte über den Block seine Version), dann das Caddyfile, dann die Jail; Tokens
 danach. Wie es auf der Dev-VM aussieht: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand
 2026-10-09“ (Rollen `kephalaion`, `caddy`, `fail2ban`, je `make deploy ROLE=…`).
 
-## Neue Schemafassung: node.db neu anlegen
+## Neue Schemafassung: node.db oder hub.db neu anlegen
 
 Migrationen gibt es noch nicht; ein Sprung der Schemafassung (zuletzt `node.db` 4 → 5 mit
 `hubs.ca`, Task 018) heißt: Das neue Binary lehnt die vorhandene `node.db` ab, sie ist neu
@@ -1152,6 +1167,23 @@ Die Hub-Einträge behalten ihre Tokens über Export und Import, `hub.db` bleibt 
 Replicas legt der erste Abgleich neu an. Pro User dasselbe ohne `sudo` mit den Orten unter
 `~/.local/share/kephalaion/` und `kephalaion service uninstall` bzw. `install` statt
 `systemctl` (README, „Einrichten“).
+
+**`hub.db` neu anlegen** (zuletzt 5 → 6 mit `collections.public` und dem geholten Stand, Task
+031) geht denselben Weg mit `hub` statt `node` — Export mit dem alten Binary, `serve` stoppen,
+`hub.db` und `hub.db.lock` entfernen, den Abschnitt `hub:` herausnehmen, `hub init --db
+sqlite:///var/lib/kephalaion/hub.db --listen 127.0.0.1:7434`, `config import` —, danach:
+
+```sh
+$K hub import wissen /pfad/zur/sicherung/wissen       # Dokumente zurück, je Collection
+$K hub collection fetch k-playbook                    # eine Collection mit Quelle holt neu
+```
+
+Der neue Hub hat eine neue `hub_id`; jeder Node verwirft beim nächsten Abgleich seine Replica
+und gleicht von vorn ab. Den geholten Stand trägt der Export nicht — sonst gälte die leere
+Collection als schon aktuell. **Rechte auf `k-playbook` weist der Import ab:** Gab es eine eigene
+Collection dieses Namens (in k-playbook bis 2026-10-09 die Entwicklungs-Collection), vor dem
+Import im Export umbenennen — unter `collections`, `node_collections` und den Rechten der
+Accounts, etwa in `k-playbook-dev` — und ihre Dokumente unter dem neuen Namen einspielen.
 
 ## Upgrade: was Kephalaion meldet
 

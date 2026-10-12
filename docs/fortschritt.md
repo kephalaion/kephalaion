@@ -393,6 +393,18 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 031 — Eine Collection, die der Hub selbst aus einem Release füllt** (2026-10-12,
+  Etappen 1–5 ausgeführt): `public` als Eigenschaft jeder Collection, die eingebettete Liste
+  der Quellen (`internal/hub/source`, erster Eintrag `k-playbook`), fest abonnierte
+  Collections, `hub collection fetch|show`, Vorgang `fetch` und MCP-Werkzeug `fetch_release`;
+  Hub-Store Fassung 6, Replica Fassung 5, Exportformat 9 (`konzept.md`, „Öffentliche
+  Collections und Collections mit Quelle“). Lokal durchgespielt über die Tests mit
+  nachgespieltem GitHub. Offen der Durchlauf auf der VM mit `kascada/k-playbook`, sobald ein
+  Release `k-playbook-defaults.tar.gz` trägt (v0.12.0 trägt es nicht) — vorher `vm:k-playbook`
+  in `k-playbook-dev` umbenennen, Schema per Export/Import, dann `hub collection fetch
+  k-playbook`; dazu Todo #19 (Anfrage über den Node einschränken) und #20 (Abo abschaltbar).
+  Befund `collection-aus-release.md`.
+
 - **Task 025 — Fehlversuche fälschungssicher zählen, ohne richtige Clients zu sperren:** gebaut
   am 2026-10-09 (Etappe 1: Weg 4 lokal mit Caddy 2.11.7 und mit `fail2ban-regex` auf der VM
   belegt; Etappe 2: Antwort-Header `X-Keph-Login: invalid` über den Proxy; Etappe 3: Anstoß des

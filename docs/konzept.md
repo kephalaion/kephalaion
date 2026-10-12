@@ -612,7 +612,7 @@ Automatisierung, hat sechs Accounts und einen User.
 | `supersede` | **Fremdes** ändern, ablösen und löschen. |
 | `vendor/<name>` | Unter `vendor/<name>/` schreiben — allein dieser Scope zählt dort, ohne `write` und unabhängig vom Urheber; siehe „vendor/“ unten (entschieden am 2026-09-27/28, gebaut in Task 016). |
 | `dir <pfad>/` | **Verzeichnis-Scope:** unter `<pfad>/` schreiben — anlegen, ändern, umbenennen, löschen —, ohne `write` und unabhängig vom Urheber; **additiv**, `write` und `supersede` gelten dort weiter wie sonst. Ziel für `node dir push` außerhalb von `vendor/`; siehe „Verzeichnis-Scope“ unten (entschieden am 2026-09-30, gebaut in Task 021). |
-| `replicate` | Kein Recht eines Accounts, sondern eines Nodes: Inhalt und Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections` (siehe „Datenmodell“). |
+| `replicate` | Kein Recht eines Accounts, sondern eines Nodes: Inhalt und Account-Zeilen der Collection abgleichen. Steht am Hub in `node_collections` (siehe „Datenmodell“); eine Collection aus der Liste der Quellen darf jeder Node abgleichen (siehe „Öffentliche Collections und Collections mit Quelle“). |
 
 Später, falls gebraucht: `write` als Liste von Namenspräfixen statt `true` (etwa `["eins/",
 "zwei/"]`) — Präfixe, keine Regex; bei Rechten ist „passt versehentlich mehr“ die gefährliche
@@ -638,6 +638,101 @@ unberührt — sie sagt, woher der Inhalt stammt, der Urheber sagt, wer ihn abge
 Umgesetzt in Task 014: Ein Schreibvorgang über einen Node schreibt je Dokument eine Zeile in
 `actions` mit Account, Node als `carrier` und `action` (`create`, `update`, `delete`,
 `rename`); die CLI am Hub schreibt `admin` ohne Träger.
+
+### Öffentliche Collections und Collections mit Quelle (entschieden am 2026-10-10 bis 12, gebaut in Task 031)
+
+**Wozu.** k-playbook wird künftig nur als Binary installiert. Seine mitgelieferten Dateien —
+Commands, Skills, Regeln, Reviews, Checks, Skripte, Doku — liegen dann nicht mehr als Clone in
+jedem Projekt, sondern einmal je Hub in der Collection `k-playbook`, aus der jeder liest. Kein
+Mensch braucht dafür ein Schreibrecht; der Inhalt ändert sich allein über das Release. Verglichen
+wurden am 2026-10-09 in k-playbook vier Wege: ein Release-Account, der in jede
+Projekt-Collection schreibt; jeder User beauftragt den Hub dazu; ein zentraler öffentlicher Hub;
+**eine Collection je Hub, für alle lesbar, vom Hub gefüllt (gewählt)**. Die ersten beiden ergäben
+eine Kopie je Projekt, der dritte braucht anonymes Lesen und einen öffentlichen Dienst — er
+bleibt als spätere Erweiterung (ein zentraler Hub als Quelle statt GitHub).
+
+**Öffentlich** (`public`) ist eine allgemeine Eigenschaft einer Collection (`hub collection
+add|set … --public`): Jeder Account des Hubs liest sie, ohne eigene `SYSTEM:A:`-Zeile darin;
+schreiben braucht weiter das Recht aus einer eigenen Zeile, ohne ist es `forbidden`. Umgesetzt
+als Merkmal, das der Abgleich mitliefert (`public` in `sync` und `whoami`, am Node in
+`sync_state`). Verworfen wurde, dass der Hub für jeden Account eine Zeile anlegt — dann lägen
+Namen, User und Hash-Kopien aller Accounts auf jedem Node, der die Collection abgleicht.
+
+**Grenze (hingenommen am 2026-10-12):** Am Node liest eine öffentliche Collection nur ein
+Account, der sich an diesem Hub gültig anmeldet — er hat eine lebende `SYSTEM:A:`-Zeile in
+irgendeiner Collection desselben Hubs **in dieser Replica**; anders kennt ihn der Node nicht.
+Eine öffentliche Collection allein, ohne eine eigene auf diesem Node, bekommt man also nicht.
+Das ist gewollt, eher ein Vorteil: Der Account eines Projekts hat ohnehin dessen Collection.
+Am Hub heißt „lesbar“ dasselbe für jeden gültigen Account; abgleichen darf ein Node eine
+Collection, die nur öffentlich ist, weiter nur über `hub node grant` und `node collection add`.
+
+**Die Liste der Quellen.** Dass Kephalaion k-playbook beim Namen kennt, ist eine bewusste
+Ausnahme von der Trennung beider Projekte. Sie steht an genau einer Stelle: in einer YAML-Datei
+im Binary (`internal/hub/source/sources.yaml`, `go:embed`, strikt gelesen, beim Bau getestet).
+Sie nennt je Collection-Name die festen Vorgaben — öffentlich, Quelle (`git`: URL des Repos,
+`asset`: Name des Archivs im Release), `max_bytes` —, für k-playbook
+`https://github.com/kascada/k-playbook` mit `k-playbook-defaults.tar.gz` und 8 MiB. `hub
+collection add k-playbook` bekommt diese Vorgaben ohne Flag; eine Collection mit Quelle entsteht
+nur so. Maßgeblich für Quelle, Sperre, `public` und Abo ist zur Laufzeit die Liste, nicht die
+Datenbank (dort stehen nur `public` und der geholte Stand); eine geänderte URL braucht ein neues
+Release von Kephalaion.
+
+**Was eine Collection mit Quelle ist:**
+
+- **Für alle nur lesbar.** Niemand schreibt, ändert oder löscht darin — kein Account über einen
+  Node (`forbidden`), auch nicht der Admin mit `hub doc put|rm` oder `hub import`; `hub account
+  grant` auf sie lehnt der Hub ab. Den Inhalt ändert allein das Holen (**fetch**).
+- **Für jeden Node erlaubt und fest abonniert** (`subscribed`): Sie steht in `allowed`, ohne
+  Zeile in `node_collections`, und jeder Node gleicht sie von selbst ab, ohne `node collection
+  add` — pragmatisch, weil derzeit jede Installation k-playbook braucht und auf der VM ein User
+  den geteilten Node nicht selbst eintragen kann. `node collection rm` darauf lehnt ab. Ein Node
+  braucht die Liste dafür nicht; der Hub sagt es ihm in `sync`. Todo #20: später abschaltbar.
+- **Ein Stand, kein Verzeichnis je Version.** Unter `defaults/` steht immer genau ein Release,
+  das neueste ohne Suffix. Ein Projekt mit älterem Binary liest den neueren Inhalt; wer Versionen
+  braucht, löst das im Quell-Repo oder später hier. Der Name sagt „Vorgabe“: Eine gleichnamige
+  Datei im eigenen Projekt ersetzt die aus `defaults/` — das regelt k-playbook.
+- **Urheber `system`**; in `actions` steht, wer angestoßen hat (Account bzw. `admin`, Node).
+- **Entfernen:** `hub collection rm` bleibt für den Admin möglich und entfernt die geholten
+  Dokumente samt Löschmarken in derselben Transaktion — anders wäre sie nie leer. Die Nodes lassen
+  sie über `allowed` fallen. **Grenze:** Wer sie gleich wieder anlegt, bevor ein Node
+  abgeglichen hat, kann dort alte Dokumente zurücklassen (die Zeilen sind ohne Löschmarke weg);
+  Abhilfe am Node `node hub rm` und `add`.
+
+**Holen.** Der Hub liest den Tag des neuesten Releases aus der Weiterleitung von
+`https://github.com/<repo>/releases/latest` (302 auf `/releases/tag/<tag>`; ohne API, ohne Token,
+ohne Limit) und lädt `releases/download/<tag>/<asset>`, Proxy aus der Umgebung. Archiv und
+entpackter Inhalt sind auf `max_bytes` begrenzt, Lesen des Tags, Laden und Entpacken zusammen auf
+20 s (unter den 30 s, die der Client des Vertrags wartet). Entpackt wird im Speicher: nur Dateien
+und Verzeichnisse — jeder andere Eintrag (Link, Hardlink, Gerät) lässt das ganze Archiv
+scheitern —, Namen nach den Pfadregeln, UTF-8 ohne NUL, je Datei höchstens 1 MiB. Modus-Bits und
+leere Verzeichnisse gehen nicht mit; k-playbook verlässt sich nicht auf das Ausführungsrecht.
+Keine Prüfsumme: Neben dem Asset im selben Release schützte sie nur die Übertragung, das leistet
+TLS. **Das Vertrauen** liegt bei dem, der Releases des Repos veröffentlichen darf — in
+`defaults/` liegen auch Checks und Skripte, die k-playbook ausführt; die User nutzen genau diese
+Dienstleistung. Ausführbaren Code legt Kephalaion trotzdem nicht als Binary ab: Das Binary von
+k-playbook bleibt bei GitHub.
+
+- **Wann:** beim Anlegen der Collection — ohne Netz oder ohne Release entsteht sie trotzdem, leer,
+  und die Meldung nennt `kephalaion hub collection fetch <name>` —; von Hand mit diesem Kommando;
+  auf Anfrage eines Accounts über den Node (Vorgang `fetch` des Vertrags, MCP-Werkzeug
+  `fetch_release`; vorerst darf das jeder Account des Hubs, Todo #19). **Lesen holt nie.** Ist
+  das neueste Release schon geholt, ist nichts zu tun; ein bestimmtes älteres (`--tag`) gibt es
+  vorerst nicht. Ein tägliches Holen kommt mit einer Zeitsteuerung am Hub, später.
+- **Als Ganzes:** Eine Transaktion unter einer Revision ersetzt `defaults/` — löscht, was fehlt,
+  ersetzt, was abweicht, legt an, was neu ist. Ein Node sieht deshalb den alten Stand ganz oder
+  den neuen ganz: Eine Seite des Abgleichs endet an einer Revisionsgrenze.
+- **Überschneidungen** zweier Läufe sind hingenommen: Doppelt geladen werden kann, doppelt
+  geschrieben nicht. Die Transaktion sperrt als Erstes die Zeile der Collection in `collections`
+  (`UPDATE … SET name = name`, wie bei Accounts), prüft danach den Tag erneut und bildet erst dann
+  den Unterschied — auch unter PostgreSQL (READ COMMITTED).
+- **Welcher Stand drin ist**, merkt sich der Hub in `collections` (`fetched_tag`, `fetched_at`);
+  `hub collection show` zeigt es. Nicht im Export: Ein Import legt eine Collection aus der Liste
+  mit den Vorgaben leer an, die Meldung nennt `fetch`. Rechte von Accounts auf einer solchen
+  Collection weist der Import ab — eine vorhandene gleichnamige Collection vor dem Export
+  umbenennen (in k-playbook seit 2026-10-09 `k-playbook-dev`).
+- **Ohne Asset:** Solange ein Release das Archiv nicht trägt (v0.11.0 und v0.12.0 tragen es
+  nicht), meldet der Hub „an der Quelle nicht vorhanden“ (`source_missing`) und behält, was er
+  hat.
 
 ### vendor/ — Vorlagen mit eigenem Scope (entschieden am 2026-09-27, überarbeitet am 2026-09-28)
 
@@ -1145,6 +1240,14 @@ oder nicht lesbar ist dieselbe Meldung „nicht lesbar“, ohne den Hub zu frage
 werden darf, entscheidet trotzdem allein der Hub, gegen `accounts` — so wirkt eine Sperre beim
 Schreiben sofort, auch wenn die Replica sie noch nicht kennt.
 
+**Öffentliche Collections (Task 031):** Lesbar ist am Node auch eine Collection, die der Hub in
+`sync` als öffentlich nennt (`sync_state.public`) — für jeden Account, der sich an diesem Hub
+gültig anmeldet, also eine lebende `SYSTEM:A:`-Zeile in irgendeiner Collection desselben Hubs in
+dieser Replica hat; ohne eine solche Zeile liest er sie dort nicht (Grenze, siehe „Öffentliche
+Collections und Collections mit Quelle“). Schreiben darin reicht der Node durch; ohne eigene
+Zeile lehnt der Hub mit `forbidden` ab. `fetch_release` prüft am Node nur die Anmeldung am Hub;
+Lesbarkeit und Quelle prüft der Hub.
+
 **Einrichtung.** Collections und Accounts legt der Admin am Hub per Kommandozeile an; sie
 liegen in der Datenbank des Hubs, die Konfigurationsdatei enthält nur, was der Dienst zum
 Starten braucht. Ein Account — ein Zugang auf einem Rechner — bekommt Name, User,
@@ -1319,7 +1422,8 @@ Node ordnet Anfragen ihren Collections zu. Die harte Grenze ist, was der Hub auf
 lässt — das bestimmt, welche Collections der Hub dem Node erlaubt (`replicate`).
 
 **Was der Hub über einen Node weiß:** nur seinen Eintrag in `nodes` und die erlaubten
-Collections in `node_collections`. `replicate` umfasst den Inhalt der Collection und ihre
+Collections in `node_collections` — dazu kommt für jeden Node jede Collection aus der Liste der
+Quellen, die es am Hub gibt. `replicate` umfasst den Inhalt der Collection und ihre
 Account-Zeilen (`SYSTEM:A:<account>`, siehe „Datenmodell“). `read` allein bekommt die
 Account-Zeilen nicht. Welche Collections ein Node tatsächlich
 hält, verfolgt der Hub nicht.
@@ -1772,6 +1876,9 @@ CREATE TABLE principal_names (         -- seit Task 007; belegte Node- und Accou
 CREATE TABLE collections (
   name        TEXT PRIMARY KEY,
   description TEXT,
+  public      INTEGER NOT NULL DEFAULT 0,  -- seit Task 031; aus der Liste der Quellen immer 1
+  fetched_tag TEXT,                    -- zuletzt geholter Tag (fetch), nicht im Export
+  fetched_at  INTEGER,                 -- Zeitpunkt des Holens, ms
   created_at  INTEGER NOT NULL,
   created_by  TEXT NOT NULL
 );
@@ -1843,7 +1950,9 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   während sie entfernt, gleichnamig neu angelegt und wieder erlaubt wurde, gleicht er mit altem
   `seit` weiter ab; ohne Löschmarke bliebe seine lebende `SYSTEM:A:`-Zeile mit altem Hash und
   alten Rechten stehen. So bekommt er die Marke — oder die Zeile, die ein `grant` in der neuen
-  Collection wiederbelebt hat.
+  Collection wiederbelebt hat. **Ausnahme Collection mit Quelle (Task 031):** `hub collection
+  rm` entfernt ihre Dokumentzeilen samt Löschmarken (ohne `SYSTEM:`-Zeilen) in derselben
+  Transaktion — schreiben kann darin niemand, sie wäre sonst nie leer.
 - **Namen von Accounts und Nodes sind am Hub gemeinsam eindeutig.** Das Protokoll nennt nur
   Namen (`account`, `carrier`); „laptop“ darf dort nicht zweierlei bedeuten. Der Hub prüft
   das beim Anlegen und beim Import über die Tabellen `accounts` und `nodes`, in beide
@@ -1978,7 +2087,8 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   Revisionsgrenze: Ein Schreibvorgang kommt ganz oder gar nicht. Der Node wendet jede
   Seite in einer Transaktion an und setzt die Revision jeder angefragten Collection auf
   max(seit, R) — nie zurück, denn die Revision ist global, und eine Collection, die schon
-  weiter war, fiele sonst zurück. Den Stand je Collection hält die Replica in `sync_state`.
+  weiter war, fiele sonst zurück. Den Stand je Collection hält die Replica in `sync_state`,
+  dazu seit Task 031 die Merkmale `public` und `subscribed` aus der letzten Seite.
   Ein abgebrochener Abgleich setzt dort fort, wo er stand; der erste vollständige Abgleich ist
   nur eine lange Folge von Seiten.
 - **Lesestand ohne Transaktion, `bis` auf der letzten Seite.** Der Hub liest H zuerst und
@@ -2290,6 +2400,7 @@ Erweiterung ist ein Client wie jeder andere ([`vscode.md`](vscode.md)).
 | `supersede` | ablösen | mit Nachfolger und Grund |
 | `delete` | löschen | Löschmarke; Eigenes mit `write`, Fremdes mit `supersede`; ein Verzeichnis mit `recursive`. Gebaut in Task 014 |
 | `replace_directory` | ein ganzes Verzeichnis ersetzen | verworfen am 2026-09-28: `kephalaion node dir push` aus Einzelvorgängen (Task 016), siehe „Einen Ordner abgleichen“ |
+| `fetch_release` | den Hub das neueste Release nach `defaults/` holen lassen | nur Collections mit Quelle; jeder am Hub angemeldete Account; liest keine URLs (der Name ist deshalb nicht `fetch`); Vorgang `fetch` des Vertrags, nie wiederholt, bei unklarem Ausgang erneut anstoßbar. Gebaut in Task 031, siehe „Öffentliche Collections und Collections mit Quelle“ |
 
 **Festgelegt am 2026-09-26 für `create`, `write`, `delete` und `rename`, umgesetzt in Task 014
 (2026-09-27)** — `rename` ist dafür aus Stufe 3 in Stufe 2 vorgezogen, weil Umbenennen und

@@ -23,7 +23,9 @@ seine Replica ab (`node sync`) und zeigt sie an (`node doc`), über `transport l
 `http` auf diesem Rechner. `kephalaion serve` lauscht je Rolle: der Hub für Nodes, der Node als
 MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read` und `changes` — gelesen
 wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und `rename` — geschrieben
-wird über den Hub, mit Rechten je Collection —, und gleicht als Node im Hintergrund ab.
+wird über den Hub, mit Rechten je Collection —, dazu `fetch_release` (der Hub holt das neueste
+Release einer Collection mit Quelle, etwa `k-playbook`), und gleicht als Node im Hintergrund ab.
+Öffentliche Collections liest jeder Account des Hubs.
 Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
 list`); am eigenen Node tauscht `node account rotate` ein Token; `node whoami` zeigt, wen der
@@ -162,8 +164,12 @@ Binary, ist sie neu anzulegen; die Einstellungen rettet `config export`/`import`
 nicht. Dokumente am Hub sind wieder einzuspielen (`hub import`); eine Replica mit fremder
 Schemafassung verwirft der Abgleich selbst und gleicht sie neu ab. Mit `https` stieg
 `node.db` auf Schemafassung 5 (neu: `hubs.ca`; Fassung 4 brachte `hubs.entry_id` und
-`hub_sync`) — jede vorhandene `node.db` lehnt das Binary ab. Der Weg, in dieser Reihenfolge
-(`init` überschreibt nicht und bricht bei eingetragener Rolle ab):
+`hub_sync`) — jede vorhandene `node.db` lehnt das Binary ab. Mit Task 031 stieg die Datenbank
+des Hubs auf Schemafassung 6 (neu in `collections`: `public`, der geholte Stand) und die Replica
+auf Fassung 5 (Merkmale in `sync_state`; der Abgleich legt sie selbst neu an) — derselbe Weg mit
+`hub` statt `node` (`hub.db`, Abschnitt `hub:`, `hub init`), danach die Dokumente mit `hub
+import` und eine Collection mit Quelle mit `hub collection fetch <name>`. Der Weg für `node.db`,
+in dieser Reihenfolge (`init` überschreibt nicht und bricht bei eingetragener Rolle ab):
 
 ```sh
 kephalaion config export --output keph-config.yaml   # 1. mit dem ALTEN Binary; enthält Tokens, 0600
@@ -234,10 +240,12 @@ Namen. Die Hilfe zeigt alle Kommandos: `kephalaion hub node --help`,
 
 `config export` sichert auch die Collections, Nodes und Accounts (nur mit Hash, Accounts samt
 User und Rechten je Collection) und die Hubs des Nodes samt ihrem Token im Klartext — die Datei
-entsteht deshalb mit `0600`. Das Exportformat ist 8 (`format: 8`; seit 8 je Recht die
-Verzeichnis-Scopes `dirs`, seit 7 je Hub-Eintrag die CA als `ca`, seit 6 je Recht die Scopes
-`vendor`; ältere Fassungen lesen sich ohne und dürfen sie nicht tragen), `user` je Account ist
-dort Pflicht. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
+entsteht deshalb mit `0600`. Das Exportformat ist 9 (`format: 9`; seit 9 je Collection
+`public`, seit 8 je Recht die Verzeichnis-Scopes `dirs`, seit 7 je Hub-Eintrag die CA als `ca`,
+seit 6 je Recht die Scopes `vendor`; ältere Fassungen lesen sich ohne und dürfen sie nicht
+tragen), `user` je Account ist dort Pflicht. Den geholten Stand einer Collection mit Quelle
+trägt der Export nicht: Nach dem Import ist sie leer, die Meldung nennt `hub collection fetch`;
+Rechte von Accounts auf ihr weist der Import ab. `config import` gleicht am Hub die Account-Zeilen an den Export an; ein Export im
 Format 4 setzt den User jedes Accounts auf dessen Namen, einer vor Format 4 lässt die Accounts
 unberührt, einer im Format 1 ersetzt nur die `settings`, einer im Format 2 geht nur, wenn er am
 Node keine Hub-Einträge enthält — ihnen fehlt `node_name`. Dokumente und Replicas gehören nicht zum
@@ -441,7 +449,8 @@ kephalaion node whoami bob --hub privat --json   # nur ein Hub, als JSON wie das
 ```
 
 Gelesen wird über drei Werkzeuge, alle aus der Replica und nur in Collections, in denen der
-gültig angemeldete Account `read` hat. Eine Collection heißt `<hub>:<collection>`; der Hub-Teil
+gültig angemeldete Account `read` hat — oder die öffentlich sind (siehe „Öffentliche
+Collections und k-playbook“). Eine Collection heißt `<hub>:<collection>`; der Hub-Teil
 darf fehlen, wenn der Client nur an einem Hub angemeldet ist. Was er nicht lesen darf, gibt es
 für ihn nicht — dieselbe Meldung „nicht lesbar“ wie für eine unbekannte Collection. Hat der
 Node einen Hub noch nie abgeglichen, sagt die Meldung das.
@@ -520,7 +529,17 @@ Dazu reicht der Node `unauthenticated` (der Hub nimmt den Node nicht an) und
 Collection und die Zeile des Accounts schon trägt — nach `hub account grant` erst nach dem
 nächsten Abgleich; hat der Node den Hub noch nie abgeglichen, nennt die Meldung
 `kephalaion node sync <hub>` als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
-Admins am Hub, ohne Node.
+Admins am Hub, ohne Node. In einer Collection mit Quelle (`k-playbook`) schreibt niemand: Jeder
+Schreibvorgang ist `forbidden`.
+
+**`fetch_release`** (`collection`: `<hub>:<collection>`) lässt den Hub das neueste Release der
+Quelle einer Collection nach `defaults/` holen und stößt danach den Abgleich an; es liest keine
+URLs. Antwort: `status` `fetched` oder `current` (schon aktuell), `tag`, `revision` und die Zahl
+der angelegten, ersetzten und gelöschten Dokumente. Vorerst darf es jeder am Hub angemeldete
+Account. Dazu die Codes `no_source` (keine Quelle), `source_missing` (kein Release oder kein
+Archiv darin), `source_invalid` (Archiv nicht übernehmbar) und `source_unreachable` (Quelle
+nicht erreichbar); nach `outcome_unknown` darf es erneut angestoßen werden — der Hub antwortet
+dann `current`, wenn er schon geholt hat.
 
 ### Weboberfläche
 
@@ -666,6 +685,47 @@ Aliase, die im Export fehlen. Die Regeln des Abgleichs stehen in
 rm|add` und `config import`: Jede Seite prüft in ihrer Transaktion, dass die Replica noch zu
 Eintrag (`entry_id`), `hub_id` und Stand passt, und schreibt sonst nichts. Ein Abgleich für
 einen inzwischen entfernten oder neu angelegten Eintrag schreibt nie in den neuen.
+
+### Öffentliche Collections und k-playbook
+
+Eine Collection kann **öffentlich** sein: Jeder Account des Hubs liest sie, ohne eigene Rechte
+darin; schreiben braucht weiter `hub account grant`. Abgleichen darf ein Node sie wie jede andere
+nur nach `hub node grant` und `node collection add`. Am Node liest sie nur ein Account, der dort
+schon eine eigene Collection desselben Hubs hat — eine öffentliche allein bekommt man nicht.
+
+```sh
+kephalaion hub collection add handbuch --public       # oder später: hub collection set handbuch --public
+kephalaion hub collection set handbuch --public=false # wieder nur für eingetragene Accounts
+```
+
+Einige Collections kennt das Binary beim Namen: Die **Liste der Quellen** im Binary nennt je Name
+die Vorgaben einer Collection, die der Hub selbst aus dem neuesten Release eines öffentlichen
+GitHub-Repos füllt — vorerst nur `k-playbook` (Repo `kascada/k-playbook`, Archiv
+`k-playbook-defaults.tar.gz`). Eine solche Collection ist öffentlich, für jeden Node erlaubt und
+**fest abonniert** — jeder Node gleicht sie von selbst ab, ohne `grant` und `node collection
+add` —, und niemand schreibt darin, auch der Admin nicht. Ihr Inhalt steht unter `defaults/`,
+immer genau ein Release, und ändert sich allein durch **Holen**:
+
+```sh
+kephalaion hub collection add k-playbook     # Vorgaben aus der Liste, holt gleich
+kephalaion hub collection fetch k-playbook   # von Hand; ist das neueste schon da, nichts zu tun
+kephalaion hub collection show k-playbook    # Quelle und geholter Stand (Tag, Zeitpunkt)
+```
+
+```text
+Collection k-playbook angelegt.
+Aus der Liste der Quellen: öffentlich, fest abonniert, Inhalt aus https://github.com/kascada/k-playbook (k-playbook-defaults.tar.gz) unter defaults/.
+Collection k-playbook: v0.13.0 geholt — 107 angelegt, 0 ersetzt, 0 gelöscht (Revision 41).
+```
+
+Ohne Netz oder solange kein Release das Archiv trägt, entsteht die Collection leer, und die
+Meldung nennt `hub collection fetch`. Holen ersetzt `defaults/` als Ganzes in einem
+Schreibvorgang (Urheber `system`); ein Node sieht den alten Stand oder den neuen, nie ein halbes
+Verzeichnis. Den Tag liest der Hub aus der Weiterleitung von `releases/latest` — ohne GitHub-API
+und Token, Proxy aus der Umgebung (`HTTPS_PROXY`). Über den Node stößt ein Account das Holen mit
+dem MCP-Werkzeug `fetch_release` an (`<hub>:k-playbook`); danach gleicht der Node ab. `hub
+collection rm k-playbook` entfernt die geholten Dokumente mit. Hintergrund:
+[`docs/konzept.md`](docs/konzept.md), „Öffentliche Collections und Collections mit Quelle“.
 
 ### Einen Ordner abgleichen: node dir push und pull
 
