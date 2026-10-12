@@ -282,7 +282,15 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
     und der Start des MCP-Servers warten auf ihr Ergebnis — ein gemeinsames, keine zweite. Neu
     geprobt wird, wenn sich ein Paar ändert (Token-Datei, Wahl des Accounts, `kephalaion.hubs`,
     `nodeUrl`, „Neu verbinden“ — sofort, zählt ins Budget, wartet nicht darauf), nicht vor jeder
-    Anfrage.
+    Anfrage. **Probe ohne Ergebnis** (keine Verbindung, 5xx des Proxys, etwa 502 beim Neustart
+    des Nodes, Abbruch): Die Schranke bleibt zu — keine Anfrage mit ungeprüften Paaren; `stat`,
+    `readDirectory` und `readFile` scheitern als `Unavailable` mit der Ursache, der MCP-Server
+    startet nicht, die Leiste zeigt „Node nicht erreichbar“ —, und die Adresse wird mit
+    wachsendem Abstand neu geprobt: 5, 10, 30 s, dann alle 60 s (von allen Fenstern des Rechners
+    zusammen höchstens eine Probe je Minute, der Abstand steht in der Pausendatei). Ein geändertes
+    Paar und „Neu verbinden“ proben sofort und beginnen den Abstand von vorn. Eine solche Probe
+    ist an der Jail kein Fehlversuch und zählt nicht ins Budget; eine 401 des Proxys dagegen ist
+    ein Ergebnis (Fehlversuch, alle geschickten Paare pausiert).
   - **Erkennen:** `whoami` mit `hidden` (alle geschickten Paare ungültig) oder `login` `invalid`
     je Hub; `changes`, das alle eben noch lesbaren Collections eines Hubs als `dropped` meldet
     (ein ungültiges Paar macht alle unlesbar; fällt nur eine weg, ist das ein entzogenes Recht,
@@ -301,13 +309,14 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
     Extension Hosts dieses Rechners lesen und schreiben — unabhängig von Profil, Ausgabe und
     Fenster, nicht in `globalStorageUri`. Je Paar Adresse, Hub, Account, die Kennung der
     Token-Datei (Größe und Zeit, ohne Inhalt), Zahl der Fehlversuche und Zeit der nächsten Probe;
-    je Adresse das Budget. Kein Token, kein Hash; atomar geschrieben (`rename`, `0600`); vor jeder
-    Anfrage übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); proben darf
-    zur selben Zeit nur ein Fenster (Sperrdatei mit `O_EXCL`, nach 30 s verwaist), die anderen
-    übernehmen das Ergebnis; ist sie kaputt oder fehlt sie, gelten Schranke und Sperrdatei
-    trotzdem. Grenze: ein Stand je Benutzer und Betriebssystem, auf dem die Token-Dateien liegen —
-    Fenster unter Windows und in der WSL desselben Rechners teilen ihn nicht (dieselbe Adresse
-    nach außen), haben aber ohnehin eigene Token-Dateien.
+    je Adresse das Budget und der Abstand nach Proben ohne Ergebnis (`unanswered`: Zahl, Zeit
+    der letzten und der nächsten). Kein Token, kein Hash; atomar geschrieben (`rename`, `0600`);
+    vor jeder Anfrage übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat);
+    proben darf zur selben Zeit nur ein Fenster (Sperrdatei mit `O_EXCL`, nach 30 s verwaist),
+    die anderen übernehmen das Ergebnis; ist sie kaputt oder fehlt sie, gelten Schranke und
+    Sperrdatei trotzdem. Grenze: ein Stand je Benutzer und Betriebssystem, auf dem die
+    Token-Dateien liegen — Fenster unter Windows und in der WSL desselben Rechners teilen ihn
+    nicht (dieselbe Adresse nach außen), haben aber ohnehin eigene Token-Dateien.
   - **Wann wieder geprobt wird:** sofort einmal, wenn sich die Kennung der Token-Datei des Paars
     ändert (spätestens beim nächsten Lesen, 5 s), ebenso bei anderer Wahl und „Neu verbinden“;
     sonst nach wachsender Pause — 1, 2, 4, 8, 16, 30 min, danach alle 30 min — und nur, wenn das
@@ -333,7 +342,9 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
     und Paar B wird ungültig — je höchstens 4 in 10 min, gezählt an den Anfragen, wie ein Ersatz
     des Nodes sie sieht), das Erkennen in `rules.test.js`, die Erweiterung selbst (eine Anfrage
     beim Start, `Unavailable`, zwei Hubs, lokal unverändert, MCP-Server ohne das pausierte Paar,
-    401 und `dropped`) in `extension.test.js`. Gegen die VM belegt am 2026-10-09 mit zwei
+    401 und `dropped`, Node beim Start nicht erreichbar) in `extension.test.js`; die Probe ohne
+    Ergebnis (Abstand 5–60 s, 502, 401 als Ergebnis, geändertes Paar, mehrere Fenster) in
+    `pause.test.js`. Gegen die VM belegt am 2026-10-09 mit zwei
     Instanzen des Moduls und einem Dummy-Token: eine Anfrage, eine Zeile im Journal von Caddy
     (`~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“); die Abnahme mit
     mehreren Fenstern steht unter „Zu testen“ in [`fortschritt.md`](fortschritt.md).

@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PauseFile, Gate, pauseAfter, WINDOW_MS, RESERVE, LOCK_STALE_MS } = require('../pause');
+const { PauseFile, Gate, pauseAfter, retryAfter, WINDOW_MS, RESERVE, LOCK_STALE_MS } = require('../pause');
 const { whoamiOutcome } = require('../rules');
 
 const TOKEN = `keph_${'A'.repeat(43)}`;
@@ -42,16 +42,27 @@ const pair = (hub, account = 'kamran', tokenId = '48:1700000000000') => ({ hub, 
 
 // Der Ersatz des Nodes über den Proxy: je Hub, ob das Paar gilt. Jede Anfrage mit mindestens
 // einem ungültigen Paar ist ein Fehlversuch (ein Fehlversuch ist eine Anfrage, gleich wie viele
-// Paare ungültig sind); alle ungültig heißt verdeckt.
+// Paare ungültig sind); alle ungültig heißt verdeckt. down: keine Verbindung (nichts kommt an);
+// status: der Proxy antwortet selbst — 401 zählt an seiner Jail, 5xx nicht (der Node liegt).
+// attempts zählt jede Anfrage, die ein Fenster abschickt, requests nur die, die ankommen.
 class FakeNode {
   constructor(valid) {
     this.valid = { ...valid };
     this.failures = [];
     this.requests = 0;
+    this.attempts = 0;
+    this.attemptsAt = [];
+    this.down = false;
+    this.status = 0;
   }
 
   answer(sent, now) {
+    this.attempts++;
+    this.attemptsAt.push(now);
+    if (this.down) throw Object.assign(new Error(`Node ${ADDRESS} nicht erreichbar (ECONNREFUSED)`), { kind: 'unreachable' });
     this.requests++;
+    if (this.status === 401) this.failures.push(now);
+    if (this.status) return { status: this.status };
     const bad = sent.filter((p) => !this.valid[p.hub]);
     if (bad.length) this.failures.push(now);
     if (bad.length === sent.length) return { hidden: true, hubs: [] };
@@ -87,12 +98,26 @@ class Window {
   }
 
   // Die Anfrage geht hinaus (der Node zählt sie), die Antwort kommt einen Tick später — so sind
-  // zwei Fenster zugleich wirklich zwei Anfragen unterwegs.
+  // zwei Fenster zugleich wirklich zwei Anfragen unterwegs. Wie Node.request in extension.js:
+  // keine Verbindung wirft (unreachable), eine 401 des Proxys ist ein Ergebnis für alle
+  // geschickten Paare und wirft danach (rejected), 5xx wirft ohne Ergebnis (unclear).
   async send(send) {
     const who = this.node.answer(send, this.now());
     await yieldSleep();
+    if (who.status === 401) {
+      this.gate.observe(ADDRESS, send, { invalid: 'all' });
+      throw Object.assign(new Error(`${ADDRESS}: eine Anmeldung des Proxys, nicht der Node (HTTP 401)`), { kind: 'rejected' });
+    }
+    if (who.status) {
+      throw Object.assign(new Error(`${ADDRESS}: Proxy antwortet, aber der Node dahinter nicht (HTTP ${who.status})`), { kind: 'unclear' });
+    }
     this.gate.observe(ADDRESS, send, whoamiOutcome(who, send.map((p) => p.hub)));
     return who;
+  }
+
+  // Wie request, aber ein Fehler kommt als Wert zurück (die Erweiterung fängt ihn je Aufruf).
+  async tryRequest() {
+    return this.request().catch((e) => e);
   }
 
   paused() {
@@ -106,8 +131,8 @@ class Window {
 async function run(windows, now, ms, { together = false } = {}) {
   for (let t = 0; t < ms; t += 3 * SEC) {
     for (let i = 0; i < (t % (30 * SEC) === 0 ? 2 : 1); i++) {
-      if (together) await Promise.all(windows.map((w) => w.request()));
-      else for (const w of windows) await w.request();
+      if (together) await Promise.all(windows.map((w) => w.tryRequest()));
+      else for (const w of windows) await w.tryRequest();
     }
     now.advance(3 * SEC);
   }
@@ -319,4 +344,175 @@ test('Ein Stand je Adresse: eine andere nodeUrl hat eigene Pausen und eigenes Bu
   gate.observe(ADDRESS, [pair('vm')], { invalid: 'all' });
   assert.deepStrictEqual(gate.paused('https://other.example.org/kephalaion/mcp', [pair('vm')]), {});
   assert.strictEqual(gate.budget('https://other.example.org/kephalaion/mcp'), 0);
+});
+
+test('Abstand nach Proben ohne Ergebnis: 5, 10, 30, 60 s, danach 60', () => {
+  assert.deepStrictEqual([1, 2, 3, 4, 5, 9].map((n) => retryAfter(n) / SEC), [5, 10, 30, 60, 60, 60]);
+  assert.strictEqual(retryAfter(0), 5 * SEC);
+});
+
+// Der kritische Befund des Reviews (vscode/pause.js:313): Eine Probe, die an der Verbindung
+// scheitert, galt als geprobt, und bis zur nächsten Änderung ging jede Anfrage mit allen Paaren
+// hinaus — nach Rückkehr des Nodes mit ungültigem Paar changes alle 3 s. Jetzt: keine Kennung,
+// nichts hinaus, die Anfragen scheitern mit der Ursache; neu geprobt mit wachsendem Abstand.
+test('Probe ohne Ergebnis: Schranke bleibt zu, Abstand 5, 10, 30, 60 s; nach Rückkehr des Nodes erst die Probe', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  node.down = true;
+  const file = tmpFile();
+  const logs = [];
+  const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
+  // Fünf Anfragen zugleich (Start): eine Probe; alle scheitern mit der Ursache, nichts kam an.
+  const results = await Promise.all([1, 2, 3, 4, 5].map(() => w.tryRequest()));
+  assert.strictEqual(node.attempts, 1, 'mehr als eine Probe');
+  for (const r of results) {
+    assert.ok(r instanceof Error, 'eine Anfrage ging durch');
+    assert.strictEqual(r.kind, 'unreachable');
+    assert.match(r.message, /nicht erreichbar \(ECONNREFUSED\); nächste Probe in 5 s, bis dahin nichts gefragt/);
+  }
+  assert.strictEqual(w.gate.probedSig, undefined, 'als geprobt gekennzeichnet');
+  assert.deepStrictEqual(w.paused(), {}, 'ohne Ergebnis pausiert');
+  assert.strictEqual(w.gate.budget(ADDRESS), 0, 'ohne Ergebnis im Budget');
+  assert.ok(logs.some((l) => l.includes('ohne Ergebnis') && l.includes('1. Mal')), logs.join('\n'));
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(state.unanswered[ADDRESS].count, 1);
+  assert.strictEqual(state.unanswered[ADDRESS].nextProbe, now() + 5 * SEC);
+  // Innerhalb des Abstands keine neue Probe; jede Anfrage scheitert ohne Versand.
+  now.advance(4 * SEC);
+  const e = await w.tryRequest();
+  assert.strictEqual(node.attempts, 1, 'Probe innerhalb des Abstands');
+  assert.match(e.message, /nächste Probe in 1 s/);
+  // Nach Ablauf genau eine neue Probe; der Abstand wächst: 10, 30, 60, dann 60.
+  for (const [wait, next] of [[1, 10], [10, 30], [30, 60], [60, 60], [60, 60]]) {
+    now.advance(wait * SEC);
+    const before = node.attempts;
+    await Promise.all([w.tryRequest(), w.tryRequest()]);
+    assert.strictEqual(node.attempts, before + 1, `nach ${wait} s: ${node.attempts - before} Proben`);
+    assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered[ADDRESS].nextProbe, now() + next * SEC);
+    await w.tryRequest();
+    assert.strictEqual(node.attempts, before + 1);
+  }
+  assert.strictEqual(node.requests, 0, 'etwas kam beim Node an');
+  // Der Node ist zurück, das Paar ungültig: erst die Probe (ein Fehlversuch), dann nichts mehr —
+  // nicht changes alle 3 s.
+  node.down = false;
+  now.advance(60 * SEC);
+  await run([w], now, 50 * SEC);
+  assert.strictEqual(node.requests, 1, `${node.requests} Anfragen mit ungültigem Paar`);
+  assert.strictEqual(node.failures.length, 1);
+  assert.strictEqual(w.paused().vm.failures, 1);
+  assert.ok(w.gate.probedSig, 'nicht als geprobt gekennzeichnet');
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered[ADDRESS], undefined, 'der Abstand bleibt stehen');
+  assert.ok(!fs.readFileSync(file, 'utf8').includes(TOKEN));
+});
+
+test('Probe ohne Ergebnis: 502 des Proxys wie keine Verbindung — kein Fehlversuch, nichts pausiert; Erfolg öffnet und setzt den Abstand zurück', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: true });
+  node.status = 502;
+  const file = tmpFile();
+  const w = new Window(file, now, node, [pair('vm')]);
+  const e = await w.tryRequest();
+  assert.strictEqual(e.kind, 'unclear');
+  assert.match(e.message, /HTTP 502\); nächste Probe in 5 s/);
+  assert.strictEqual(node.attempts, 1);
+  assert.strictEqual(node.failures.length, 0, 'eine 502 zählte als Fehlversuch');
+  assert.strictEqual(w.gate.budget(ADDRESS), 0);
+  assert.deepStrictEqual(w.paused(), {});
+  assert.strictEqual(w.gate.probedSig, undefined);
+  await w.tryRequest();
+  assert.strictEqual(node.attempts, 1, 'zweite Probe innerhalb des Abstands');
+  now.advance(5 * SEC);
+  await w.tryRequest();
+  assert.strictEqual(node.attempts, 2);
+  // Der Node antwortet wieder: Die Probe gilt, die Schranke ist offen, der Abstand ist weg.
+  node.status = 0;
+  now.advance(10 * SEC);
+  assert.ok((await w.request()).hubs, 'die Anfrage ging nicht durch');
+  await w.request();
+  assert.strictEqual(node.requests, 5, 'zwei 502, dann Probe, Anfrage, Anfrage');
+  assert.ok(w.gate.probedSig);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered, {});
+  // Zurückgesetzt: Nach einer späteren Probe ohne Ergebnis (geändertes Paar, Node liegt) beginnt
+  // der Abstand wieder bei 5 s, nicht bei 10.
+  node.status = 503;
+  w.pairs = [pair('vm', 'kamran', '48:1700000099000')];
+  assert.match((await w.tryRequest()).message, /nächste Probe in 5 s/);
+});
+
+test('Geändertes Paar oder Neu verbinden proben sofort, am Abstand vorbei, und beginnen ihn von vorn', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: true });
+  node.down = true;
+  const file = tmpFile();
+  const w = new Window(file, now, node, [pair('vm')]);
+  await w.tryRequest();
+  now.advance(5 * SEC);
+  assert.match((await w.tryRequest()).message, /nächste Probe in 10 s/);
+  assert.strictEqual(node.attempts, 2);
+  // Die Token-Datei ändert sich: sofort, und der nächste Abstand ist wieder 5 s.
+  w.pairs = [pair('vm', 'kamran', '48:1700000099000')];
+  assert.match((await w.tryRequest()).message, /nächste Probe in 5 s/);
+  assert.strictEqual(node.attempts, 3, 'keine Probe nach geänderter Token-Datei');
+  await w.tryRequest();
+  assert.strictEqual(node.attempts, 3, 'dieselben Paare proben erneut');
+  // „Neu verbinden“: sofort, und der Node ist wieder da — die Schranke öffnet.
+  w.gate.reset();
+  assert.match((await w.tryRequest()).message, /nächste Probe in 5 s/);
+  assert.strictEqual(node.attempts, 4);
+  node.down = false;
+  w.gate.reset();
+  assert.ok((await w.request()).hubs);
+  assert.strictEqual(node.attempts, 6, 'Probe und Anfrage');
+  assert.strictEqual(node.requests, 2);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered, {});
+});
+
+test('401 des Proxys ist ein Ergebnis: Fehlversuch im Budget, alle Paare pausiert, kein Abstand', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: true, eigen: true });
+  node.status = 401;
+  const file = tmpFile();
+  const w = new Window(file, now, node, [pair('vm'), pair('eigen', 'kp')]);
+  assert.strictEqual(await w.request(), 'paused');
+  assert.strictEqual(node.attempts, 1);
+  assert.strictEqual(node.failures.length, 1);
+  assert.strictEqual(w.gate.budget(ADDRESS), 1, 'die 401 fehlt im Budget');
+  assert.deepStrictEqual(Object.keys(w.paused()).sort(), ['eigen', 'vm']);
+  assert.ok(w.gate.probedSig, 'die 401 galt als Probe ohne Ergebnis');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered, {});
+  // Danach nichts mehr bis zur nächsten Probe nach der Pause (1 min), nicht nach 5 s.
+  now.advance(30 * SEC);
+  assert.strictEqual(await w.request(), 'paused');
+  assert.strictEqual(node.attempts, 1);
+});
+
+test('Zwei Fenster: der Abstand gilt je Adresse über die Pausendatei — zusammen höchstens eine Probe je Abstand', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: true });
+  node.down = true;
+  const file = tmpFile();
+  const a = new Window(file, now, node, [pair('vm')]);
+  const b = new Window(file, now, node, [pair('vm')]);
+  const [ea, eb] = await Promise.all([a.tryRequest(), b.tryRequest()]);
+  assert.strictEqual(node.attempts, 1, 'beide Fenster probten');
+  assert.match(ea.message, /nicht erreichbar/);
+  assert.match(eb.message, /in einem anderen Fenster ohne Ergebnis; nächste Probe in 5 s/);
+  assert.strictEqual(eb.kind, 'unreachable');
+  // Ein drittes Fenster, das jetzt startet, probt nicht.
+  const c = new Window(file, now, node, [pair('vm')]);
+  assert.match((await c.tryRequest()).message, /anderen Fenster/);
+  assert.strictEqual(node.attempts, 1);
+  // Über 3 min im Takt der Erweiterung (alle 3 s je Fenster): Proben bei 0, 6, 18, 48, 108, 168 s.
+  const start = now();
+  await run([a, b, c], now, 3 * MIN, { together: true });
+  assert.deepStrictEqual(node.attemptsAt.map((t) => (t - start) / SEC), [0, 6, 18, 48, 108, 168]);
+  assert.strictEqual(node.requests, 0);
+  // Der Node ist zurück: Die nächste Probe öffnet die Schranke für alle Fenster.
+  node.down = false;
+  await run([a, b, c], now, 2 * MIN, { together: true });
+  assert.strictEqual(node.attempts, 7 + node.requests - 1, 'weitere Proben nach der Rückkehr');
+  assert.ok(node.requests > 60, `${node.requests} Anfragen: die Fenster arbeiten nicht weiter`);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).unanswered, {});
+  assert.ok(!fs.existsSync(`${file}.lock`), 'Sperrdatei bleibt liegen');
 });

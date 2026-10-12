@@ -16,6 +16,11 @@
 // - Ein Stand für alle Fenster dieses Rechners: die Pausendatei unter XDG_STATE_HOME, atomar
 //   geschrieben, vor jeder Anfrage billig neu gelesen (nur, wenn sie sich geändert hat); proben
 //   darf zur selben Zeit nur ein Fenster (Sperrdatei mit O_EXCL, nach LOCK_STALE_MS verwaist).
+// - Probe ohne Ergebnis (keine Verbindung, 5xx des Proxys, Abbruch): Die Schranke bleibt zu —
+//   keine Anfrage mit ungeprüften Paaren, die wartenden scheitern —, und die Adresse wird mit
+//   wachsendem Abstand (RETRY_S, 5 s bis 60 s) neu geprobt, geteilt über die Pausendatei; ein
+//   geändertes Paar und „Neu verbinden“ proben sofort. Eine 401 des Proxys ist ein Ergebnis:
+//   ein Fehlversuch im Budget, alle geschickten Paare pausiert.
 //
 // Kein Token und kein Hash in der Datei: je Paar nur Adresse, Hub, Account und die Kennung der
 // Token-Datei (Größe und Zeit). Uhr, Warten und Dateisystem sind ersetzbar (Tests).
@@ -34,6 +39,12 @@ const JAIL_LIMIT = 10;
 const RESERVE = 2;
 // Die wachsende Pause je Paar nach dem n-ten Fehlversuch, in Minuten; danach die letzte.
 const SCHEDULE_MIN = [1, 2, 4, 8, 16, 30];
+// Der Abstand bis zur nächsten Probe nach der n-ten ohne Ergebnis, in Sekunden; danach der letzte.
+// 5 und 10 s fangen einen Neustart des Nodes (make deploy ROLE=kephalaion), 30 und 60 s eine
+// längere Störung (Netz, VPN): Dann geht von allen Fenstern des Rechners zusammen höchstens eine
+// Probe je Minute — weniger als das whoami eines einzelnen Fensters im Normalbetrieb (alle 30 s).
+// Eine Probe ohne Ergebnis ist an der Jail kein Fehlversuch und zählt nicht ins Budget.
+const RETRY_S = [5, 10, 30, 60];
 // Eine Sperrdatei gilt nach dieser Zeit als verwaist (Extension Host abgestürzt).
 const LOCK_STALE_MS = 30 * 1000;
 const LOCK_POLL_MS = 200;
@@ -57,12 +68,21 @@ function pauseAfter(failures) {
   return SCHEDULE_MIN[i] * 60 * 1000;
 }
 
+// Der Abstand nach der n-ten Probe ohne Ergebnis, in ms.
+function retryAfter(count) {
+  const i = Math.min(Math.max(count, 1), RETRY_S.length) - 1;
+  return RETRY_S[i] * 1000;
+}
+
 function pairKey(address, hub, account) {
   return `${address}|${hub}|${account}`;
 }
 
+// unanswered: je Adresse die Proben ohne Ergebnis — Zahl, Zeit der letzten, Zeit der nächsten.
+// Ältere Fassungen der Erweiterung kennen den Schlüssel nicht und lassen ihn beim Schreiben
+// fallen; das kostet dann nur eine Probe mehr, deshalb bleibt die Version der Datei.
 function emptyState() {
-  return { version: FILE_VERSION, pairs: {}, budget: {} };
+  return { version: FILE_VERSION, pairs: {}, budget: {}, unanswered: {} };
 }
 
 // Eine gelesene Datei in die Form bringen; alles Unbrauchbare fällt weg.
@@ -82,6 +102,12 @@ function normalize(raw) {
     const ok = times.filter((t) => Number.isFinite(t));
     if (ok.length) state.budget[address] = ok.sort((a, b) => a - b);
   }
+  for (const [address, u] of Object.entries(raw.unanswered || {})) {
+    if (!u || typeof u !== 'object') continue;
+    const { count, at, nextProbe } = u;
+    if ([count, at, nextProbe].some((v) => !Number.isFinite(v))) continue;
+    state.unanswered[address] = { count, at, nextProbe };
+  }
   return state;
 }
 
@@ -95,6 +121,16 @@ function prune(state, now) {
   for (const [k, e] of Object.entries(state.pairs)) {
     if (now - e.failedAt > KEEP_MS) delete state.pairs[k];
   }
+  for (const [address, u] of Object.entries(state.unanswered)) {
+    if (now - u.at > KEEP_MS) delete state.unanswered[address];
+  }
+}
+
+// Ein Ergebnis für die Adresse beendet den Abstand; sagt, ob sich etwas geändert hat.
+function clearUnanswered(state, address) {
+  if (!state.unanswered[address]) return false;
+  delete state.unanswered[address];
+  return true;
 }
 
 // Die Fehlversuche einer Adresse im Fenster, nach Zeit.
@@ -231,7 +267,9 @@ function defaultSleep(ms) {
 // Die Schranke eines Fensters über der Pausendatei. pairs sind je Anfrage die aktuellen Paare
 // der Erweiterung: [{ hub, account, tokenId }] (tokenId: Größe und Zeit der Token-Datei, ohne
 // Inhalt); address die Adresse des Nodes. probe(pairs) schickt das whoami mit genau diesen
-// Paaren und beobachtet die Antwort selbst (observe); hier zählt nur, dass es lief.
+// Paaren und beobachtet die Antwort selbst (observe). Ein Ergebnis ist eine Antwort, die observe
+// gesehen hat (auch 401, hidden, invalid je Hub), oder ein whoami, das durchlief; wirft probe
+// ohne das, war es eine Probe ohne Ergebnis — ensure wirft dann, die Schranke bleibt zu.
 class Gate {
   constructor({ file, now = Date.now, sleep = defaultSleep, log = () => {}, onChange = () => {} }) {
     this.file = file;
@@ -239,11 +277,18 @@ class Gate {
     this.sleep = sleep;
     this.log = log;
     this.onChange = onChange;
-    // probedSig: die Paare, mit denen zuletzt geprobt wurde (oder deren Pause übernommen ist).
+    // probedSig: die Paare, mit denen zuletzt mit Ergebnis geprobt wurde (oder deren Pause
+    // übernommen ist). attemptedSig: die Paare des letzten Versuchs, auch ohne Ergebnis — eine
+    // Änderung seitdem probt sofort, am Abstand der Adresse vorbei.
     this.probedSig = undefined;
+    this.attemptedSig = undefined;
     // force: Zutun des Nutzers — die nächste Probe nimmt alle Paare, ohne Rücksicht aufs Budget.
     this.force = false;
     this.inflight = undefined;
+    // observed: observe hat während der laufenden Probe ein Ergebnis gesehen.
+    this.observed = false;
+    // lastUnanswered: { address, error } der letzten Probe ohne Ergebnis dieses Fensters.
+    this.lastUnanswered = undefined;
     this._lastPaused = undefined;
   }
 
@@ -258,11 +303,14 @@ class Gate {
     return JSON.stringify([address, pairs.map((p) => [p.hub, p.account, p.tokenId]).sort()]);
   }
 
-  // Was die nächste Probe schickt: { sig, send }. send ist leer, wenn keine Probe ansteht —
-  // nichts Neues, nichts fällig, oder das Budget erlaubt keine. Nicht pausierte Paare gehen mit
-  // jeder Probe mit (so sagt die Antwort je Hub, was gilt); eine Probe steht an, wenn die Paare
-  // neu oder geändert sind, eine Token-Datei eines pausierten Paars anders ist (sofort) oder eine
-  // Pause abgelaufen ist und das Budget es erlaubt.
+  // Was die nächste Probe schickt: { sig, send, closed, restart }. send ist leer, wenn keine Probe
+  // ansteht — nichts Neues, nichts fällig, oder das Budget erlaubt keine. Nicht pausierte Paare
+  // gehen mit jeder Probe mit (so sagt die Antwort je Hub, was gilt); eine Probe steht an, wenn
+  // die Paare neu oder geändert sind, eine Token-Datei eines pausierten Paars anders ist (sofort)
+  // oder eine Pause abgelaufen ist und das Budget es erlaubt. closed: Eine Probe stünde an, aber
+  // der Abstand nach einer Probe ohne Ergebnis läuft noch (der Eintrag der Adresse) — nichts geht
+  // hinaus; nicht nach Zutun des Nutzers (force) und nicht, wenn sich die Paare seit dem letzten
+  // Versuch dieses Fensters geändert haben (restart: der Abstand beginnt dann von vorn).
   plan(address, pairs) {
     const state = this.file.load();
     const now = this.now();
@@ -284,17 +332,24 @@ class Gate {
         needed = true;
       }
     }
-    return { sig, send: needed ? send : [] };
+    if (!needed) return { sig, send: [] };
+    const restart = this.force || (this.attemptedSig !== undefined && sig !== this.attemptedSig);
+    const u = state.unanswered[address];
+    if (u && u.nextProbe > now && !restart) return { sig, send: [], closed: u };
+    return { sig, send, restart };
   }
 
   // Vor einer Anfrage: proben, wenn eine Probe ansteht — eine für alle, die gleichzeitig warten.
   // Unter der Sperrdatei wird der Plan neu gemacht: Ein anderes Fenster war vielleicht schneller,
-  // dann gilt dessen Ergebnis aus der Datei.
+  // dann gilt dessen Ergebnis aus der Datei. Wirft, solange die Schranke nach einer Probe ohne
+  // Ergebnis zu ist (closedError): Die Anfrage geht dann nicht hinaus; die Kennung „geprobt“
+  // (probedSig) bekommt nur eine Probe mit Ergebnis.
   async ensure(address, pairs, probe) {
     if (this.inflight) return this.inflight;
-    const { sig, send } = this.plan(address, pairs);
-    if (!send.length) {
-      this.probedSig = sig;
+    const first = this.plan(address, pairs);
+    if (first.closed) throw this.closedError(address, first.closed);
+    if (!first.send.length) {
+      this.probedSig = first.sig;
       this.force = false;
       return undefined;
     }
@@ -302,20 +357,59 @@ class Gate {
       try {
         await this.withLock(async () => {
           const again = this.plan(address, pairs);
-          if (!again.send.length) return;
-          try {
-            await probe(again.send);
-          } catch {
-            // Die Antwort hat der Aufrufer beobachtet; ein Fehler der Verbindung ändert nichts.
-          }
+          if (again.closed) throw this.closedError(address, again.closed);
+          if (again.send.length) await this.attempt(address, again, probe);
         });
+        this.probedSig = first.sig;
       } finally {
-        this.probedSig = sig;
         this.force = false;
         this.inflight = undefined;
       }
     })();
     return this.inflight;
+  }
+
+  // Die Probe selbst, unter der Sperrdatei. Ohne Ergebnis — probe wirft, und observe hat nichts
+  // gesehen: keine Verbindung, 5xx des Proxys, Abbruch, Zeitüberschreitung — bekommt die Adresse
+  // den nächsten Abstand (RETRY_S) in der Pausendatei, von vorn nach Zutun des Nutzers oder
+  // geänderten Paaren (restart), und ensure wirft. Ein Ergebnis beendet den Abstand.
+  async attempt(address, { sig, send, restart }, probe) {
+    this.attemptedSig = sig;
+    this.observed = false;
+    let error;
+    try {
+      await probe(send);
+    } catch (e) {
+      if (!this.observed) error = e instanceof Error ? e : new Error(String(e));
+    }
+    if (!error) {
+      this.lastUnanswered = undefined;
+      this.file.update((state) => clearUnanswered(state, address));
+      return;
+    }
+    const now = this.now();
+    const u = this.file.update((state) => {
+      const prev = restart ? undefined : state.unanswered[address];
+      const count = (prev ? prev.count : 0) + 1;
+      state.unanswered[address] = { count, at: now, nextProbe: now + retryAfter(count) };
+      return true;
+    }).unanswered[address];
+    this.lastUnanswered = { address, error };
+    this.log(`Probe an ${address} ohne Ergebnis (${error.message}), ${u.count}. Mal; nächste `
+      + `${inTime(u.nextProbe - now)}, bis dahin nichts gefragt`);
+    throw this.closedError(address, u);
+  }
+
+  // Der Fehler, mit dem Anfragen scheitern, solange die Schranke nach einer Probe ohne Ergebnis
+  // zu ist: die Ursache, wenn dieses Fenster sie kennt, sonst der Hinweis auf ein anderes Fenster;
+  // kind wie die Ursache (die Erweiterung macht daraus Unavailable), sonst unreachable.
+  closedError(address, u) {
+    const own = this.lastUnanswered && this.lastUnanswered.address === address ? this.lastUnanswered.error : undefined;
+    const why = own ? own.message : `Probe an ${address} in einem anderen Fenster ohne Ergebnis`;
+    const err = new Error(`${why}; nächste Probe ${inTime(u.nextProbe - this.now())}, bis dahin nichts gefragt`);
+    err.kind = own && own.kind ? own.kind : 'unreachable';
+    err.unanswered = u.count;
+    return err;
   }
 
   // fn unter der Sperrdatei; wartet auf ein anderes Fenster, höchstens LOCK_STALE_MS (dann ist
@@ -346,9 +440,11 @@ class Gate {
     const invalid = outcome.invalid === 'all' ? new Set(sent.map((p) => p.hub)) : new Set(outcome.invalid || []);
     const ok = new Set(outcome.ok || []);
     if (!invalid.size && !ok.size) return;
+    // Ein Ergebnis — auch für eine laufende Probe, die danach wirft (401 des Proxys).
+    this.observed = true;
     const now = this.now();
     this.file.update((state) => {
-      let changed = false;
+      let changed = clearUnanswered(state, address);
       for (const p of sent) {
         const key = pairKey(address, p.hub, p.account);
         if (invalid.has(p.hub)) {
@@ -433,6 +529,6 @@ function pauseWarning(p, now) {
 }
 
 module.exports = {
-  PauseFile, Gate, pauseFilePath, stateDir, pauseAfter, pairKey, pauseWarning, inTime,
-  WINDOW_MS, JAIL_LIMIT, RESERVE, SCHEDULE_MIN, LOCK_STALE_MS,
+  PauseFile, Gate, pauseFilePath, stateDir, pauseAfter, retryAfter, pairKey, pauseWarning, inTime,
+  WINDOW_MS, JAIL_LIMIT, RESERVE, SCHEDULE_MIN, RETRY_S, LOCK_STALE_MS,
 };

@@ -485,6 +485,46 @@ test('Schranke: Start mit ungültigem Paar — genau eine Anfrage, Dateisystem U
   }
 });
 
+// Der kritische Befund des Reviews zu Task 025: Scheitert die Probe an der Verbindung (Node oder
+// Proxy beim Start nicht erreichbar), bleibt die Schranke zu — keine Anfrage mit ungeprüften
+// Paaren, auch nicht, wenn der Node gleich darauf mit ungültigem Paar zurück ist; neu geprobt
+// wird mit wachsendem Abstand (Zeitfolge in pause.test.js), nicht bei jedem changes.
+test('Schranke: Node beim Start nicht erreichbar — eine Probe, nichts weiter, Dateisystem Unavailable', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: REMOTE, hubs: ['vm'], accounts: {} });
+  reply = () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); };
+  logs.length = 0;
+  try {
+    start();
+    const uri = { authority: 'vm', path: '/test', toString: () => 'keph://vm/test' };
+    const e = await rejects(fsProvider.stat(uri), 'Unavailable');
+    assert.match(e.message, /nicht erreichbar \(ECONNREFUSED\); nächste Probe in \d+ s, bis dahin nichts gefragt/);
+    await settle();
+    assert.strictEqual(calls.length, 1, `${calls.length} Anfragen an den Node`);
+    assert.deepStrictEqual(hubsOf(calls[0].headers), ['vm']);
+    assert.strictEqual(statusItem.text, '$(warning) Keph: Node nicht erreichbar');
+    assert.ok(logs.some((l) => l.includes('ohne Ergebnis') && l.includes('1. Mal')), logs.join('\n'));
+    // Der Node ist zurück, das Paar ungültig: Innerhalb des Abstands geht nichts hinaus — weder
+    // changes noch das Dateisystem noch der Start des MCP-Servers.
+    reply = proxyNode([]);
+    await fsProvider.pollChanges();
+    await rejects(fsProvider.readDirectory(uri), 'Unavailable');
+    const [def] = provider.provideMcpServerDefinitions();
+    await assert.rejects(provider.resolveMcpServerDefinition(def), /nächste Probe/);
+    assert.strictEqual(calls.length, 1, 'eine Anfrage mit ungeprüftem Paar');
+    const text = fs.readFileSync(pauseFile, 'utf8');
+    const file = JSON.parse(text);
+    const [address] = Object.keys(file.unanswered);
+    assert.ok(address && address.startsWith(REMOTE), address);
+    assert.strictEqual(file.unanswered[address].count, 1);
+    assert.deepStrictEqual(file.pairs, {});
+    assert.ok(!text.includes(TOKEN_A) && !logs.join('\n').includes(TOKEN_A));
+  } finally {
+    reply = null;
+  }
+});
+
 // Zwei Hubs, einer ungültig: Nach der Probe geht nur das gültige Paar mit; Aufrufe für den
 // anderen Hub scheitern ohne Anfrage, der MCP-Server bekommt nur das gültige Paar.
 test('Pause je Paar: zwei Hubs, einer ungültig — nur das gültige Paar, der andere ohne Anfrage', async () => {

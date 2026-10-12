@@ -328,7 +328,8 @@ class Node {
     return this.request('whoami', {}, { probe: true, hubs: pairs.map((p) => p.hub) });
   }
 
-  // Die Schranke: An eine entfernte Adresse erst nach der Probe; lokal nichts.
+  // Die Schranke: An eine entfernte Adresse erst nach der Probe; lokal nichts. Wirft, solange
+  // eine Probe ohne Ergebnis die Schranke zu hält (pause.js) — dann startet der Server nicht.
   async ready() {
     const t = nodeTarget();
     if (!t.remote) return;
@@ -380,9 +381,11 @@ class Node {
   //
   // An eine entfernte Adresse (Task 025): erst die Probe (Schranke), dann ohne die pausierten
   // Paare; betrifft die Anfrage einen pausierten Hub (opts.hub), scheitert sie ohne Anfrage
-  // (kind paused); bleibt kein Paar, geht nichts hinaus. Die Antwort wird beobachtet: eine 401
-  // des Proxys heißt alle geschickten Paare ungültig, whoami sagt es je Hub (rules.whoamiOutcome).
-  // opts.probe ist die Probe selbst (an der Schranke vorbei, Paare opts.hubs).
+  // (kind paused); bleibt kein Paar, geht nichts hinaus. Blieb die Probe ohne Ergebnis (keine
+  // Verbindung, 5xx des Proxys), wirft ensure mit deren kind, und nichts geht hinaus, bis die
+  // nächste Probe fällig ist. Die Antwort wird beobachtet: eine 401 des Proxys heißt alle
+  // geschickten Paare ungültig (ein Ergebnis, auch für die Probe), whoami sagt es je Hub
+  // (rules.whoamiOutcome). opts.probe ist die Probe selbst (an der Schranke vorbei, Paare opts.hubs).
   async request(tool, args, opts = {}) {
     const target = nodeTarget();
     const url = target.endpoint;

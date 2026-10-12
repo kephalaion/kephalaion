@@ -362,8 +362,12 @@ Ausführlich: [`konzept.md`](konzept.md).
   verbinden“ — sofort, zählt ins **budget**, wartet nicht darauf), sonst für ein **paused pair**
   nach wachsender Pause (1, 2, 4, 8, 16, 30 min, danach alle 30 min) und nur, wenn das Budget es
   erlaubt. Zur selben Zeit probt nur ein Fenster des Rechners (Sperrdatei neben der **pause
-  file**, nach 30 s verwaist); die anderen übernehmen das Ergebnis aus der Datei. Lokal keine
-  Probe. Modul `vscode/pause.js`.
+  file**, nach 30 s verwaist); die anderen übernehmen das Ergebnis aus der Datei. Eine **Probe
+  ohne Ergebnis** (keine Verbindung, 5xx des Proxys, Abbruch) öffnet die Schranke nicht: Die
+  wartenden Anfragen scheitern mit der Ursache, und die Adresse wird mit wachsendem Abstand neu
+  geprobt — 5, 10, 30 s, dann alle 60 s, geteilt über die Pausendatei; ein geändertes Paar und
+  „Neu verbinden“ proben sofort. Sie ist kein Fehlversuch; eine 401 des Proxys dagegen ist ein
+  Ergebnis. Lokal keine Probe. Modul `vscode/pause.js`.
 - **paused pair** (pausiertes Paar, Task 025) — ein Header-Paar (Hub, Account) der Erweiterung an
   einer entfernten Adresse, das als ungültig erkannt ist: Es geht nicht mehr mit — weder in
   Anfragen der Erweiterung noch beim Start des MCP-Servers für Copilot —, bis eine **probe** es
@@ -390,14 +394,15 @@ Ausführlich: [`konzept.md`](konzept.md).
   `~/.local/state/kephalaion/`, [`konzept.md`](konzept.md), „Orte nach XDG“), unabhängig von
   Profil, Ausgabe (Insiders) und Fenster — nicht `globalStorageUri`, das daran hängt. Je **paused
   pair** Adresse des Nodes, Hub, Account, die Kennung der Token-Datei (Größe und Zeit, ohne
-  Inhalt), Zahl der Fehlversuche und Zeit der nächsten Probe; je Adresse das Budget. Kein Token
-  und kein Hash. Atomar geschrieben (neue Datei, `rename`, `0600`); vor jeder Anfrage übernimmt
-  ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); ist sie kaputt oder fehlt sie,
-  gelten Schranke und Sperrdatei trotzdem. Nach einer gültigen Antwort ist die Pause des Paars
-  weg, die Zeiten im Budget bleiben, bis sie 10 min alt sind. Grenze: ein Stand je Benutzer und
-  Betriebssystem, auf dem die Token-Dateien liegen — Fenster unter Windows und in der WSL
-  desselben Rechners teilen ihn nicht (dieselbe Adresse nach außen), haben aber ohnehin eigene
-  Token-Dateien.
+  Inhalt), Zahl der Fehlversuche und Zeit der nächsten Probe; je Adresse das Budget und der
+  Abstand nach **Proben ohne Ergebnis** (`unanswered`: Zahl, Zeit der letzten und der nächsten).
+  Kein Token und kein Hash. Atomar geschrieben (neue Datei, `rename`, `0600`); vor jeder Anfrage
+  übernimmt ein Fenster den Stand, billig (nur, wenn sie sich geändert hat); ist sie kaputt oder
+  fehlt sie, gelten Schranke und Sperrdatei trotzdem. Nach einer gültigen Antwort ist die Pause
+  des Paars weg, die Zeiten im Budget bleiben, bis sie 10 min alt sind. Grenze: ein Stand je
+  Benutzer und Betriebssystem, auf dem die Token-Dateien liegen — Fenster unter Windows und in
+  der WSL desselben Rechners teilen ihn nicht (dieselbe Adresse nach außen), haben aber ohnehin
+  eigene Token-Dateien.
 
 ## Daten
 
