@@ -129,6 +129,10 @@ func (f *acctHub) Rename(context.Context, contract.RenameRequest) (contract.Writ
 	return contract.WriteResponse{}, errors.New("nicht in der Attrappe")
 }
 
+func (f *acctHub) Fetch(context.Context, contract.FetchRequest) (contract.FetchResponse, error) {
+	return contract.FetchResponse{}, errors.New("nicht in der Attrappe")
+}
+
 // set ändert refuse und lost unter der Sperre.
 func (f *acctHub) set(refuse, lost bool) {
 	f.mu.Lock()

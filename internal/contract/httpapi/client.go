@@ -152,6 +152,16 @@ func (c *Client) Rename(ctx context.Context, req contract.RenameRequest) (contra
 	return c.write(ctx, OpRename, req.Version, req.Auth, req)
 }
 
+// Fetch lässt den Hub holen, genau einmal; Ausgang wie bei Rotate. Der Hub
+// begrenzt das Holen auf weniger als ShortTimeout.
+func (c *Client) Fetch(ctx context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
+	var resp contract.FetchResponse
+	if err := c.call(ctx, OpFetch, req.Version, req.Auth, req, &resp, false, c.ShortTimeout); err != nil {
+		return contract.FetchResponse{}, err
+	}
+	return resp, nil
+}
+
 // checkUTF8 lehnt einen Namen oder Inhalt ab, der kein gültiges UTF-8 ist:
 // encoding/json ersetzte die Bytes still durch U+FFFD, der Hub schriebe
 // einen anderen Namen oder Inhalt als gemeint. Die Antwort ist dieselbe wie

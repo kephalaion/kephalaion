@@ -447,7 +447,7 @@ func newHubHandler(st hubstore.Store, viewer gui.Viewer) http.Handler {
 	}
 	mux.HandleFunc(hubPath, short)
 	mux.HandleFunc(hubPath+"/{$}", short)
-	mux.Handle(hubPath+"/", http.StripPrefix(hubPath, httpapi.NewHandler(replication.New(st))))
+	mux.Handle(hubPath+"/", http.StripPrefix(hubPath, httpapi.NewHandler(replication.New(st).WithSource(newSourceClient()))))
 	oldAddress := func(w http.ResponseWriter, r *http.Request) {
 		hubText(w, r, http.StatusNotFound, "unbekannter Pfad "+r.URL.Path+": der Vertrag liegt unter "+hubPath+
 			"/v1/… — fehlt "+hubPath+" am Ende der Adresse des Hub-Eintrags?")

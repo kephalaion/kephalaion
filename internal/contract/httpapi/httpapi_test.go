@@ -55,6 +55,15 @@ func (e *echoHub) Rename(_ context.Context, req contract.RenameRequest) (contrac
 	return e.written(req.Auth, req.Version, req)
 }
 
+func (e *echoHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
+	e.auth, e.last = req.Auth, req
+	if e.err != nil {
+		return contract.FetchResponse{}, e.err
+	}
+	return contract.FetchResponse{HubID: "01H", Version: req.Version, Collection: req.Collection,
+		Status: contract.FetchFetched, Tag: "v1", Revision: 7, Created: 1}, nil
+}
+
 func (e *echoHub) Whoami(_ context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
 	e.auth = req.Auth
 	if e.err != nil {
@@ -189,6 +198,11 @@ func TestRetries(t *testing.T) {
 	_, err = c.Rotate(context.Background(), contract.RotateRequest{Version: 1, Auth: auth})
 	if calls.Load() != 1 || !errors.Is(err, contract.ErrOutcomeUnknown) {
 		t.Errorf("rotate: %d Aufrufe, %v", calls.Load(), err)
+	}
+	calls.Store(0)
+	_, fetchErr := c.Fetch(context.Background(), contract.FetchRequest{Version: 1, Auth: auth})
+	if calls.Load() != 1 || !errors.Is(fetchErr, contract.ErrOutcomeUnknown) {
+		t.Errorf("fetch: %d Aufrufe, %v", calls.Load(), fetchErr)
 	}
 	if strings.Contains(err.Error(), "geheim") {
 		t.Errorf("Fehler nennt das Token: %v", err)
@@ -329,5 +343,38 @@ func TestNoRedirect(t *testing.T) {
 	}
 	if n := calls.Load(); n != 2 {
 		t.Errorf("%d Anfragen, erwartet 2 (keine Wiederholung)", n)
+	}
+}
+
+// fetch über HTTP: /v1/fetch, Anmeldung in Headern, Antwort und die Codes
+// der Quelle samt Status unter 500.
+func TestFetchOverHTTP(t *testing.T) {
+	hub := &echoHub{}
+	srv := httptest.NewServer(NewHandler(hub))
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	req := contract.FetchRequest{Version: 1, Auth: auth, Account: contract.AccountAuth{Account: "bob", Token: "t"},
+		Collection: "k-playbook"}
+	resp, err := c.Fetch(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != contract.FetchFetched || resp.Tag != "v1" || resp.Collection != "k-playbook" || hub.auth != auth {
+		t.Errorf("Antwort %+v, Anmeldung %+v", resp, hub.auth)
+	}
+	if got, ok := hub.last.(contract.FetchRequest); !ok || got.Account.Account != "bob" || got.Collection != "k-playbook" {
+		t.Errorf("Anfrage am Hub: %+v", hub.last)
+	}
+	for code, status := range map[contract.Code]int{contract.CodeNoSource: 409, contract.CodeSourceMissing: 409,
+		contract.CodeSourceInvalid: 422, contract.CodeSourceUnreachable: 424} {
+		if Status(code) != status {
+			t.Errorf("Status von %s: %d", code, Status(code))
+		}
+		hub.err = &contract.Error{Code: code, Message: "m"}
+		_, err := c.Fetch(context.Background(), req)
+		var ce *contract.Error
+		if !errors.As(err, &ce) || ce.Code != code || errors.Is(err, contract.ErrOutcomeUnknown) {
+			t.Errorf("%s: %v", code, err)
+		}
 	}
 }

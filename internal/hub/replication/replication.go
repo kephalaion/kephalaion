@@ -34,13 +34,24 @@ var dummyHash = ident.HashToken("keph_unbekannter-node")
 type Hub struct {
 	st          store.Store
 	maxPageSize int
+	// src holt Releases für fetch.
+	src *source.Client
 }
 
 var _ contract.Hub = (*Hub)(nil)
 
 // New liefert die Seite des Hubs über st. Der Store bleibt beim Aufrufer.
+// Holen (fetch) geht erst mit WithSource; ohne antwortet fetch
+// source_unreachable — so fragt kein Test aus Versehen GitHub.
 func New(st store.Store) *Hub {
 	return &Hub{st: st, maxPageSize: MaxPageSize}
+}
+
+// WithSource setzt den Client, mit dem fetch Releases holt — cmd/kephalaion
+// mit seiner Version, Tests mit einem nachgespielten GitHub.
+func (h *Hub) WithSource(c *source.Client) *Hub {
+	h.src = c
+	return h
 }
 
 // access sind die Collections, die ein Node abgleichen darf, und die

@@ -24,7 +24,8 @@ import (
 const HeaderNode = "X-Keph-Node"
 
 // Die Vorgänge, je ein Pfad /v<Fassung>/<Vorgang>. OpCreate, OpWrite,
-// OpDelete und OpRename sind die Schreibvorgänge.
+// OpDelete und OpRename sind die Schreibvorgänge; OpFetch wird wie sie nie
+// wiederholt.
 const (
 	OpWhoami = "whoami"
 	OpRotate = "rotate"
@@ -33,9 +34,13 @@ const (
 	OpWrite  = "write"
 	OpDelete = "delete"
 	OpRename = "rename"
+	// OpFetch holt das neueste Release einer Collection mit Quelle; ein
+	// Schreibvorgang mit kleinem Body.
+	OpFetch = "fetch"
 )
 
-// MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate und sync:
+// MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate, sync und
+// fetch:
 // 1 MiB. Antworten sind nicht begrenzt — eine Seite des Abgleichs kann eine
 // große Revision ganz tragen.
 const MaxBodyBytes = 1 << 20
@@ -50,7 +55,7 @@ const MaxWriteBodyBytes = 6*contract.MaxDocumentBytes + MaxBodyBytes
 // wenn der Hub den Vorgang nicht kennt.
 func bodyLimit(op string) (limit int64, ok bool) {
 	switch op {
-	case OpWhoami, OpRotate, OpSync:
+	case OpWhoami, OpRotate, OpSync, OpFetch:
 		return MaxBodyBytes, true
 	case OpCreate, OpWrite, OpDelete, OpRename:
 		return MaxWriteBodyBytes, true

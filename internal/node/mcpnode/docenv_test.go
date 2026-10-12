@@ -51,6 +51,21 @@ type docHub struct {
 	// answerID ist, wenn gesetzt, die hub_id in der Antwort eines
 	// Schreibvorgangs — wie ein Hub, der inzwischen ein anderer ist.
 	answerID string
+	// fetched sind die Anfragen an fetch; fetchErr lässt fetch scheitern,
+	// sonst antwortet es mit fetchResp.
+	fetched   []contract.FetchRequest
+	fetchErr  error
+	fetchResp contract.FetchResponse
+}
+
+func (f *docHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetched = append(f.fetched, req)
+	if f.fetchErr != nil {
+		return contract.FetchResponse{}, f.fetchErr
+	}
+	return f.fetchResp, nil
 }
 
 func newDocHub(allowed ...string) *docHub {

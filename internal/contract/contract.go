@@ -61,6 +61,12 @@ type Hub interface {
 	// Rename gibt einem Dokument oder allen Dokumenten unter einem
 	// Verzeichnis einen neuen Namen; die id bleibt.
 	Rename(ctx context.Context, req RenameRequest) (WriteResponse, error)
+
+	// Fetch lässt den Hub das neueste Release der Quelle einer Collection
+	// nach defaults/ holen (Task 031). Ein Schreibvorgang wie die übrigen:
+	// nie wiederholt, unklarer Ausgang als ErrOutcomeUnknown. Der Aufrufer
+	// darf erneut anstoßen — dann antwortet der Hub FetchCurrent.
+	Fetch(ctx context.Context, req FetchRequest) (FetchResponse, error)
 }
 
 // NodeAuth ist die Anmeldung des Nodes am Hub: sein Name dort und sein Token.

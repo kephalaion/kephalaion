@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/hub/source/sourcetest"
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
+	nodestore "github.com/kephalaion/kephalaion/internal/node/store"
 	"github.com/kephalaion/kephalaion/internal/upgrade"
 )
 
@@ -162,4 +164,58 @@ func TestHubCollectionFetch(t *testing.T) {
 	if _, loads := gh.Calls(); loads != 3 {
 		t.Errorf("Archiv %d-mal geladen", loads)
 	}
+}
+
+// Task 031, Etappe 4: der Durchlauf über einen Node, local und http — ein
+// Account lässt über fetch_release holen, der angestoßene Abgleich bringt
+// defaults/ in die Replica, read liefert es; ein zweites Holen ist schon
+// aktuell. Holen gegen ein nachgespieltes GitHub.
+func TestFetchReleaseThroughNode(t *testing.T) {
+	gh := withGitHub(t)
+	e := newCommEnv(t)
+	e.run(t, "hub", "collection", "add", "k-playbook").want(t, 0, "Noch nichts geholt")
+	hs := hubStore(t, e.cfg)
+	ns := nodeStore(t, e.cfg)
+	cfg, _, err := config.Load(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kicks []string
+	link := nodeHubLink(cfg, hs, func(h nodestore.Hub) { kicks = append(kicks, h.Name) }, nil)
+	srv := httptest.NewServer(mcpnode.NewHandler(ns, "test", func() upgrade.Report { return upgrade.Report{} }, link))
+	t.Cleanup(srv.Close)
+	endpoint := srv.URL + mcpnode.Path
+	e.run(t, "node", "sync").want(t, 0)
+
+	gh.Release("v0.13.0", sourcetest.Archive(map[string]string{"README.md": "# k-playbook\n", "rules/a.md": "a\n"}))
+	for _, alias := range []string{"eigen", "fern"} {
+		pairs := map[string][2]string{alias: {"alice", e.tokens["alice"]}}
+		var out mcpnode.FetchReleaseOutput
+		_, text := mcpTool(t, endpoint, pairs, "fetch_release", mcpnode.FetchReleaseInput{Collection: alias + ":k-playbook"}, &out)
+		want := "fetched"
+		if alias == "fern" {
+			want = "current"
+		}
+		if out.Error != nil || out.Status != want || out.Tag != "v0.13.0" {
+			t.Fatalf("%s: %+v %s", alias, out, text)
+		}
+		if len(kicks) == 0 || kicks[len(kicks)-1] != alias {
+			t.Errorf("%s: Anstöße %v", alias, kicks)
+		}
+		e.run(t, "node", "sync", alias).want(t, 0)
+		var doc mcpnode.ReadOutput
+		mcpTool(t, endpoint, pairs, "read", mcpnode.ReadInput{Collection: alias + ":k-playbook", Name: "defaults/README.md"}, &doc)
+		if contentOfRead(doc) != "# k-playbook\n" || doc.Created == nil || doc.Created.By != "system" {
+			t.Errorf("%s: read %+v", alias, doc)
+		}
+		var none mcpnode.FetchReleaseOutput
+		_, text = mcpTool(t, endpoint, pairs, "fetch_release", mcpnode.FetchReleaseInput{Collection: alias + ":team-x"}, &none)
+		if none.Error == nil || none.Error.Code != "no_source" {
+			t.Errorf("%s: team-x %+v %s", alias, none, text)
+		}
+	}
+	if _, loads := gh.Calls(); loads != 1 {
+		t.Errorf("Archiv %d-mal geladen", loads)
+	}
+	e.run(t, "hub", "collection", "show", "k-playbook").want(t, 0, "geholt:       v0.13.0")
 }

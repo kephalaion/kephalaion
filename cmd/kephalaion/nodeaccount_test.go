@@ -60,7 +60,7 @@ func newCommEnv(t *testing.T) *commEnv {
 	nodeTok := tokenFrom(t, r.out)
 
 	hs := hubStore(t, e.cfg)
-	srv := httptest.NewServer(httpapi.NewHandler(replication.New(hs)))
+	srv := httptest.NewServer(httpapi.NewHandler(replication.New(hs).WithSource(newSourceClient())))
 	t.Cleanup(srv.Close)
 	e.url = srv.URL
 	runIn(t, nodeTok, "node", "hub", "add", "fern", "--node", "laptop-http", "--transport", "http",

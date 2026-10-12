@@ -137,6 +137,7 @@ func (n *Node) server(version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "write", Description: writeDescription}, n.replace)
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete", Description: deleteDescription}, n.remove)
 	mcp.AddTool(srv, &mcp.Tool{Name: "rename", Description: renameDescription}, n.rename)
+	mcp.AddTool(srv, &mcp.Tool{Name: "fetch_release", Description: fetchReleaseDescription}, n.fetchRelease)
 	return srv
 }
 

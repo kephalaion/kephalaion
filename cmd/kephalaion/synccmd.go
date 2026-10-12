@@ -148,7 +148,7 @@ func certPool(h nodestore.Hub) (*x509.CertPool, error) {
 
 // newLocalHub liefert die Seite des Hubs über dem eigenen Store; Tests
 // ersetzen sie, etwa um einen Fehler nach dem Commit herbeizuführen.
-var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(st) }
+var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(st).WithSource(newSourceClient()) }
 
 // localHub ist der Hub über local. Ein Fehler von Rotate oder einem
 // Schreibvorgang, der kein Fehler des Vertrags ist (Datenbank, Abbruch),
@@ -189,6 +189,10 @@ func (l localHub) Delete(ctx context.Context, req contract.DeleteRequest) (contr
 
 func (l localHub) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
 	return outcome(l.hub.Rename(ctx, req))
+}
+
+func (l localHub) Fetch(ctx context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
+	return outcome(l.hub.Fetch(ctx, req))
 }
 
 // outcome hüllt einen Fehler, der kein Fehler des Vertrags ist, in

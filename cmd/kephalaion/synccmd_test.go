@@ -276,6 +276,13 @@ func (f failWriteAfterCommit) Rename(ctx context.Context, req contract.RenameReq
 	return contract.WriteResponse{}, errDBGone
 }
 
+func (f failWriteAfterCommit) Fetch(ctx context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
+	if _, err := f.Hub.Fetch(ctx, req); err != nil {
+		return contract.FetchResponse{}, err
+	}
+	return contract.FetchResponse{}, errDBGone
+}
+
 // Über local ist ein Fehler eines Schreibvorgangs, der kein Fehler des
 // Vertrags ist, ein unklarer Ausgang — der Hub kann geschrieben haben, wie
 // über HTTP bei 500. Ein Fehler des Vertrags bleibt eindeutig.
