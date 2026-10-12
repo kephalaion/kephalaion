@@ -1438,7 +1438,7 @@ Projekte dieses Rechners.
 | `~/.config/kephalaion/` (`XDG_CONFIG_HOME`) | Konfiguration, klein, lesbar | `config.yaml`, `tokens/<hub>/<account>.token` je Account (`0600`) |
 | `~/.local/share/kephalaion/` (`XDG_DATA_HOME`) | Daten, die bleiben müssen | `hub.db`, `node.db` |
 | `~/.local/share/kephalaion/replicas/` | wiederherstellbar durch Abgleich | `<alias>.db` je Hub-Eintrag |
-| `~/.local/state/kephalaion/` (`XDG_STATE_HOME`) | Zustand, Logs | `serve.log` des LaunchAgent (macOS); unter Linux geht das Log ins Journal. `vscode-pause.json` der Erweiterung für VS Code (Task 025): Pause und Budget für alle Fenster des Rechners an einer entfernten `nodeUrl`, kein Token ([`begriffe.md`](begriffe.md), „pause file“) |
+| `~/.local/state/kephalaion/` (`XDG_STATE_HOME`) | Zustand, Logs | `serve.log` des LaunchAgent (macOS); unter Linux geht das Log ins Journal. `vscode-pause.json` der Erweiterung für VS Code (Task 025): Pause und Budget für alle Fenster des Rechners an einer entfernten `nodeUrl`, kein Token ([`begriffe.md`](begriffe.md), „pause file“); lässt sich hier nichts anlegen, liegt sie am Ersatzort `os.tmpdir()/kephalaion-<uid>/`, bis es wieder geht |
 
 - **Token-Dateien — festgehalten am 2026-09-26:** Die Tokens der Accounts liegen neben der
   config, **eine Datei je Account und Hub**: `~/.config/kephalaion/tokens/<hub>/<account>.token`,

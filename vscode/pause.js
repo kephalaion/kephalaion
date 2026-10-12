@@ -16,11 +16,17 @@
 // - Ein Stand für alle Fenster dieses Rechners: die Pausendatei unter XDG_STATE_HOME, atomar
 //   geschrieben, vor jeder Anfrage billig neu gelesen (nur, wenn sie sich geändert hat); proben
 //   darf zur selben Zeit nur ein Fenster (Sperrdatei mit O_EXCL, nach LOCK_STALE_MS verwaist).
-//   Fehlt sie oder ist sie kaputt: leer gelesen, die nächste Probe schreibt sie neu. Lässt sie
-//   sich nicht schreiben (Verzeichnis ohne Schreibrecht, Platte voll): kein Ergebnis einer Probe
-//   und kein Fehler für die Anfrage — das Fenster hält denselben Stand im Speicher und arbeitet
-//   damit weiter, bis das Schreiben wieder gelingt (je einmal im Log); ohne Sperrdatei probt
-//   jedes Fenster für sich. Grenze: ohne schreibbare Datei zählt der Stand nur je Fenster.
+//   Fehlt sie oder ist sie kaputt: leer gelesen, die nächste Probe schreibt sie neu. Lässt sich
+//   dort nichts anlegen (Verzeichnis ohne Schreibrecht, Platte voll, schreibgeschützt
+//   eingehängt): Pausen- und Sperrdatei zusammen am Ersatzort — ein Verzeichnis je Benutzer
+//   unter os.tmpdir() —, bis der erste Ort wieder schreibbar ist (jedes Schreiben und Sperren
+//   versucht ihn zuerst; gelingt es, zurück, mit dem Stand). Damit alle Fenster denselben Stand
+//   sehen, auch eines, das am ersten Ort noch schreiben kann, liest jedes beide Orte und nimmt
+//   den jüngeren Stand (writtenAt in der Datei), und die Sperre wird an beiden Orten geprüft.
+//   Erst wenn auch der Ersatzort nicht geht: kein Ergebnis einer Probe und kein Fehler für die
+//   Anfrage — das Fenster hält denselben Stand im Speicher und arbeitet damit weiter, bis das
+//   Schreiben wieder gelingt; ohne Sperrdatei probt es für sich. Je Wechsel einmal im Log.
+//   Grenze: Sind beide Orte unschreibbar, zählt der Stand nur je Fenster.
 // - Probe ohne Ergebnis (keine Verbindung, 5xx des Proxys, Abbruch): Die Schranke bleibt zu —
 //   keine Anfrage mit ungeprüften Paaren, die wartenden scheitern —, und die Adresse wird mit
 //   wachsendem Abstand (RETRY_S, 5 s bis 60 s) neu geprobt, geteilt über die Pausendatei; ein
@@ -67,6 +73,26 @@ function pauseFilePath() {
   return path.join(stateDir(), 'vscode-pause.json');
 }
 
+// Der Ersatzort, wenn sich unter XDG_STATE_HOME nichts anlegen lässt: ein Verzeichnis je Benutzer
+// unter os.tmpdir() (0700; unter Windows ist %TEMP% ohnehin je Benutzer), damit alle Fenster
+// desselben Benutzers denselben wählen. uid, sonst der Benutzername.
+function fallbackPauseFilePath() {
+  return path.join(os.tmpdir(), `kephalaion-${userTag()}`, 'vscode-pause.json');
+}
+
+function userTag() {
+  if (typeof process.getuid === 'function') return String(process.getuid());
+  try {
+    return os.userInfo().username.replace(/[^\w.-]/g, '_');
+  } catch {
+    return 'user';
+  }
+}
+
+function lockPath(file) {
+  return `${file}.lock`;
+}
+
 // Die Pause nach dem n-ten Fehlversuch eines Paars, in ms.
 function pauseAfter(failures) {
   const i = Math.min(Math.max(failures, 1), SCHEDULE_MIN.length) - 1;
@@ -84,16 +110,18 @@ function pairKey(address, hub, account) {
 }
 
 // unanswered: je Adresse die Proben ohne Ergebnis — Zahl, Zeit der letzten, Zeit der nächsten.
-// Ältere Fassungen der Erweiterung kennen den Schlüssel nicht und lassen ihn beim Schreiben
-// fallen; das kostet dann nur eine Probe mehr, deshalb bleibt die Version der Datei.
+// writtenAt: wann der Stand geschrieben wurde — liegt an beiden Orten eine Datei, gilt der
+// jüngere. Ältere Fassungen der Erweiterung kennen die Schlüssel nicht und lassen sie beim
+// Schreiben fallen; das kostet dann nur eine Probe mehr, deshalb bleibt die Version der Datei.
 function emptyState() {
-  return { version: FILE_VERSION, pairs: {}, budget: {}, unanswered: {} };
+  return { version: FILE_VERSION, writtenAt: 0, pairs: {}, budget: {}, unanswered: {} };
 }
 
 // Eine gelesene Datei in die Form bringen; alles Unbrauchbare fällt weg.
 function normalize(raw) {
   const state = emptyState();
   if (!raw || typeof raw !== 'object' || raw.version !== FILE_VERSION) return state;
+  if (Number.isFinite(raw.writtenAt)) state.writtenAt = raw.writtenAt;
   for (const [k, e] of Object.entries(raw.pairs || {})) {
     if (!e || typeof e !== 'object') continue;
     const { address, hub, account, token, failures, failedAt, nextProbe } = e;
@@ -150,60 +178,87 @@ function budgetFreeAt(state, address, now) {
   return times[times.length - RESERVE] + WINDOW_MS;
 }
 
-// Die Pausendatei: lesen, wenn sie sich geändert hat; Lesen-Ändern-Schreiben atomar; die
-// Sperrdatei daneben. fsImpl und now sind ersetzbar; log bekommt je einmal, wenn die Datei
-// oder die Sperrdatei nicht (mehr) schreibbar ist und wenn es wieder geht.
+// Die Pausendatei an zwei Orten: file (unter XDG_STATE_HOME) und fallback (unter os.tmpdir(),
+// null: keiner). Gelesen werden beide, der jüngere Stand gilt; geschrieben und gesperrt wird am
+// ersten Ort, der es zulässt — der erste wird jedes Mal zuerst versucht, so kehrt ein Fenster
+// von selbst zurück. Lesen-Ändern-Schreiben atomar; die Sperrdatei neben der Datei des Orts.
+// fsImpl und now sind ersetzbar; log bekommt je einmal einen Wechsel des Orts, wenn kein Ort
+// (mehr) schreibbar ist oder keine Sperrdatei anlegbar, und wenn es wieder geht.
 class PauseFile {
-  constructor(file, { now = Date.now, fsImpl = fs, log = () => {} } = {}) {
+  constructor(file, { fallback = fallbackPauseFilePath(), now = Date.now, fsImpl = fs, log = () => {} } = {}) {
+    this.primary = file;
+    this.fallback = fallback && fallback !== file ? fallback : null;
+    // file: der Ort, an dem dieses Fenster zuletzt schreiben oder sperren konnte.
     this.file = file;
-    this.lockFile = `${file}.lock`;
+    // lockFile: die zuletzt genommene Sperrdatei (unlock löscht sie).
+    this.lockFile = lockPath(file);
     this.now = now;
     this.fs = fsImpl;
     this.log = log;
-    this._stamp = undefined;
+    // Je Ort die Kennung der gelesenen Datei und ihr Stand.
+    this._stamps = [];
+    this._read = [];
     this._state = emptyState();
-    // unwritable: Das letzte Schreiben scheiterte — der Stand gilt im Speicher, bis es wieder
-    // gelingt; bis dahin wird die Datei nicht gelesen (sie trüge den Stand nicht).
+    // unwritable: Das letzte Schreiben scheiterte an beiden Orten — der Stand gilt im Speicher,
+    // bis es wieder gelingt; bis dahin wird keine Datei gelesen (sie trüge den Stand nicht).
     this.unwritable = false;
     this._lockUnwritable = false;
   }
 
-  ensureDir() {
-    try {
-      this.fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    } catch {
-      // Ein Fehler zeigt sich beim Schreiben.
+  // Die Orte in der Reihenfolge, in der sie versucht werden.
+  places() {
+    return this.fallback ? [this.primary, this.fallback] : [this.primary];
+  }
+
+  // Das Verzeichnis des Orts anlegen (0700) und prüfen, dass es dem Benutzer gehört: Unter
+  // os.tmpdir() könnte ein anderer es vorher angelegt haben — dann wäre es kein Ort für uns
+  // (seine Sperre, seine Pausen). Wirft; der Ort gilt dann als nicht schreibbar.
+  ensureDir(file) {
+    const dir = path.dirname(file);
+    this.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (typeof process.getuid === 'function') {
+      const { uid } = this.fs.statSync(dir);
+      if (uid !== process.getuid()) {
+        throw Object.assign(new Error(`${dir} gehört einem anderen Benutzer (uid ${uid})`), { code: 'EACCES' });
+      }
     }
   }
 
-  // Der Stand aus der Datei, neu gelesen nur, wenn Inode, Größe oder Zeit anders sind. Fehlt
-  // sie oder ist sie kaputt: leer — Schranke und Sperrdatei gelten trotzdem. Solange sie sich
-  // nicht schreiben lässt: der Stand im Speicher.
+  // Der Stand: aus beiden Orten der jüngere (writtenAt; gleich alt: der erste Ort), je Ort neu
+  // gelesen nur, wenn Inode, Größe oder Zeit anders sind. Fehlt eine Datei oder ist sie kaputt,
+  // zählt sie nicht — Schranke und Sperrdatei gelten trotzdem. Solange sich an keinem Ort
+  // schreiben lässt: der Stand im Speicher.
   load() {
     if (this.unwritable) return this._state;
-    let st;
-    try {
-      st = this.fs.statSync(this.file);
-    } catch {
-      this._stamp = undefined;
-      this._state = emptyState();
-      return this._state;
-    }
-    const stamp = `${st.ino}:${st.size}:${st.mtimeMs}`;
-    if (stamp === this._stamp) return this._state;
-    try {
-      this._state = normalize(JSON.parse(this.fs.readFileSync(this.file, 'utf8')));
-    } catch {
-      this._state = emptyState();
-    }
-    this._stamp = stamp;
+    let changed = false;
+    this.places().forEach((file, i) => {
+      let st;
+      try {
+        st = this.fs.statSync(file);
+      } catch {
+        if (this._stamps[i] !== undefined || this._read[i] !== undefined) changed = true;
+        this._stamps[i] = undefined;
+        this._read[i] = undefined;
+        return;
+      }
+      const stamp = `${st.ino}:${st.size}:${st.mtimeMs}`;
+      if (stamp === this._stamps[i]) return;
+      try {
+        this._read[i] = normalize(JSON.parse(this.fs.readFileSync(file, 'utf8')));
+      } catch {
+        this._read[i] = undefined;
+      }
+      this._stamps[i] = stamp;
+      changed = true;
+    });
+    if (changed) this._state = newest(this._read);
     return this._state;
   }
 
   // Lesen-Ändern-Schreiben: fn ändert den frisch gelesenen Stand und sagt, ob sich etwas
   // geändert hat; nur dann wird bereinigt und atomar geschrieben. Liefert den Stand.
   update(fn) {
-    this._stamp = undefined;
+    this._stamps = [];
     const state = this.load();
     const changed = fn(state);
     if (changed) {
@@ -213,106 +268,165 @@ class PauseFile {
     return state;
   }
 
-  // Atomar: neue Datei, dann rename; 0600 — auch wenn kein Token darin steht. Scheitert das
-  // (EACCES, ENOSPC): kein Fehler nach oben — der Stand bleibt im Speicher (unwritable), das
-  // nächste Schreiben versucht die Datei erneut; je einmal im Log. Sagt, ob geschrieben wurde.
+  // Atomar: neue Datei, dann rename; 0600 — auch wenn kein Token darin steht. Erst am ersten
+  // Ort, scheitert das (EACCES, ENOSPC, EROFS) am Ersatzort — ein Wechsel kommt einmal ins Log,
+  // der Stand geht mit. Scheitert beides: kein Fehler nach oben — der Stand bleibt im Speicher
+  // (unwritable), das nächste Schreiben versucht beide Orte erneut; einmal im Log. Sagt, ob
+  // geschrieben wurde.
   write(state) {
-    this.ensureDir();
-    const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
-    this._stamp = undefined;
+    state.writtenAt = this.now();
+    this._stamps = [];
     this._state = state;
-    try {
-      this.fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-      this.fs.renameSync(tmp, this.file);
-    } catch (e) {
+    const failures = [];
+    for (const file of this.places()) {
+      const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
       try {
-        this.fs.unlinkSync(tmp);
-      } catch {
-        // nie entstanden
+        this.ensureDir(file);
+        this.fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+        this.fs.renameSync(tmp, file);
+      } catch (error) {
+        this.remove(tmp);
+        failures.push({ file, error });
+        continue;
       }
-      if (!this.unwritable) {
-        this.unwritable = true;
-        this.log(`Pausendatei ${this.file} nicht schreibbar (${e.message}): Pause, Budget und Abstand gelten `
-          + 'nur in diesem Fenster, bis das Schreiben wieder gelingt');
+      this.moveTo(file, failures[0]);
+      if (this.unwritable) {
+        this.unwritable = false;
+        this.log(`Pausendatei ${file} wieder schreibbar: ein Stand für alle Fenster`);
       }
-      return false;
+      return true;
     }
-    if (this.unwritable) {
-      this.unwritable = false;
-      this.log(`Pausendatei ${this.file} wieder schreibbar: ein Stand für alle Fenster`);
+    if (!this.unwritable) {
+      this.unwritable = true;
+      this.log(`Pausendatei ${describe(failures)} nicht schreibbar: Pause, Budget und Abstand gelten `
+        + 'nur in diesem Fenster, bis das Schreiben wieder gelingt');
     }
-    return true;
+    return false;
   }
 
-  // Die Sperrdatei nehmen: 'got' (genommen), 'busy' (ein anderes Fenster probt), 'none' (lässt
-  // sich nicht anlegen oder schreiben — dann ohne Sperre weiter, einmal im Log). Eine verwaiste
-  // wird ersetzt.
+  // Der Ort dieses Fensters wechselt; failure ist der Fehler am ersten Ort (keiner: dort liegt
+  // eine Sperrdatei, die sich nicht entfernen lässt). Einmal ins Log.
+  moveTo(file, failure) {
+    if (file === this.file) return;
+    const from = this.file;
+    this.file = file;
+    if (file === this.primary) {
+      this.log(`Pausendatei ${file} wieder schreibbar: zurück vom Ersatzort ${from}, mit dem Stand`);
+    } else {
+      const why = failure ? failure.error.message : 'eine Sperrdatei liegt dort und lässt sich nicht entfernen';
+      this.log(`Pausendatei ${from} nicht schreibbar (${why}): Pausen- und Sperrdatei am `
+        + `Ersatzort ${file}, bis der erste Ort wieder schreibbar ist`);
+    }
+  }
+
+  // Die Sperrdatei nehmen: 'got' (genommen), 'busy' (ein anderes Fenster probt — an welchem Ort
+  // auch immer), 'none' (an keinem Ort anlegbar oder schreibbar — dann ohne Sperre weiter, einmal
+  // im Log). Eine verwaiste wird ersetzt. Genommen wird sie am ersten Ort, der es zulässt; das
+  // ist dann auch der Ort der Pausendatei.
   tryLock() {
-    this.ensureDir();
+    const places = this.places();
     for (let attempt = 0; attempt < 3; attempt++) {
-      let fd;
-      try {
-        fd = this.fs.openSync(this.lockFile, 'wx', 0o600);
-      } catch (e) {
-        if (e.code !== 'EEXIST') return this.lockFailed(e);
-        const stale = this.lockStale();
-        if (stale === 'busy') return 'busy';
-        if (stale === 'stale') {
-          try {
-            this.fs.unlinkSync(this.lockFile);
-          } catch {
-            // schon weg
+      for (const file of places) {
+        const { status } = this.lockInfo(lockPath(file));
+        if (status === 'busy') return 'busy';
+        if (status === 'stale') this.remove(lockPath(file));
+      }
+      const failures = [];
+      let raced = false;
+      for (const [i, file] of places.entries()) {
+        const lock = lockPath(file);
+        let fd;
+        try {
+          this.ensureDir(file);
+          fd = this.fs.openSync(lock, 'wx', 0o600);
+        } catch (error) {
+          // EEXIST: ein anderes Fenster war eben schneller (oder die verwaiste ließ sich nicht
+          // entfernen) — der nächste Ort, danach noch einmal von vorn. Sonst ist der Ort nicht
+          // nutzbar: der nächste.
+          if (error.code === 'EEXIST') raced = true;
+          else failures.push({ file: lock, error });
+          continue;
+        }
+        let error;
+        try {
+          this.fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: this.now() }));
+        } catch (e) {
+          error = e;
+        } finally {
+          this.fs.closeSync(fd);
+        }
+        if (error) {
+          // Angelegt, aber leer (ENOSPC): nicht liegen lassen, andere hielten sie für verwaist.
+          this.remove(lock);
+          failures.push({ file: lock, error });
+          continue;
+        }
+        // Genommen. Hat ein Fenster am anderen Ort in der Lücke zwischen Prüfen und Anlegen auch
+        // eine genommen (nur, wenn Fenster an verschiedenen Orten sind)? Dann zurück und 'busy':
+        // Von zweien, die einander sehen, geben beide nach und versuchen es nach LOCK_POLL_MS
+        // neu; wer die andere nicht sah, war vor ihr da und behält seine.
+        for (const [j, other] of places.entries()) {
+          if (j !== i && this.lockInfo(lockPath(other)).status === 'busy') {
+            this.remove(lock);
+            return 'busy';
           }
         }
-        continue; // 'gone' oder 'stale': noch einmal anlegen
+        this.lockFile = lock;
+        this.moveTo(file, failures[0]);
+        if (this._lockUnwritable) {
+          this._lockUnwritable = false;
+          this.log(`Sperrdatei ${lock} wieder anlegbar: zur selben Zeit probt nur ein Fenster`);
+        }
+        return 'got';
       }
-      let error;
-      try {
-        this.fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: this.now() }));
-      } catch (e) {
-        error = e;
-      } finally {
-        this.fs.closeSync(fd);
-      }
-      if (error) {
-        // Angelegt, aber leer (ENOSPC): nicht liegen lassen, andere hielten sie für verwaist.
-        this.unlock();
-        return this.lockFailed(error);
-      }
-      if (this._lockUnwritable) {
-        this._lockUnwritable = false;
-        this.log(`Sperrdatei ${this.lockFile} wieder anlegbar: zur selben Zeit probt nur ein Fenster`);
-      }
-      return 'got';
+      if (!raced) return this.lockFailed(failures);
     }
     return 'busy';
   }
 
-  lockFailed(e) {
+  lockFailed(failures) {
     if (!this._lockUnwritable) {
       this._lockUnwritable = true;
-      this.log(`Sperrdatei ${this.lockFile} nicht anlegbar (${e.message}): dieses Fenster probt ohne Sperre`);
+      this.log(`Sperrdatei ${describe(failures)} nicht anlegbar: dieses Fenster probt ohne Sperre`);
     }
     return 'none';
   }
 
-  // 'busy', 'stale' (älter als LOCK_STALE_MS oder unlesbar) oder 'gone' (gerade freigegeben).
-  lockStale() {
+  // 'busy', 'stale' (älter als LOCK_STALE_MS oder unlesbar) oder 'gone' (keine).
+  lockInfo(lock) {
     try {
-      const { at } = JSON.parse(this.fs.readFileSync(this.lockFile, 'utf8'));
-      return Number.isFinite(at) && this.now() - at <= LOCK_STALE_MS ? 'busy' : 'stale';
+      const { at } = JSON.parse(this.fs.readFileSync(lock, 'utf8'));
+      return { status: Number.isFinite(at) && this.now() - at <= LOCK_STALE_MS ? 'busy' : 'stale' };
     } catch (e) {
-      return e && e.code === 'ENOENT' ? 'gone' : 'stale';
+      return { status: e && e.code === 'ENOENT' ? 'gone' : 'stale' };
     }
   }
 
   unlock() {
+    this.remove(this.lockFile);
+  }
+
+  remove(file) {
     try {
-      this.fs.unlinkSync(this.lockFile);
+      this.fs.unlinkSync(file);
     } catch {
-      // schon weg
+      // schon weg, nie entstanden oder nicht löschbar
     }
   }
+}
+
+// Der jüngste der gelesenen Stände; keiner: leer.
+function newest(reads) {
+  let best;
+  for (const s of reads) {
+    if (s && (!best || s.writtenAt > best.writtenAt)) best = s;
+  }
+  return best || emptyState();
+}
+
+// „<pfad> (<fehler>) und Ersatzort <pfad> (<fehler>)“ für das Log.
+function describe(failures) {
+  return failures.map(({ file, error }, i) => `${i ? 'und Ersatzort ' : ''}${file} (${error.message})`).join(' ');
 }
 
 function defaultSleep(ms) {
@@ -586,6 +700,6 @@ function pauseWarning(p, now) {
 }
 
 module.exports = {
-  PauseFile, Gate, pauseFilePath, stateDir, pauseAfter, retryAfter, pairKey, pauseWarning, inTime,
+  PauseFile, Gate, pauseFilePath, fallbackPauseFilePath, stateDir, pauseAfter, retryAfter, pairKey, pauseWarning, inTime,
   WINDOW_MS, JAIL_LIMIT, RESERVE, SCHEDULE_MIN, RETRY_S, LOCK_STALE_MS,
 };

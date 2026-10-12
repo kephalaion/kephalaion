@@ -16,6 +16,11 @@ const Module = require('module');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'keph-ext-'));
 process.env.XDG_CONFIG_HOME = path.join(home, 'config');
 process.env.XDG_STATE_HOME = path.join(home, 'state');
+// Der Ersatzort der Pausendatei (pause.js, unter os.tmpdir()) ebenfalls hierher.
+fs.mkdirSync(path.join(home, 'tmp'));
+process.env.TMPDIR = path.join(home, 'tmp');
+process.env.TEMP = path.join(home, 'tmp');
+process.env.TMP = path.join(home, 'tmp');
 const pauseFile = path.join(home, 'state', 'kephalaion', 'vscode-pause.json');
 process.env.KEPHALAION_CONFIG = path.join(home, 'config', 'kephalaion', 'config.yaml');
 const tokens = path.join(home, 'config', 'kephalaion', 'tokens');

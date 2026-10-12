@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PauseFile, Gate, pauseAfter, retryAfter, WINDOW_MS, RESERVE, LOCK_STALE_MS } = require('../pause');
+const { PauseFile, Gate, pauseAfter, retryAfter, fallbackPauseFilePath, WINDOW_MS, RESERVE, LOCK_STALE_MS } = require('../pause');
 const { whoamiOutcome } = require('../rules');
 
 const TOKEN = `keph_${'A'.repeat(43)}`;
@@ -30,27 +30,45 @@ function clock(start = 1_700_000_000_000) {
 // Warten ohne Zeit: nur die Ereignisschleife weiterlassen (die Sperrdatei eines anderen Fensters).
 const yieldSleep = () => new Promise((resolve) => setImmediate(resolve));
 
+// Je Test ein eigener erster Ort (wie $XDG_STATE_HOME/kephalaion/) und daneben ein eigener
+// Ersatzort (wie os.tmpdir()/kephalaion-<uid>/) — nie der echte unter os.tmpdir().
 const dirs = [];
 function tmpFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keph-pause-'));
   dirs.push(dir);
   return path.join(dir, 'kephalaion', 'vscode-pause.json');
 }
-test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+function fallbackOf(file) {
+  return path.join(path.dirname(path.dirname(file)), 'ersatz', 'vscode-pause.json');
+}
+test.after(() => {
+  for (const d of dirs) {
+    for (const sub of ['kephalaion', 'ersatz']) {
+      try { fs.chmodSync(path.join(d, sub), 0o700); } catch { /* fehlt */ }
+    }
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
 
 const pair = (hub, account = 'kamran', tokenId = '48:1700000000000') => ({ hub, account, tokenId });
 
 // Ein Dateisystem, dem sich das Schreibrecht nehmen lässt wie einem Verzeichnis 0500 (readonly:
-// EACCES beim Anlegen und Umbenennen) oder einer vollen Platte (full: ENOSPC beim Schreiben, die
-// Datei entsteht leer, wie wirklich) — ohne chmod, das unter root nichts verböte. Alles andere ist
-// das echte Dateisystem.
+// EACCES beim Anlegen und Umbenennen — true: überall, ein Verzeichnis: nur darunter) oder einer
+// vollen Platte (full: ENOSPC beim Schreiben, die Datei entsteht leer, wie wirklich) — ohne
+// chmod, das unter root nichts verböte. Alles andere ist das echte Dateisystem.
 function brittleFs() {
   const err = (code, what) => Object.assign(new Error(`${code}: ${what}`), { code });
   const impl = Object.create(fs);
   impl.readonly = false;
   impl.full = false;
+  const denied = (file) => impl.readonly === true
+    || (typeof impl.readonly === 'string' && file.startsWith(impl.readonly + path.sep));
+  impl.mkdirSync = (dir, ...rest) => {
+    if (denied(dir) && !fs.existsSync(dir)) throw err('EACCES', `permission denied, mkdir '${dir}'`);
+    return fs.mkdirSync(dir, ...rest);
+  };
   impl.writeFileSync = (file, ...rest) => {
-    if (impl.readonly) throw err('EACCES', `permission denied, open '${file}'`);
+    if (denied(file)) throw err('EACCES', `permission denied, open '${file}'`);
     if (impl.full) {
       fs.writeFileSync(file, '');
       throw err('ENOSPC', `no space left on device, write '${file}'`);
@@ -58,11 +76,11 @@ function brittleFs() {
     return fs.writeFileSync(file, ...rest);
   };
   impl.renameSync = (from, to) => {
-    if (impl.readonly) throw err('EACCES', `permission denied, rename '${from}' -> '${to}'`);
+    if (denied(to)) throw err('EACCES', `permission denied, rename '${from}' -> '${to}'`);
     return fs.renameSync(from, to);
   };
   impl.openSync = (file, flags, ...rest) => {
-    if (impl.readonly && flags === 'wx') throw err('EACCES', `permission denied, open '${file}'`);
+    if (denied(file) && flags === 'wx') throw err('EACCES', `permission denied, open '${file}'`);
     return fs.openSync(file, flags, ...rest);
   };
   impl.writeSync = (fd, ...rest) => {
@@ -115,11 +133,11 @@ class FakeNode {
 // Node.request in extension.js: erst die Probe, dann ohne pausierte Paare; die Antwort wird
 // beobachtet (rules.whoamiOutcome).
 class Window {
-  constructor(file, now, node, pairs, log = () => {}, fsImpl = fs) {
+  constructor(file, now, node, pairs, log = () => {}, fsImpl = fs, fallback = fallbackOf(file)) {
     this.node = node;
     this.now = now;
     this.pairs = pairs;
-    this.gate = new Gate({ file: new PauseFile(file, { now, fsImpl, log }), now, sleep: yieldSleep, log });
+    this.gate = new Gate({ file: new PauseFile(file, { fallback, now, fsImpl, log }), now, sleep: yieldSleep, log });
   }
 
   async request() {
@@ -314,7 +332,7 @@ test('Geänderte Token-Datei: sofort eine Probe; gültig → Pause weg, Datei be
 test('Erkennen: 401 des Proxys pausiert alle Paare der Adresse; hidden alle geschickten; login je Hub', async () => {
   const now = clock();
   const file = tmpFile();
-  const gate = new Gate({ file: new PauseFile(file, { now }), now, sleep: yieldSleep });
+  const gate = new Gate({ file: new PauseFile(file, { fallback: fallbackOf(file), now }), now, sleep: yieldSleep });
   const pairs = [pair('vm'), pair('eigen', 'kp')];
   gate.observe(ADDRESS, pairs, { invalid: 'all' });
   assert.deepStrictEqual(Object.keys(gate.paused(ADDRESS, pairs)).sort(), ['eigen', 'vm']);
@@ -358,7 +376,7 @@ test('Kaputte Datei: leer gelesen, Schranke und Sperrdatei gelten trotzdem; verw
   assert.strictEqual(w.paused().vm.failures, 1);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).budget[ADDRESS].length, 1);
   // Eine verwaiste Sperrdatei (älter als LOCK_STALE_MS) hält niemanden auf.
-  const pf = new PauseFile(file, { now });
+  const pf = new PauseFile(file, { fallback: fallbackOf(file), now });
   fs.writeFileSync(`${file}.lock`, JSON.stringify({ pid: 1, at: now() - LOCK_STALE_MS - 1 }));
   assert.strictEqual(pf.tryLock(), 'got');
   assert.strictEqual(pf.tryLock(), 'busy');
@@ -372,7 +390,7 @@ test('Kaputte Datei: leer gelesen, Schranke und Sperrdatei gelten trotzdem; verw
 test('Ein Stand je Adresse: eine andere nodeUrl hat eigene Pausen und eigenes Budget', async () => {
   const now = clock();
   const file = tmpFile();
-  const gate = new Gate({ file: new PauseFile(file, { now }), now, sleep: yieldSleep });
+  const gate = new Gate({ file: new PauseFile(file, { fallback: fallbackOf(file), now }), now, sleep: yieldSleep });
   gate.observe(ADDRESS, [pair('vm')], { invalid: 'all' });
   assert.deepStrictEqual(gate.paused('https://other.example.org/kephalaion/mcp', [pair('vm')]), {});
   assert.strictEqual(gate.budget('https://other.example.org/kephalaion/mcp'), 0);
@@ -589,7 +607,8 @@ test('Pausendatei nicht schreibbar: kein Ergebnis — Schranke zu, Abstand 5–6
   // Je einmal im Log, nicht je Anfrage: die Pausendatei und die Sperrdatei, mit Pfad und Fehler.
   assert.strictEqual(logs.filter((l) => l.includes('Pausendatei') && l.includes('nicht schreibbar')).length, 1, logs.join('\n'));
   assert.strictEqual(logs.filter((l) => l.includes('Sperrdatei') && l.includes('nicht anlegbar')).length, 1, logs.join('\n'));
-  assert.ok(logs.some((l) => l.includes(file) && l.includes('EACCES')), logs.join('\n'));
+  assert.ok(logs.some((l) => l.includes(file) && l.includes(fallbackOf(file)) && l.includes('EACCES')), logs.join('\n'));
+  assert.ok(!fs.existsSync(path.dirname(fallbackOf(file))), 'der Ersatzort entstand trotz EACCES');
   assert.ok(!logs.join('\n').includes(TOKEN));
   // Der Node ist zurück, das Paar ungültig: Die Probe ist ein Ergebnis — Kennung gesetzt, das
   // Paar pausiert im Speicher, nichts sendbar, kein changes alle 3 s; die Datei fehlt weiter.
@@ -653,7 +672,7 @@ test('Platte voll (ENOSPC): keine Zwischendatei, keine leere Sperrdatei, der Sta
   const file = tmpFile();
   const bfs = brittleFs();
   const logs = [];
-  const pf = new PauseFile(file, { now, fsImpl: bfs, log: (l) => logs.push(l) });
+  const pf = new PauseFile(file, { fallback: fallbackOf(file), now, fsImpl: bfs, log: (l) => logs.push(l) });
   bfs.full = true;
   assert.strictEqual(pf.tryLock(), 'none');
   assert.strictEqual(pf.tryLock(), 'none');
@@ -680,31 +699,251 @@ test('Platte voll (ENOSPC): keine Zwischendatei, keine leere Sperrdatei, der Sta
   assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
 });
 
-// Dasselbe am echten Dateisystem: ein Verzeichnis 0500, wie es root angelegt haben könnte.
-test('Verzeichnis 0500 am echten Dateisystem: EACCES ist kein Ergebnis — eine Probe, Pause im Speicher',
-  { skip: typeof process.getuid === 'function' && process.getuid() === 0 ? 'unter root verbietet 0500 nichts' : false },
+// Der kritische Befund des dritten Reviews (vscode/pause.js:477): War das Verzeichnis der
+// Pausendatei nicht beschreibbar, lieferte tryLock 'none', und jedes Fenster probte für sich mit
+// eigenem Stand — 2 Fehlversuche je Fenster in 10 min, mit 5 Fenstern die Sperre der Jail binnen
+// einer Minute. Jetzt: Pausen- und Sperrdatei zusammen am Ersatzort (ein Verzeichnis je Benutzer
+// unter os.tmpdir()), den alle Fenster teilen; jedes liest beide Orte und nimmt den jüngeren
+// Stand; zurück, sobald der erste Ort wieder schreibbar ist. Erst wenn auch der Ersatzort nicht
+// geht, gilt der Stand je Fenster (die Tests oben).
+test('Ersatzort: ein Verzeichnis je Benutzer unter os.tmpdir()', () => {
+  const fallback = fallbackPauseFilePath();
+  assert.ok(fallback.startsWith(os.tmpdir() + path.sep), fallback);
+  assert.strictEqual(path.basename(fallback), 'vscode-pause.json');
+  const tag = typeof process.getuid === 'function' ? String(process.getuid()) : os.userInfo().username;
+  assert.strictEqual(path.basename(path.dirname(fallback)), `kephalaion-${tag}`);
+});
+
+test('Erster Ort unschreibbar: zwei Fenster teilen den Stand über den Ersatzort — eine Probe, Paar pausiert, Budget gemeinsam', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  const fallback = fallbackOf(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = path.dirname(file);
+  const logs = [];
+  const a = new Window(file, now, node, [pair('vm')], (l) => logs.push(`a ${l}`), bfs);
+  const b = new Window(file, now, node, [pair('vm')], (l) => logs.push(`b ${l}`), bfs);
+  await Promise.all([a.request(), b.request(), a.request(), b.request()]);
+  assert.strictEqual(node.requests, 1, 'zwei Fenster, zwei Proben');
+  assert.strictEqual(a.paused().vm.failures, 1);
+  assert.strictEqual(b.paused().vm.failures, 1, 'das zweite Fenster kennt die Pause nicht');
+  assert.strictEqual(b.gate.budget(ADDRESS), 1);
+  // Die Datei liegt am Ersatzort (0600, Verzeichnis 0700), am ersten Ort nichts; keine Sperrdatei
+  // bleibt; kein Token, kein Hash.
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(file)), []);
+  assert.deepStrictEqual(fs.readdirSync(path.dirname(fallback)), ['vscode-pause.json']);
+  assert.strictEqual(fs.statSync(fallback).mode & 0o777, 0o600);
+  assert.strictEqual(fs.statSync(path.dirname(fallback)).mode & 0o777, 0o700);
+  const text = fs.readFileSync(fallback, 'utf8');
+  assert.ok(!text.includes(TOKEN) && !text.includes(crypto.createHash('sha256').update(TOKEN).digest('hex')));
+  assert.strictEqual(JSON.parse(text).writtenAt, now());
+  // Je Fenster einmal im Log: beide Pfade und der Fehler; nicht „nur in diesem Fenster“.
+  for (const w of ['a', 'b']) {
+    const mine = logs.filter((l) => l.startsWith(`${w} `) && l.includes('Ersatzort'));
+    assert.strictEqual(mine.length, 1, logs.join('\n'));
+    assert.ok(mine[0].includes(file) && mine[0].includes(fallback) && mine[0].includes('EACCES'), mine[0]);
+  }
+  assert.ok(!logs.some((l) => l.includes('nur in diesem Fenster') || l.includes('ohne Sperre')), logs.join('\n'));
+  assert.ok(!logs.join('\n').includes(TOKEN));
+  // Ein drittes Fenster, das später startet: keine Probe, übernimmt vom Ersatzort.
+  const c = new Window(file, now, node, [pair('vm')], undefined, bfs);
+  assert.strictEqual(await c.request(), 'paused');
+  assert.strictEqual(node.requests, 1);
+  // Nach 1 min die zweite Probe — eine für alle drei; danach hält das Budget bis 10 min.
+  now.advance(MIN);
+  await Promise.all([a.request(), b.request(), c.request()]);
+  assert.strictEqual(node.requests, 2);
+  assert.deepStrictEqual([a, b, c].map((w) => w.paused().vm.failures), [2, 2, 2]);
+  await run([a, b, c], now, 8 * MIN, { together: true });
+  assert.strictEqual(node.requests, 2, 'Probe trotz vollem Budget');
+  assert.ok(node.worstWindow() <= RESERVE);
+});
+
+test('Zeitfolge am Ersatzort: fünf Fenster beim Start höchstens 2 Fehlversuche in 10 min, Proben nach Plan', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = path.dirname(file);
+  const windows = [1, 2, 3, 4, 5].map(() => new Window(file, now, node, [pair('vm')], undefined, bfs));
+  const start = now();
+  await run(windows, now, 25 * MIN, { together: true });
+  const at = node.failures.map((t) => (t - start) / MIN);
+  // Wie mit zwei Fenstern am ersten Ort: 0, 1, dann das Budget — 10, 14, 22.
+  assert.deepStrictEqual(at.slice(0, 5), [0, 1, 10, 14, 22], at.join(', '));
+  assert.ok(node.worstWindow() <= RESERVE, `${node.worstWindow()} Fehlversuche in 10 min: ${at.join(', ')}`);
+  assert.ok(!fs.existsSync(file) && fs.existsSync(fallbackOf(file)));
+  // Der Node liegt, als die Pause (16 min nach dem fünften Fehlversuch bei 22) um ist: zusammen
+  // eine Probe je Abstand, nicht fünf.
+  node.down = true;
+  now.advance(13 * MIN);
+  const before = node.attempts;
+  const from = now();
+  await run(windows, now, 3 * MIN, { together: true });
+  assert.deepStrictEqual(node.attemptsAt.slice(before).map((t) => (t - from) / SEC), [0, 6, 18, 48, 108, 168]);
+  // Das Token wird gültig, der Node ist zurück: Die nächste Probe hebt die Pause für alle auf.
+  node.down = false;
+  node.valid.vm = true;
+  const requests = node.requests;
+  await run(windows, now, 31 * MIN, { together: true });
+  assert.ok(node.requests > requests + 100, 'die Fenster arbeiten nicht weiter');
+  assert.deepStrictEqual(windows.map((w) => Object.keys(w.paused())), [[], [], [], [], []]);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(fallbackOf(file), 'utf8')).pairs, {});
+});
+
+test('Gemischt: ein Fenster schreibt noch am ersten Ort, eines am Ersatzort — derselbe Stand (der jüngere), eine Probe', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  const fallback = fallbackOf(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = path.dirname(file);
+  const logs = [];
+  const a = new Window(file, now, node, [pair('vm')], (l) => logs.push(`a ${l}`)); // der erste Ort geht
+  const b = new Window(file, now, node, [pair('vm')], (l) => logs.push(`b ${l}`), bfs); // nur der Ersatzort
+  await Promise.all([a.request(), b.request()]);
+  assert.strictEqual(node.requests, 1, 'zwei Fenster, zwei Proben');
+  assert.deepStrictEqual([a, b].map((w) => w.paused().vm.failures), [1, 1]);
+  assert.ok(fs.existsSync(file) && !fs.existsSync(fallback), 'die erste Probe (a) schrieb nicht an den ersten Ort');
+  // Nach 1 min probt b zuerst und schreibt an den Ersatzort; a wartet auf die Sperre dort und
+  // übernimmt den jüngeren Stand — keine zweite Probe.
+  now.advance(MIN);
+  await Promise.all([b.request(), a.request()]);
+  assert.strictEqual(node.requests, 2);
+  const onFallback = JSON.parse(fs.readFileSync(fallback, 'utf8'));
+  const onPrimary = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.ok(onFallback.writtenAt > onPrimary.writtenAt);
+  assert.strictEqual(onPrimary.pairs[`${ADDRESS}|vm|kamran`].failures, 1, 'a schrieb, ohne geprobt zu haben');
+  assert.deepStrictEqual([a, b].map((w) => w.paused().vm.failures), [2, 2]);
+  assert.deepStrictEqual([a, b].map((w) => w.gate.budget(ADDRESS)), [2, 2]);
+  // Das Token wird gültig; nach 10 min (Budget) probt a und schreibt an den ersten Ort — jünger:
+  // Auch b sieht die Pause aufgehoben, ohne eigene Probe, und arbeitet weiter.
+  node.valid.vm = true;
+  now.advance(9 * MIN);
+  assert.notStrictEqual(await a.request(), 'paused');
+  assert.notStrictEqual(await b.request(), 'paused');
+  assert.strictEqual(node.requests, 5, 'Probe, dann je Fenster eine Anfrage');
+  assert.strictEqual(node.failures.length, 2);
+  assert.deepStrictEqual([a, b].map((w) => Object.keys(w.paused())), [[], []]);
+  assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).writtenAt > onFallback.writtenAt);
+  assert.strictEqual(logs.filter((l) => l.startsWith('b ') && l.includes('Ersatzort')).length, 1, logs.join('\n'));
+  assert.ok(!logs.some((l) => l.startsWith('a ') && l.includes('Ersatzort')), logs.join('\n'));
+});
+
+test('Erster Ort wieder schreibbar: zurück vom Ersatzort mit dem vollen Stand, je Fenster einmal im Log', async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  const fallback = fallbackOf(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bfs = brittleFs();
+  bfs.readonly = path.dirname(file);
+  const logs = [];
+  const a = new Window(file, now, node, [pair('vm')], (l) => logs.push(`a ${l}`), bfs);
+  const b = new Window(file, now, node, [pair('vm')], (l) => logs.push(`b ${l}`), bfs);
+  await Promise.all([a.request(), b.request()]);
+  now.advance(MIN);
+  await Promise.all([a.request(), b.request()]);
+  assert.strictEqual(node.requests, 2);
+  assert.ok(!fs.existsSync(file) && fs.existsSync(fallback));
+  // Das Schreibrecht ist zurück (der Nutzer hat das Verzeichnis übernommen): Die nächste Probe —
+  // nach 10 min, das Budget — sperrt und schreibt am ersten Ort, mit Pausen und Budget vom
+  // Ersatzort; das andere Fenster folgt beim nächsten Sperren. Je Fenster einmal im Log.
+  bfs.readonly = false;
+  now.advance(9 * MIN);
+  await Promise.all([a.request(), b.request()]);
+  assert.strictEqual(node.requests, 3);
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.strictEqual(state.pairs[`${ADDRESS}|vm|kamran`].failures, 3, 'die Zählung vom Ersatzort fehlt am ersten Ort');
+  assert.strictEqual(state.budget[ADDRESS].length, 2);
+  assert.ok(state.writtenAt > JSON.parse(fs.readFileSync(fallback, 'utf8')).writtenAt);
+  assert.deepStrictEqual([a, b].map((w) => w.paused().vm.failures), [3, 3]);
+  assert.deepStrictEqual([a, b].map((w) => w.gate.file.file), [file, file]);
+  for (const w of ['a', 'b']) {
+    assert.strictEqual(logs.filter((l) => l.startsWith(`${w} `) && l.includes('zurück vom Ersatzort')).length, 1, logs.join('\n'));
+  }
+  assert.ok(!fs.existsSync(`${file}.lock`) && !fs.existsSync(`${fallback}.lock`));
+  // Ein neues Fenster nimmt den jüngeren Stand: den am ersten Ort.
+  const c = new Window(file, now, node, [pair('vm')], undefined, bfs);
+  assert.strictEqual(await c.request(), 'paused');
+  assert.strictEqual(node.requests, 3);
+  assert.strictEqual(c.paused().vm.failures, 3);
+});
+
+test('Ersatzort gehört einem anderen Benutzer: nicht genutzt — wie beide Orte unschreibbar, Stand je Fenster',
+  { skip: typeof process.getuid !== 'function' ? 'ohne uid (Windows)' : false },
   async () => {
     const now = clock();
     const node = new FakeNode({ vm: false });
-    node.down = true;
     const file = tmpFile();
+    const fallback = fallbackOf(file);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.chmodSync(path.dirname(file), 0o500);
-    try {
-      const logs = [];
-      const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
-      for (let i = 0; i < 6; i++) await w.tryRequest();
-      assert.strictEqual(node.attempts, 1, `${node.attempts} Proben`);
-      assert.strictEqual(w.gate.probedSig, undefined);
-      now.advance(5 * SEC);
-      node.down = false;
-      assert.strictEqual(await w.request(), 'paused');
-      assert.strictEqual(node.requests, 1);
-      assert.ok(w.gate.probedSig);
-      assert.strictEqual(w.paused().vm.failures, 1);
-      assert.ok(logs.some((l) => l.includes('nicht schreibbar') && l.includes('EACCES')), logs.join('\n'));
-      assert.ok(!fs.existsSync(file));
-    } finally {
-      fs.chmodSync(path.dirname(file), 0o700);
-    }
+    fs.mkdirSync(path.dirname(fallback), { recursive: true });
+    const bfs = brittleFs();
+    bfs.readonly = path.dirname(file);
+    bfs.statSync = (p, ...rest) => {
+      const st = fs.statSync(p, ...rest);
+      if (p === path.dirname(fallback)) st.uid = process.getuid() + 1;
+      return st;
+    };
+    const logs = [];
+    const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l), bfs);
+    assert.strictEqual(await w.request(), 'paused');
+    assert.strictEqual(node.requests, 1);
+    assert.strictEqual(w.gate.file.unwritable, true);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(fallback)), [], 'am fremden Ort geschrieben');
+    assert.ok(logs.some((l) => l.includes('nur in diesem Fenster') && l.includes('anderen Benutzer')), logs.join('\n'));
+    assert.ok(logs.some((l) => l.includes('ohne Sperre') && l.includes('anderen Benutzer')), logs.join('\n'));
   });
+
+// Dasselbe am echten Dateisystem: Verzeichnisse 0500, wie root sie angelegt haben könnte.
+const asRoot = typeof process.getuid === 'function' && process.getuid() === 0 ? 'unter root verbietet 0500 nichts' : false;
+
+test('Verzeichnis 0500 am echten Dateisystem: Ersatzort für alle Fenster — eine Probe, Pause geteilt', { skip: asRoot }, async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  const file = tmpFile();
+  const fallback = fallbackOf(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.chmodSync(path.dirname(file), 0o500);
+  const logs = [];
+  const a = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
+  const b = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
+  await Promise.all([a.request(), b.request()]);
+  assert.strictEqual(node.requests, 1, 'zwei Fenster, zwei Proben');
+  assert.deepStrictEqual([a, b].map((w) => w.paused().vm.failures), [1, 1]);
+  assert.ok(!fs.existsSync(file) && fs.existsSync(fallback));
+  assert.strictEqual(fs.statSync(path.dirname(fallback)).mode & 0o777, 0o700);
+  assert.strictEqual(logs.filter((l) => l.includes('Ersatzort') && l.includes('EACCES')).length, 2, logs.join('\n'));
+  await run([a, b], now, 10 * MIN, { together: true });
+  assert.ok(node.worstWindow() <= RESERVE);
+});
+
+test('Beide Verzeichnisse 0500 am echten Dateisystem: EACCES ist kein Ergebnis — eine Probe, Pause im Speicher', { skip: asRoot }, async () => {
+  const now = clock();
+  const node = new FakeNode({ vm: false });
+  node.down = true;
+  const file = tmpFile();
+  const fallback = fallbackOf(file);
+  for (const f of [file, fallback]) {
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.chmodSync(path.dirname(f), 0o500);
+  }
+  const logs = [];
+  const w = new Window(file, now, node, [pair('vm')], (l) => logs.push(l));
+  for (let i = 0; i < 6; i++) await w.tryRequest();
+  assert.strictEqual(node.attempts, 1, `${node.attempts} Proben`);
+  assert.strictEqual(w.gate.probedSig, undefined);
+  now.advance(5 * SEC);
+  node.down = false;
+  assert.strictEqual(await w.request(), 'paused');
+  assert.strictEqual(node.requests, 1);
+  assert.ok(w.gate.probedSig);
+  assert.strictEqual(w.paused().vm.failures, 1);
+  assert.ok(logs.some((l) => l.includes('nicht schreibbar') && l.includes(file) && l.includes(fallback) && l.includes('EACCES')), logs.join('\n'));
+  assert.ok(!fs.existsSync(file) && !fs.existsSync(fallback));
+});
