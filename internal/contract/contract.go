@@ -12,6 +12,8 @@ package contract
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 )
 
 // Version ist die Fassung des Vertrags, die dieses Binary spricht. Fassung 1
@@ -44,10 +46,12 @@ type Hub interface {
 	Sync(ctx context.Context, req SyncRequest) (SyncResponse, error)
 
 	// Die Schreibvorgänge schreiben im Namen eines Accounts, getragen vom
-	// Node. Wie Rotate nicht wiederholbar — ein zweiter Versuch ergäbe
-	// name_taken oder stale_revision —; ein Transport wiederholt sie nie.
-	// Ist nach dem Abschicken offen, ob der Hub geschrieben hat, trägt der
-	// Fehler ErrOutcomeUnknown.
+	// Node. Ein Transport wiederholt sie nie — ohne Schlüssel ergäbe ein
+	// zweiter Versuch name_taken oder stale_revision. Ist nach dem Abschicken
+	// offen, ob der Hub geschrieben hat, trägt der Fehler ErrOutcomeUnknown.
+	// Mit RequestID (Task 032) darf der Aufrufer dann denselben Aufruf mit
+	// demselben Schlüssel noch einmal schicken: Hatte der Hub geschrieben,
+	// antwortet er Replayed, ohne erneut zu schreiben.
 
 	// Create legt ein Dokument an.
 	Create(ctx context.Context, req CreateRequest) (WriteResponse, error)
@@ -166,6 +170,11 @@ type CreateRequest struct {
 	// Content ist der Inhalt: UTF-8 ohne NUL, höchstens MaxDocumentBytes,
 	// auch leer. Über HTTP Pflicht.
 	Content string `json:"content"`
+	// RequestID ist wahlweise der Idempotenzschlüssel des Aufrufers
+	// (CheckRequestID); leer heißt ohne. Kommt derselbe Schlüssel für
+	// denselben Vorgang wieder, schreibt der Hub nicht erneut und antwortet
+	// Replayed.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // WriteRequest ersetzt den Inhalt eines lebenden Dokuments.
@@ -182,6 +191,8 @@ type WriteRequest struct {
 	// BaseRevision ist wahlweise die Revision, auf der der Vorgang beruht
 	// (≥ 1); nil heißt ohne Vorbedingung.
 	BaseRevision *int64 `json:"base_revision,omitempty"`
+	// RequestID wie bei CreateRequest.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // DeleteRequest setzt eine Löschmarke auf ein lebendes Dokument oder, mit
@@ -200,6 +211,8 @@ type DeleteRequest struct {
 	// Recursive löscht ein Verzeichnis mit allen Dokumenten darunter; ohne es
 	// ist ein Verzeichnis invalid. Für ein Dokument gilt es nicht.
 	Recursive bool `json:"recursive,omitempty"`
+	// RequestID wie bei CreateRequest.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // RenameRequest gibt einem lebenden Dokument oder allen Dokumenten unter
@@ -217,6 +230,8 @@ type RenameRequest struct {
 	NewName string `json:"new_name"`
 	// BaseRevision wie bei DeleteRequest.
 	BaseRevision *int64 `json:"base_revision,omitempty"`
+	// RequestID wie bei CreateRequest.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // WriteResponse ist die Antwort jedes Schreibvorgangs (create, write,
@@ -226,14 +241,54 @@ type WriteResponse struct {
 	HubID   string `json:"hub_id"`
 	Version int    `json:"version"`
 	// Revision ist die Revision des Vorgangs; bei unverändertem Inhalt
-	// (write) die bestehende des Dokuments.
+	// (write) die bestehende des Dokuments, bei Replayed die des
+	// ursprünglichen Vorgangs.
 	Revision int64 `json:"revision"`
 	// Rows sind die geschriebenen Zeilen in der Form von sync, bei delete
 	// die Löschmarken, bei rename die Zeilen unter den neuen Namen; bei
 	// unverändertem Inhalt die bestehende Zeile. Bei einem Verzeichnis alle
 	// Dokumente darunter, nach Name: Ein Dokument ist genau eine Zeile unter
 	// dem Namen (bei rename dem neuen), ein Verzeichnis sind Zeilen darunter.
+	// Bei Replayed leer.
 	Rows []Row `json:"rows"`
+	// Replayed sagt, dass der Vorgang mit diesem RequestID schon ausgeführt
+	// war: Der Hub hat nichts geschrieben, Revision und IDs sind die des
+	// ursprünglichen Vorgangs. Die Antwort sagt dann nichts über die Art
+	// (Dokument oder Verzeichnis); der Node übernimmt nichts in die Replica
+	// und gleicht ab.
+	Replayed bool `json:"replayed,omitempty"`
+	// IDs sind nur bei Replayed die ids der Dokumente, die der ursprüngliche
+	// Vorgang geschrieben hat, in der Reihenfolge seiner Zeilen.
+	IDs []string `json:"ids,omitempty"`
+}
+
+// MaxRequestIDLen ist die größte Länge eines RequestID in Zeichen.
+const MaxRequestIDLen = 128
+
+// RequestIDTTL ist, wie lange der Hub einen RequestID nach dem Erfolg
+// kennt; danach ist er vergessen, und eine Wiederholung schreibt wie neu.
+const RequestIDTTL = 24 * time.Hour
+
+// CheckRequestID prüft die Form eines Idempotenzschlüssels: 1 bis
+// MaxRequestIDLen Zeichen aus A–Z, a–z, 0–9, '.', '_' und '-'. Leer heißt
+// ohne Schlüssel und ist keine Form, die diese Funktion annimmt — der
+// Aufrufer prüft nur, was angegeben ist.
+func CheckRequestID(id string) error {
+	if id == "" {
+		return errors.New("request_id ist leer")
+	}
+	if len(id) > MaxRequestIDLen {
+		return fmt.Errorf("request_id hat %d Zeichen, höchstens %d", len(id), MaxRequestIDLen)
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '.', c == '_', c == '-':
+		default:
+			return fmt.Errorf("request_id enthält ein Zeichen außerhalb von A–Z, a–z, 0–9, '.', '_' und '-' (an Stelle %d)", i+1)
+		}
+	}
+	return nil
 }
 
 // FetchRequest lässt den Hub das neueste Release der Quelle einer
@@ -464,9 +519,10 @@ var (
 // ErrOutcomeUnknown meldet einen Transportfehler, nach dem offen ist, ob der
 // Hub die Anfrage ausgeführt hat — etwa eine Zeitüberschreitung, nachdem sie
 // abgeschickt war. Für rotate heißt das: prüfen (whoami mit Account-Teil),
-// nicht wiederholen; für einen Schreibvorgang: abgleichen und nachsehen. Ein
-// Fehler, der vor dem Abschicken entstand (Verbindung abgelehnt), ist es
-// nicht.
+// nicht wiederholen; für einen Schreibvorgang: abgleichen und nachsehen, oder
+// — nur mit RequestID — denselben Aufruf mit demselben Schlüssel noch einmal
+// schicken. Ein Transport wiederholt nie selbst. Ein Fehler, der vor dem
+// Abschicken entstand (Verbindung abgelehnt), ist es nicht.
 var ErrOutcomeUnknown = errors.New("Ausgang unklar")
 
 // ErrUnknownOperation meldet, dass der Hub den Vorgang nicht kennt: ein Hub

@@ -36,6 +36,14 @@ Collections ab, die er selbst will, und lässt einen Account eine Collection nur
 Zeile darin lesen — eine öffentliche ohne Zeile sieht er nicht, er bricht aber nicht. Ein Hub
 vor Task 031 kennt `fetch` nicht und antwortet wie auf jeden unbekannten Vorgang.
 
+Mit Task 032 kam, ebenfalls ohne neue Fassung, der Schlüssel `request_id` der Schreibvorgänge
+hinzu, dazu `replayed` und `ids` in ihrer Antwort (siehe „Wiederholung mit Schlüssel“). Ohne
+Schlüssel ändert sich nichts. Ein Node vor Task 032 kennt das Argument `request_id` an seinen
+Werkzeugen nicht und lehnt einen Aufruf damit laut ab (das go-sdk verbietet zusätzliche
+Eigenschaften im Eingabeschema); geschrieben wird dann nichts. Ein Hub vor Task 032 dagegen
+übergeht das Feld still — er liest den Body ohne Prüfung auf unbekannte Felder — und schreibt
+bei einer Wiederholung ein zweites Mal. Darum zuerst den Hub aktualisieren, dann die Nodes.
+
 ## Anmeldung
 
 Jede Anfrage trägt den Namen des Nodes am Hub und sein Token (`NodeAuth`). Über HTTP stehen
@@ -300,6 +308,7 @@ Schreiben sofort. Jeder Vorgang ist eine Transaktion mit höchstens einer Revisi
 | Vorbedingung | `base_revision` | nur `write`, `delete` und `rename`, wahlweise: die Revision, auf der der Vorgang beruht; nur für ein Dokument |
 | Rekursiv | `recursive` | nur `delete`, wahlweise, Standard falsch: ein Verzeichnis mit allen Dokumenten darunter löschen |
 | Neuer Name | `new_name` | nur `rename`, Pflicht: der neue Name in derselben Collection |
+| Schlüssel | `request_id` | wahlweise, bei allen vier: der Idempotenzschlüssel des Aufrufers, an dem der Hub eine Wiederholung erkennt (siehe „Wiederholung mit Schlüssel“); fehlt er oder ist er leer, gilt keiner |
 
 ### Prüfung
 
@@ -311,8 +320,9 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
    `delete` löscht sie nie; der Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB
    (`contract.MaxDocumentBytes`), leer ist erlaubt; `base_revision`, wenn angegeben, ≥ 1 — eine
    Revision 0 gibt es nicht; bei `rename` der neue Name nach denselben Regeln, weder gleich dem
-   alten noch darunter (`x` nach `x/y`; `ident.CheckRename`). Die Collection gehört nicht dazu:
-   Eine ungültige gibt es nicht, das ist `not_readable`.
+   alten noch darunter (`x` nach `x/y`; `ident.CheckRename`); `request_id`, wenn angegeben, 1–128
+   Zeichen aus `A`–`Z`, `a`–`z`, `0`–`9`, `.`, `_` und `-` (`contract.CheckRequestID`). Die
+   Collection gehört nicht dazu: Eine ungültige gibt es nicht, das ist `not_readable`.
 3. **Anmeldung des Nodes** (`unauthenticated`).
 4. Der Rest in der Transaktion des Vorgangs. Ihre erste Anweisung sperrt die Zeile des Accounts
    in `accounts`; danach:
@@ -324,6 +334,14 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
      Sonst `not_readable`, dieselbe Antwort für alle drei.
    - **Quelle:** In einer Collection mit Quelle (aus der Liste) schreibt niemand; ihren Inhalt
      ändert allein `fetch`. Jeder Schreibvorgang darin ist `forbidden`, die Meldung sagt es.
+   - **Schlüssel**, nur mit `request_id`: Der Hub schlägt ihn beim Account nach. Steht er dort
+     mit demselben Fingerabdruck, ist die Anfrage eine Wiederholung: Der Hub schreibt nichts und
+     antwortet mit `replayed` (siehe „Wiederholung mit Schlüssel“); mit einem anderen
+     Fingerabdruck ist sie `invalid`, die Meldung sagt es. Recht, Name und Vorbedingung prüft
+     er dann nicht mehr: Das Recht hängt am heutigen Stand der Dokumente (nach `rename` gibt es
+     den alten Namen nicht mehr), und die Wiederholung schreibt nichts. Account, Lesbarkeit und
+     Quelle gelten dagegen auch für sie — ein inzwischen gesperrter Account bekommt
+     `account_unauthenticated`.
    - **Recht** aus der Zeile des Accounts — ohne Zeile (öffentliche Collection) hat er keines —,
      je Dokument nach seinem Namen (`contract.Rights.MayWrite`):
      `write` für `create` und für Eigenes — `created_by` ist der User des Accounts, gleich
@@ -344,7 +362,8 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
 eine Zeile: `account` = der Account, `carrier` = der Node, `action` = `create`, `update`,
 `delete` oder `rename`, dazu `document_id` und die Revision des Vorgangs — bei einem
 Verzeichnis je Dokument darunter eine, alle unter derselben Revision. Fehlversuche stehen nicht
-in `actions`, nur im Log des Hubs (ohne Token, ohne Inhalt).
+in `actions`, nur im Log des Hubs (ohne Token, ohne Inhalt); eine Wiederholung mit Schlüssel
+ebenso wenig — sie hat nichts geschrieben.
 
 ### create
 
@@ -405,17 +424,44 @@ Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis die neuen Na
 |---|---|---|
 | Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
 | Fassung | `version` | 1 |
-| Revision | `revision` | die Revision des Vorgangs; bei `write` mit unverändertem Inhalt die bestehende |
-| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke, bei `rename` die Zeile unter dem neuen Namen; bei einem Verzeichnis alle Dokumente darunter, nach Name |
+| Revision | `revision` | die Revision des Vorgangs; bei `write` mit unverändertem Inhalt die bestehende; bei `replayed` die des ursprünglichen Vorgangs |
+| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke, bei `rename` die Zeile unter dem neuen Namen; bei einem Verzeichnis alle Dokumente darunter, nach Name. Bei `replayed` leer |
+| Wiederholung | `replayed` | nur bei einer Wiederholung mit Schlüssel, dann wahr: Der Vorgang war schon ausgeführt, geschrieben ist diesmal nichts. Sonst fehlt das Feld |
+| ids | `ids` | nur bei `replayed`: die ids der Dokumente, die der ursprüngliche Vorgang geschrieben hat, in der Reihenfolge seiner Zeilen |
 
 Ob ein Vorgang ein Dokument oder ein Verzeichnis traf, zeigen die Zeilen: ein Dokument ist genau
 eine Zeile unter `name` (bei `rename` unter `new_name`), ein Verzeichnis sind Zeilen, die alle
 darunter liegen. Nach `rename` ersetzt der Node die Zeilen per `id` — der alte Name ist damit
-aus seiner Replica verschwunden.
+aus seiner Replica verschwunden. Eine Wiederholung (`replayed`) hat keine Zeilen und sagt nichts
+über die Art; der Aufrufer sieht nach dem Abgleich nach.
 
 Die Antwort ist die Wahrheit, nicht die Anfrage: Der Node übernimmt `rows` in seine Replica.
 Alles, was sie braucht, liest der Hub vor dem Commit — die `hub_id` vor der Transaktion, die
 Zeilen in ihr; danach stellt er sie nur noch zusammen.
+
+### Wiederholung mit Schlüssel
+
+Mit `request_id` darf der Aufrufer einen Schreibvorgang nach unklarem Ausgang noch einmal
+schicken, mit demselben Schlüssel und denselben Feldern: Der Vorgang wirkt höchstens einmal.
+
+- **Gültig je Account.** Derselbe Schlüssel bei zwei Accounts sind zwei Schlüssel. Ein Schlüssel
+  je Aufruf, etwa eine UUID.
+- **Gemerkt wird nur ein Erfolg**, in der Transaktion des Vorgangs, vor ihrem Commit: Der
+  Schlüssel steht genau dann am Hub, wenn geschrieben wurde (bei `write` mit unverändertem
+  Inhalt: wenn der Vorgang gelang). Eine Ablehnung hat nichts geschrieben und wird nicht
+  gemerkt; ihre Wiederholung wird neu geprüft und kann anders ausgehen.
+- **Fingerabdruck:** SHA-256 über Vorgang, Collection, Name, `new_name`, Inhalt,
+  `base_revision` und `recursive`. Kommt derselbe Schlüssel mit einem anderen Fingerabdruck —
+  ein anderer Vorgang, ein anderer Inhalt —, ist die Anfrage `invalid`, nicht still eine
+  Wiederholung.
+- **Antwort einer Wiederholung:** `replayed` wahr, Revision und `ids` des ursprünglichen
+  Vorgangs, keine Zeilen. Der Hub hält keine alten Fassungen; Zeilen des heutigen Stands
+  könnten unter anderem Namen liegen, gespeicherte alte setzten die Replica zurück. Der Node
+  schreibt dann nichts in seine Replica und stößt den Abgleich an.
+- **Frist 24 Stunden.** Danach ist der Schlüssel vergessen; jeder Schreibvorgang räumt
+  Abgelaufenes mit ab. Eine Wiederholung nach Ablauf schreibt wie neu.
+- Zwei gleichzeitige Aufrufe mit demselben Schlüssel laufen durch die Sperre des Accounts
+  nacheinander: Der erste schreibt, der zweite ist eine Wiederholung.
 
 ## fetch
 
@@ -491,9 +537,11 @@ unter den 30 s, die der Client auf die Antwort wartet; danach `source_unreachabl
 
 `whoami` und `sync` ändern nichts; ein Transport darf sie wiederholen (über HTTP siehe
 „Wiederholung“). `rotate`, die Schreibvorgänge und `fetch` schickt ein Transport **genau
-einmal**, nie ein zweites Mal: Nach `rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch
-ergäbe `name_taken`, `not_found` oder einen Konflikt mit sich selbst. Einen Schlüssel, an dem
-der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier:
+einmal**, nie ein zweites Mal — ebenso wenig der Node oder die Erweiterung für VS Code: Nach
+`rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch ohne Schlüssel ergäbe
+`name_taken`, `not_found` oder einen Konflikt mit sich selbst. Wiederholen darf allein der
+**Aufrufer**: einen Schreibvorgang mit `request_id` (siehe „Wiederholung mit Schlüssel“), `fetch`
+immer. Ihr Ausgang ist einer von vier:
 
 - **Erfolg** — die Antwort.
 - **Abgelehnt** — ein Fehler des Vertrags (ein Code unten), endgültig. Der Hub hat nichts
@@ -507,7 +555,9 @@ der Hub eine Wiederholung erkennt, gibt es nicht. Ihr Ausgang ist einer von vier
   Verbindung, unlesbare Antwort, 5xx; über `local` jeder Fehler, der kein Fehler des Vertrags
   ist, auch einer der Datenbank nach dem Commit. Der Hub kann ausgeführt haben. Nach `rotate`
   prüft mit `whoami`, wer das neue Token hält (der Node oder der Client über ihn); nach einem
-  Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach; nach `fetch`
+  Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach — oder schickt,
+  wenn er einen `request_id` mitgab, denselben Aufruf mit demselben Schlüssel noch einmal und
+  bekommt Gewissheit: Erfolg, `replayed` oder eine Ablehnung; nach `fetch`
   stößt der Node den Abgleich an, und der Aufrufer darf `fetch` erneut anstoßen (siehe
   „fetch“).
 
@@ -533,7 +583,7 @@ nichts geändert.
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |
 | `stale_revision` | 409 | das Dokument hat nicht die Revision `base_revision`; die Meldung nennt die aktuelle |
-| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
+| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, `request_id` ungültig oder schon für einen anderen Vorgang benutzt, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
 | `unsupported_version` | 404 | Fassung nicht unterstützt |
 | `no_source` | 409 | die Collection hat keine Quelle (`fetch`) |
 | `source_missing` | 409 | an der Quelle nicht vorhanden: kein Release, oder dem neuesten fehlt das Asset (`fetch`) |
@@ -543,8 +593,8 @@ nichts geändert.
 Alle Codes haben einen Status unter 500: Ein 5xx hieße für den Client „Ausgang unklar“.
 
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
-`sync` versucht der Node es später wieder; `rotate`, die Schreibvorgänge und `fetch` wiederholt
-niemand,
+`sync` versucht der Node es später wieder; `rotate`, die Schreibvorgänge und `fetch` wiederholen
+weder Transport noch Node von selbst,
 ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP antwortet der Hub mit
 500 und dem Code `internal`, der kein Code des Vertrags ist — hat der Node die Anfrage
 abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
@@ -628,10 +678,10 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   `delete` und `rename` eines großen Verzeichnisses: eine Revision, und die Antwort trägt jede
   Zeile — bei `rename` samt Inhalt.
 - **Wiederherstellung aus einer Sicherung** braucht eine neue `hub_id` (siehe oben).
-- **Kein Schlüssel für Wiederholungen.** Nach unklarem Ausgang eines Schreibvorgangs sieht der
-  Aufrufer nach, statt zu wiederholen. Ein Schlüssel, an dem der Hub eine Wiederholung erkennt,
-  kommt, wenn überhaupt, später; `https` (Task 018) hat ihn nicht gebracht, hinter einem
-  Proxy sind 502 und 503 weitere unklare Ausgänge.
+- **Ohne Schlüssel keine Wiederholung.** Nach unklarem Ausgang eines Schreibvorgangs ohne
+  `request_id` sieht der Aufrufer nach, statt zu wiederholen; hinter einem Proxy sind 502 und
+  503 weitere unklare Ausgänge. Den Schlüssel (Task 032) gibt es nur für `create`, `write`,
+  `delete` und `rename` über einen Node, nicht für `node dir push` und `hub doc put|rm`.
 - **Ein Hub vor Task 014 und große Schreibvorgänge.** Ein solcher Hub liest den Body vor dem
   Vorgang und begrenzt ihn auf 1 MiB; einen größeren Schreibvorgang beantwortet er mit 413
   (`invalid`) statt als unbekannten Vorgang.

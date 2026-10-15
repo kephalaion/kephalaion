@@ -302,6 +302,48 @@ func TestWriteJSON(t *testing.T) {
 	}
 }
 
+// Der Schlüssel (Task 032) steht nur, wenn gesetzt, bei allen vier
+// Vorgängen; replayed und ids nur bei einer Wiederholung.
+func TestRequestIDJSON(t *testing.T) {
+	acc := AccountAuth{Account: "bob", Token: "keph_account"}
+	for _, c := range []struct {
+		req  any
+		want string
+	}{
+		{CreateRequest{Account: acc, Collection: "a", Name: "n.md", RequestID: "r-1"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","content":"","request_id":"r-1"}`},
+		{WriteRequest{Account: acc, Collection: "a", Name: "n.md", RequestID: "r-1"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","content":"","request_id":"r-1"}`},
+		{DeleteRequest{Account: acc, Collection: "a", Name: "n.md", RequestID: "r-1"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","request_id":"r-1"}`},
+		{RenameRequest{Account: acc, Collection: "a", Name: "n.md", NewName: "m.md", RequestID: "r-1"},
+			`{"account":{"account":"bob","token":"keph_account"},"collection":"a","name":"n.md","new_name":"m.md","request_id":"r-1"}`},
+	} {
+		b, err := json.Marshal(c.req)
+		if err != nil || string(b) != c.want {
+			t.Errorf("%T als JSON: %s, %v", c.req, b, err)
+		}
+	}
+	b, _ := json.Marshal(WriteResponse{HubID: "01H", Version: Version, Revision: 5, Rows: []Row{}, Replayed: true,
+		IDs: []string{"01A"}})
+	if string(b) != `{"hub_id":"01H","version":1,"revision":5,"rows":[],"replayed":true,"ids":["01A"]}` {
+		t.Errorf("Antwort einer Wiederholung als JSON: %s", b)
+	}
+}
+
+func TestCheckRequestID(t *testing.T) {
+	for _, ok := range []string{"a", "550e8400-e29b-41d4-a716-446655440000", "A.b_c-9", strings.Repeat("x", MaxRequestIDLen)} {
+		if err := CheckRequestID(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", strings.Repeat("x", MaxRequestIDLen+1), "a b", "a/b", "ä", "a:b", "a\x00"} {
+		if err := CheckRequestID(bad); err == nil {
+			t.Errorf("%q angenommen", bad)
+		}
+	}
+}
+
 // Jeder Code steht einmal in Codes; der unbekannte Vorgang und der unklare
 // Ausgang sind keine Fehler des Vertrags.
 func TestCodes(t *testing.T) {

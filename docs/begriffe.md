@@ -556,7 +556,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Fremdes, `write` ist dafür nicht nötig; unter `vendor/<name>/` allein dieser Scope, unter
   einem Verzeichnis-Scope keines von beiden — und die Vorbedingung. Die Zeilen der Antwort
   schreibt der Node in die Replica, bevor er antwortet, und stößt den Abgleich an. Nie
-  wiederholt. `hub doc put|rm` und `hub import` sind Vorgänge des Admins am Hub, keine davon.
+  von selbst wiederholt; mit **request_id** darf der Aufrufer wiederholen. `hub doc put|rm` und
+  `hub import` sind Vorgänge des Admins am Hub, keine davon.
 - **base_revision** — Die Revision, auf der ein `write`, `delete` oder `rename` beruht,
   wahlweise, mindestens 1. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`),
   geprüft vor dem Vergleich des Inhalts. Nur für Dokumente; bei einem Verzeichnis ist sie
@@ -564,6 +565,21 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **recursive** — Angabe bei `delete`: ein Verzeichnis mit allen Dokumenten darunter löschen;
   ohne sie ist ein Verzeichnis kein Ziel von `delete` (`invalid`). Für ein Dokument ohne
   Belang.
+- **request_id** (Idempotenzschlüssel, Task 032) — wahlweise Angabe bei `create`, `write`,
+  `delete` und `rename`, im Vertrag und an den Werkzeugen des Nodes: ein Schlüssel des
+  Aufrufers je Aufruf (etwa eine UUID), 1–128 Zeichen aus `A`–`Z`, `a`–`z`, `0`–`9`, `.`, `_`
+  und `-`, gültig je Account und 24 Stunden. Nach einem Erfolg merkt sich der Hub in derselben
+  Transaktion Schlüssel, Vorgang, **fingerprint** (Fingerabdruck: SHA-256 über Vorgang,
+  Collection, Name, `new_name`, Inhalt, `base_revision` und `recursive`), Revision und ids — in
+  der Tabelle **requests**, abgeleitet, nicht im Export. Kommt derselbe Schlüssel mit demselben
+  Fingerabdruck wieder, schreibt er nichts und antwortet **replayed**; mit einem anderen ist es
+  `invalid`. Eine Ablehnung merkt er sich nicht; nach Ablauf der Frist ist der Schlüssel
+  vergessen. Transport, Node und Erweiterung wiederholen nie selbst; mit Schlüssel darf der
+  Aufrufer nach `outcome_unknown` denselben Aufruf noch einmal schicken.
+- **replayed** (Wiederholung) — Merkmal der Antwort eines Schreibvorgangs mit **request_id**,
+  den der Hub schon ausgeführt hatte: Revision und `ids` des ursprünglichen Vorgangs, keine
+  Zeilen und keine Art (Dokument oder Verzeichnis). Der Node schreibt dann nichts in die
+  Replica und stößt den Abgleich an; nachsehen lässt sich danach mit `read`.
 - **write error codes** (Fehlercodes beim Schreiben) — `name_taken` (Name vergeben),
   `stale_revision` (Revision veraltet), `path_conflict` (Name wäre zugleich Datei und
   Verzeichnis), `not_found`, `forbidden` (Recht fehlt), `not_readable` (Collection für diesen
