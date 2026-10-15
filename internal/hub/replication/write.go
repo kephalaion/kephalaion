@@ -17,12 +17,15 @@ import (
 // in der Transaktion des Vorgangs, deren erste Anweisung die Zeile des
 // Accounts sperrt. Die hub_id der Antwort liest der Hub vorher; Revision und
 // Zeilen liest der Store vor dem Commit. Nach dem Commit liest nichts mehr.
+// Der Schlüssel request_id (Task 032) gehört zur Form; nachgeschlagen wird er
+// im Store, nach Account, Lesbarkeit und Quelle. Eine Wiederholung antwortet
+// mit replayed, Revision und ids, ohne Zeilen.
 
 // checkWriteForm prüft Fassung und Form einer Schreibanfrage, ohne
-// Datenbank: den Namen, den Inhalt (nil bei delete) und die Revision, auf der
-// der Vorgang beruht. Die Collection prüft sie nicht — eine ungültige gibt
-// es nicht, das ist not_readable.
-func checkWriteForm(version int, name string, content *string, base *int64) error {
+// Datenbank: den Namen, den Inhalt (nil bei delete), die Revision, auf der
+// der Vorgang beruht, und den Schlüssel, wenn angegeben. Die Collection
+// prüft sie nicht — eine ungültige gibt es nicht, das ist not_readable.
+func checkWriteForm(version int, name string, content *string, base *int64, requestID string) error {
 	if err := checkVersion(version); err != nil {
 		return err
 	}
@@ -37,12 +40,18 @@ func checkWriteForm(version int, name string, content *string, base *int64) erro
 	if base != nil && *base < 1 {
 		return contract.Invalid(fmt.Sprintf("base_revision %d, erwartet ≥ 1", *base))
 	}
+	if requestID != "" {
+		if err := contract.CheckRequestID(requestID); err != nil {
+			return contract.Invalid(err.Error())
+		}
+	}
 	return nil
 }
 
 // write meldet den Node an, liest die hub_id und führt fn als den
-// Schreibvorgang des Accounts aus, mit dem Node als Träger.
-func (h *Hub) write(ctx context.Context, node contract.NodeAuth, account contract.AccountAuth,
+// Schreibvorgang des Accounts aus, mit dem Node als Träger und dem
+// Schlüssel requestID (leer: ohne).
+func (h *Hub) write(ctx context.Context, node contract.NodeAuth, account contract.AccountAuth, requestID string,
 	fn func(auth store.WriteAuth) (store.WriteResult, error)) (contract.WriteResponse, error) {
 	if _, err := h.authenticate(ctx, node); err != nil {
 		return contract.WriteResponse{}, err
@@ -51,12 +60,17 @@ func (h *Hub) write(ctx context.Context, node contract.NodeAuth, account contrac
 	if err != nil {
 		return contract.WriteResponse{}, err
 	}
-	res, err := fn(store.WriteAuth{Account: account.Account, TokenHash: ident.HashToken(account.Token), Carrier: node.Node})
+	res, err := fn(store.WriteAuth{Account: account.Account, TokenHash: ident.HashToken(account.Token), Carrier: node.Node,
+		RequestID: requestID})
 	if err != nil {
 		return contract.WriteResponse{}, writeError(err)
 	}
-	return contract.WriteResponse{HubID: info.HubID, Version: contract.Version, Revision: res.Revision,
-		Rows: append([]contract.Row{}, res.Rows...)}, nil
+	resp := contract.WriteResponse{HubID: info.HubID, Version: contract.Version, Revision: res.Revision,
+		Rows: append([]contract.Row{}, res.Rows...)}
+	if res.Replayed {
+		resp.Replayed, resp.IDs = true, append([]string{}, res.IDs...)
+	}
+	return resp, nil
 }
 
 // writeKinds ordnet den Fehlerarten des Stores die Codes des Vertrags zu.
@@ -94,10 +108,10 @@ func writeError(err error) error {
 // Create legt ein Dokument an: write in der Collection, kein lebendes
 // Dokument mit dem Namen (sonst name_taken).
 func (h *Hub) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
-	if err := checkWriteForm(req.Version, req.Name, &req.Content, nil); err != nil {
+	if err := checkWriteForm(req.Version, req.Name, &req.Content, nil, req.RequestID); err != nil {
 		return contract.WriteResponse{}, err
 	}
-	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
+	return h.write(ctx, req.Auth, req.Account, req.RequestID, func(auth store.WriteAuth) (store.WriteResult, error) {
 		return h.st.CreateDocumentAs(ctx, auth, req.Collection, req.Name, req.Content)
 	})
 }
@@ -106,10 +120,10 @@ func (h *Hub) Create(ctx context.Context, req contract.CreateRequest) (contract.
 // supersede für Fremdes; base_revision geprüft vor dem Vergleich des
 // Inhalts.
 func (h *Hub) Write(ctx context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
-	if err := checkWriteForm(req.Version, req.Name, &req.Content, req.BaseRevision); err != nil {
+	if err := checkWriteForm(req.Version, req.Name, &req.Content, req.BaseRevision, req.RequestID); err != nil {
 		return contract.WriteResponse{}, err
 	}
-	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
+	return h.write(ctx, req.Auth, req.Account, req.RequestID, func(auth store.WriteAuth) (store.WriteResult, error) {
 		return h.st.WriteDocumentAs(ctx, auth, req.Collection, req.Name, req.Content, req.BaseRevision)
 	})
 }
@@ -118,10 +132,10 @@ func (h *Hub) Write(ctx context.Context, req contract.WriteRequest) (contract.Wr
 // alle Dokumente unter einem Verzeichnis; Rechte wie bei Write, je Dokument,
 // base_revision nur für ein Dokument.
 func (h *Hub) Delete(ctx context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
-	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision); err != nil {
+	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision, req.RequestID); err != nil {
 		return contract.WriteResponse{}, err
 	}
-	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
+	return h.write(ctx, req.Auth, req.Account, req.RequestID, func(auth store.WriteAuth) (store.WriteResult, error) {
 		return h.st.DeleteDocumentAs(ctx, auth, req.Collection, req.Name, req.BaseRevision, req.Recursive)
 	})
 }
@@ -130,13 +144,13 @@ func (h *Hub) Delete(ctx context.Context, req contract.DeleteRequest) (contract.
 // einen neuen Namen; Rechte und base_revision wie bei Delete. Der neue Name
 // gehört zur Form: gültig, weder gleich dem alten noch darunter.
 func (h *Hub) Rename(ctx context.Context, req contract.RenameRequest) (contract.WriteResponse, error) {
-	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision); err != nil {
+	if err := checkWriteForm(req.Version, req.Name, nil, req.BaseRevision, req.RequestID); err != nil {
 		return contract.WriteResponse{}, err
 	}
 	if err := ident.CheckRename(req.Name, req.NewName); err != nil {
 		return contract.WriteResponse{}, contract.Invalid(err.Error())
 	}
-	return h.write(ctx, req.Auth, req.Account, func(auth store.WriteAuth) (store.WriteResult, error) {
+	return h.write(ctx, req.Auth, req.Account, req.RequestID, func(auth store.WriteAuth) (store.WriteResult, error) {
 		return h.st.RenameDocumentAs(ctx, auth, req.Collection, req.Name, req.NewName, req.BaseRevision)
 	})
 }

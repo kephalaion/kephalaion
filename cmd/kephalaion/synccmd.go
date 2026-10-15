@@ -156,7 +156,8 @@ var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(
 // Dokument schon geschrieben ist: Er kommt als contract.ErrOutcomeUnknown
 // an, wie über HTTP ein 500. Der Hub steht in einem Feld, nicht eingebettet:
 // So muss jeder neue Vorgang hier ausdrücklich stehen und kann nicht ohne
-// outcome durchrutschen.
+// outcome durchrutschen. Die Anfragen gehen unverändert durch, samt
+// RequestID; wiederholt wird auch hier nie.
 type localHub struct {
 	hub contract.Hub
 }

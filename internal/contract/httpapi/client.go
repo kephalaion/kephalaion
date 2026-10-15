@@ -23,8 +23,10 @@ import (
 // Client setzt contract.Hub über HTTP um. whoami und sync wiederholt er bei
 // Fehlern des Transports mit wachsendem Abstand; rotate und die
 // Schreibvorgänge nie — nach rotate gilt das alte Token nicht mehr, und ein
-// zweiter Schreibversuch ergäbe name_taken oder stale_revision. Ist nach dem
-// Abschicken offen, ob der Hub ausgeführt hat, trägt ihr Fehler
+// zweiter Schreibversuch ohne Schlüssel ergäbe name_taken oder
+// stale_revision. Auch mit RequestID wiederholt er nicht selbst; das darf
+// nur der Aufrufer (Task 032), der Client trägt das Feld im Body. Ist nach
+// dem Abschicken offen, ob der Hub ausgeführt hat, trägt ihr Fehler
 // contract.ErrOutcomeUnknown; kennt der Hub den Vorgang nicht,
 // contract.ErrUnknownOperation. Jeder andere Fehler, der kein
 // *contract.Error ist, heißt: Die Anfrage hat den Hub nicht erreicht.
