@@ -27,8 +27,9 @@ const Role = string(config.Hub)
 // SchemaVersion ist die Schemafassung, die dieses Binary erwartet. Es gibt
 // noch keine Migrationen: Passt die Fassung nicht, ist die Datenbank neu
 // anzulegen. Fassung 6 bringt public, fetched_tag und fetched_at in
-// collections (Task 031).
-const SchemaVersion = 6
+// collections (Task 031), Fassung 7 die Tabelle requests für den
+// Idempotenzschlüssel der Schreibvorgänge (Task 032).
+const SchemaVersion = 7
 
 // Zeilen in db_info, die nur der Hub hat.
 const (
@@ -176,7 +177,12 @@ type Store interface {
 	// Lesbarkeit (ErrNotReadable) und das Recht (ErrForbidden): write für
 	// Neues und Eigenes, supersede für Fremdes. Name und Inhalt prüfen sie
 	// wie PutDocument, ungültig ist ErrInvalid. Das Ergebnis trägt die
-	// Zeilen in der Form von SyncRows.
+	// Zeilen in der Form von SyncRows. Mit auth.RequestID (Task 032) merken
+	// sie sich einen Erfolg in derselben Transaktion; derselbe Schlüssel mit
+	// demselben Vorgang innerhalb der Frist schreibt nichts und liefert
+	// Replayed mit Revision und ids des ursprünglichen — geprüft nach
+	// Anmeldung, Lesbarkeit und Quelle, vor Recht und Name. Derselbe
+	// Schlüssel für einen anderen Vorgang ist ErrInvalid.
 
 	// CreateDocumentAs legt ein Dokument an. Trägt ein lebendes Dokument den
 	// Namen: ErrNameTaken; eine Löschmarke hindert nicht, das Dokument
@@ -298,6 +304,10 @@ var queries = struct {
 	GrantDelete     string
 	GrantsDeleteOf  string
 	GrantsDeleteAll string
+
+	RequestGet     string
+	RequestInsert  string
+	RequestsExpire string
 }{
 	CountDocuments: `SELECT COUNT(*) FROM documents
 		WHERE deleted = 0 AND substr(name, 1, 7) <> 'SYSTEM:'`,
@@ -469,6 +479,18 @@ var queries = struct {
 	GrantDelete:     `DELETE FROM node_collections WHERE node = $1 AND collection = $2`,
 	GrantsDeleteOf:  `DELETE FROM node_collections WHERE node = $1`,
 	GrantsDeleteAll: `DELETE FROM node_collections`,
+
+	// requests: je Account und Schlüssel ein gelungener Schreibvorgang über
+	// einen Node (Task 032). ids ist eine JSON-Liste als Text, die der Code
+	// schreibt und liest; die Frist rechnet der Code aus (at in ms), SQL
+	// vergleicht nur. Eingetragen wird erst, nachdem der Schlüssel unter der
+	// Sperre des Accounts nicht gefunden wurde — ein einfaches INSERT genügt.
+	RequestGet: `SELECT op, fingerprint, revision, ids FROM requests
+		WHERE account = $1 AND request_id = $2`,
+	RequestInsert: `INSERT INTO requests (account, request_id, op, fingerprint, revision, ids, at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+	// RequestsExpire nutzt den Index requests_at.
+	RequestsExpire: `DELETE FROM requests WHERE at < $1`,
 }
 
 // sqliteSchema ist das DDL des Hubs für SQLite, nach „Datenmodell“ im
@@ -538,6 +560,17 @@ CREATE TABLE principal_names (
   name        TEXT PRIMARY KEY,
   kind        TEXT NOT NULL
 );
+CREATE TABLE requests (
+  account     TEXT NOT NULL,
+  request_id  TEXT NOT NULL,
+  op          TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  revision    INTEGER NOT NULL,
+  ids         TEXT NOT NULL,
+  at          INTEGER NOT NULL,
+  PRIMARY KEY (account, request_id)
+);
+CREATE INDEX requests_at ON requests(at);
 `
 
 // Open öffnet eine vorhandene Hub-Datenbank und prüft Rolle und

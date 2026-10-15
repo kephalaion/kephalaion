@@ -26,7 +26,12 @@ import (
 //     Account hat eine lebende SYSTEM:A:-Zeile in ihr oder sie ist
 //     öffentlich — sonst ErrNotReadable, dieselbe Antwort für alle drei.
 //  4. In einer Collection mit Quelle schreibt niemand: ErrForbidden.
-//  5. Das Recht aus dieser Zeile (ohne Zeile keines), je Dokument nach der einen Regel in
+//  5. Mit WriteAuth.RequestID der Schlüssel (request.go, Task 032): Ist er
+//     beim Account gemerkt, mit demselben Fingerabdruck, ist der Vorgang
+//     eine Wiederholung — nichts wird geschrieben, auch nicht in actions, das
+//     Ergebnis trägt Replayed; mit einem anderen ist er ErrInvalid. Abgelaufene
+//     Schlüssel entfernt jeder Vorgang gleich nach der Sperre.
+//  6. Das Recht aus dieser Zeile (ohne Zeile keines), je Dokument nach der einen Regel in
 //     contract.Rights.MayWrite: write für Neues und Eigenes (created_by ist
 //     der User des Accounts, gleich über welchen seiner Accounts angelegt),
 //     supersede für Fremdes; unter vendor/<name>/ allein der Scope
@@ -43,7 +48,8 @@ import (
 //
 // created_by/updated_by ist der User, actions nennt je Dokument Account und
 // Node. Die Antwort — Revision und Zeilen in der Form von SyncRows — liest
-// der Vorgang vor dem Commit.
+// der Vorgang vor dem Commit; mit Schlüssel trägt er ihn ebenfalls vor dem
+// Commit ein.
 
 // Fehlerarten beim Schreiben über einen Node, für errors.Is. Dazu kommen
 // ErrAccountAuth, ErrNotFound und ErrPathConflict.
@@ -78,48 +84,86 @@ func (e invalidError) Unwrap() []error { return []error{ErrInvalid, e.err} }
 // WriteAuth ist die Anmeldung eines Schreibvorgangs über einen Node: der
 // Account, der Hash des Tokens, das er vorgelegt hat, und der Node, der die
 // Anfrage trägt (carrier). Den Node selbst hat der Aufrufer schon angemeldet.
+// RequestID ist wahlweise der Idempotenzschlüssel des Aufrufers
+// (contract.CheckRequestID), gültig je Account; leer heißt ohne.
 type WriteAuth struct {
 	Account   string
 	TokenHash string
 	Carrier   string
+	RequestID string
 }
 
 // WriteResult ist das Ergebnis eines Schreibvorgangs über einen Node: seine
 // Revision — bei unverändertem Inhalt die bestehende — und die geschriebenen
-// Zeilen in der Form von SyncRows, bei delete die Löschmarken.
+// Zeilen in der Form von SyncRows, bei delete die Löschmarken. Replayed
+// heißt: Der Schlüssel war schon gemerkt, nichts ist geschrieben; Revision
+// und IDs sind die des ursprünglichen Vorgangs, Rows ist leer.
 type WriteResult struct {
 	Revision int64
 	Rows     []contract.Row
+	Replayed bool
+	// IDs sind nur bei Replayed gesetzt.
+	IDs []string
 }
 
 // writeAs führt fn als einen Schreibvorgang des Accounts auth.Account in
 // collection aus, nach den Schritten oben. fn bekommt die Rechte des
-// Accounts in der Collection; w.by ist sein User.
-func (s *sqliteStore) writeAs(ctx context.Context, auth WriteAuth, collection string, fn func(w *docTx, rights contract.Rights) error) error {
+// Accounts in der Collection; w.by ist sein User. key beschreibt den
+// Vorgang für den Schlüssel; ohne auth.RequestID zählt er nicht.
+func (s *sqliteStore) writeAs(ctx context.Context, auth WriteAuth, collection string, key writeKey,
+	fn func(w *docTx, rights contract.Rights) (WriteResult, error)) (WriteResult, error) {
+	if err := checkRequestID(auth.RequestID); err != nil {
+		return WriteResult{}, err
+	}
 	sqlTx, tx, err := s.begin(ctx)
 	if err != nil {
-		return err
+		return WriteResult{}, err
 	}
 	defer func() { _ = sqlTx.Rollback() }()
 	if err := lockAccount(ctx, tx, auth.Account); err != nil {
-		return err
+		return WriteResult{}, err
+	}
+	w := newDocTx(tx, "", auth.Account, auth.Carrier)
+	if err := expireRequests(ctx, tx, w.now); err != nil {
+		return WriteResult{}, err
 	}
 	user, err := accountUser(ctx, tx, auth)
 	if err != nil {
-		return err
+		return WriteResult{}, err
 	}
+	w.by = user
 	rights, err := readableRights(ctx, tx, auth, collection)
 	if err != nil {
-		return err
+		return WriteResult{}, err
 	}
 	if _, ok := source.Lookup(collection); ok {
-		return sourceLocked(collection, "schreiben über einen Node")
+		return WriteResult{}, sourceLocked(collection, "schreiben über einen Node")
 	}
-	w := newDocTx(tx, user, auth.Account, auth.Carrier)
-	if err := fn(&w, rights); err != nil {
-		return err
+	if auth.RequestID != "" {
+		prev, found, err := lookupRequest(ctx, tx, auth.Account, auth.RequestID)
+		if err != nil {
+			return WriteResult{}, err
+		}
+		if found {
+			// Geschrieben ist nichts; der Commit hält nur das Aufräumen der
+			// Frist fest.
+			res, err := replay(prev, key, auth.RequestID)
+			if err != nil {
+				return WriteResult{}, err
+			}
+			return res, sqlTx.Commit()
+		}
 	}
-	return sqlTx.Commit()
+	res, err := fn(&w, rights)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if auth.RequestID != "" {
+		if err := rememberRequest(ctx, tx, auth.Account, auth.RequestID, key, res, w.now); err != nil {
+			return WriteResult{}, err
+		}
+	}
+	return res, sqlTx.Commit()
 }
 
 // accountUser prüft nach der Sperre Hash und Sperre des Accounts gegen
@@ -318,157 +362,139 @@ func (s *sqliteStore) CreateDocumentAs(ctx context.Context, auth WriteAuth, coll
 	if err := checkWriteInput(name, content); err != nil {
 		return WriteResult{}, err
 	}
-	var out WriteResult
-	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
+	key := newWriteKey(fingerprintInput{Op: "create", Collection: collection, Name: name, Content: &content})
+	return s.writeAs(ctx, auth, collection, key, func(w *docTx, rights contract.Rights) (WriteResult, error) {
 		if err := mayCreate(collection, name, rights); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		_, err := liveDocument(ctx, w.tx, collection, name)
 		if err == nil {
-			return &kindError{ErrNameTaken, fmt.Sprintf("Dokument %s gibt es in %s schon", name, collection)}
+			return WriteResult{}, &kindError{ErrNameTaken, fmt.Sprintf("Dokument %s gibt es in %s schon", name, collection)}
 		}
 		if !errors.Is(err, ErrNotFound) {
-			return err
+			return WriteResult{}, err
 		}
 		res, err := w.create(ctx, collection, DocumentInput{Name: name, Content: content})
 		if err != nil {
-			return err
+			return WriteResult{}, err
 		}
-		out, err = w.result(ctx, res.Revision, res.ID)
-		return err
+		return w.result(ctx, res.Revision, res.ID)
 	})
-	if err != nil {
-		return WriteResult{}, err
-	}
-	return out, nil
 }
 
 func (s *sqliteStore) WriteDocumentAs(ctx context.Context, auth WriteAuth, collection, name, content string, base *int64) (WriteResult, error) {
 	if err := checkWriteInput(name, content); err != nil {
 		return WriteResult{}, err
 	}
-	var out WriteResult
-	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
+	key := newWriteKey(fingerprintInput{Op: "write", Collection: collection, Name: name, Content: &content,
+		BaseRevision: base})
+	return s.writeAs(ctx, auth, collection, key, func(w *docTx, rights contract.Rights) (WriteResult, error) {
 		cur, err := liveDocument(ctx, w.tx, collection, name)
 		if err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		if err := w.mayChange(cur, rights, "ändern"); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		if err := checkBase(cur, base); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		if cur.Content == content {
-			out, err = w.result(ctx, cur.Revision, cur.ID)
-			return err
+			return w.result(ctx, cur.Revision, cur.ID)
 		}
 		res, err := w.replace(ctx, cur, content)
 		if err != nil {
-			return err
+			return WriteResult{}, err
 		}
-		out, err = w.result(ctx, res.Revision, res.ID)
-		return err
+		return w.result(ctx, res.Revision, res.ID)
 	})
-	if err != nil {
-		return WriteResult{}, err
-	}
-	return out, nil
 }
 
 func (s *sqliteStore) DeleteDocumentAs(ctx context.Context, auth WriteAuth, collection, name string, base *int64, recursive bool) (WriteResult, error) {
 	if err := checkWriteName(name); err != nil {
 		return WriteResult{}, err
 	}
-	var out WriteResult
-	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
+	key := newWriteKey(fingerprintInput{Op: "delete", Collection: collection, Name: name, BaseRevision: base,
+		Recursive: recursive})
+	return s.writeAs(ctx, auth, collection, key, func(w *docTx, rights contract.Rights) (WriteResult, error) {
 		docs, dir, err := w.source(ctx, collection, name)
 		if err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		if dir {
 			if !recursive {
-				return invalidError{fmt.Errorf("%s ist in %s ein Verzeichnis mit %d Dokumenten; löschen nur mit recursive",
-					name, collection, len(docs))}
+				return WriteResult{}, invalidError{fmt.Errorf(
+					"%s ist in %s ein Verzeichnis mit %d Dokumenten; löschen nur mit recursive", name, collection, len(docs))}
 			}
 			if err := checkDirBase(collection, name, base); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
 		if err := w.mayChangeAll(docs, rights, "löschen"); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		if !dir {
 			if err := checkBase(docs[0], base); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
 		for _, d := range docs {
 			if _, err := w.delete(ctx, d); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
-		out, err = w.results(ctx, w.rev.rev, ids(docs))
-		return err
+		return w.results(ctx, w.rev.rev, ids(docs))
 	})
-	if err != nil {
-		return WriteResult{}, err
-	}
-	return out, nil
 }
 
 func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, collection, name, newName string, base *int64) (WriteResult, error) {
 	if err := ident.CheckRename(name, newName); err != nil {
 		return WriteResult{}, invalidError{err}
 	}
-	var out WriteResult
-	err := s.writeAs(ctx, auth, collection, func(w *docTx, rights contract.Rights) error {
+	key := newWriteKey(fingerprintInput{Op: "rename", Collection: collection, Name: name, NewName: newName,
+		BaseRevision: base})
+	return s.writeAs(ctx, auth, collection, key, func(w *docTx, rights contract.Rights) (WriteResult, error) {
 		docs, dir, err := w.source(ctx, collection, name)
 		if err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		renamed := make([]string, len(docs))
 		for i, d := range docs {
 			renamed[i], _ = ident.DocRenamed(d.Name, name, newName)
 			if err := ident.CheckDocName(renamed[i]); err != nil {
-				return invalidError{fmt.Errorf("%s umbenennen: %w", d.Name, err)}
+				return WriteResult{}, invalidError{fmt.Errorf("%s umbenennen: %w", d.Name, err)}
 			}
 		}
 		if dir {
 			if err := checkDirBase(collection, name, base); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
 		// Das Recht am alten und am neuen Namen, je Dokument: hinein, heraus
 		// und innerhalb von vendor/ ohne Sonderfall.
 		if err := w.mayChangeAll(docs, rights, "umbenennen"); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		for i, d := range docs {
 			if err := w.mayWriteAs(renamed[i], d, rights, "umbenennen"); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
 		if !dir {
 			if err := checkBase(docs[0], base); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
 		if err := renameTargetFree(ctx, w.tx, collection, newName, dir); err != nil {
-			return err
+			return WriteResult{}, err
 		}
 		for i, d := range docs {
 			if err := w.rename(ctx, d, renamed[i]); err != nil {
-				return err
+				return WriteResult{}, err
 			}
 		}
-		out, err = w.results(ctx, w.rev.rev, ids(docs))
-		return err
+		return w.results(ctx, w.rev.rev, ids(docs))
 	})
-	if err != nil {
-		return WriteResult{}, err
-	}
-	return out, nil
 }
 
 // renameTargetFree prüft das Ziel eines Umbenennens, im Stand davor — liegt
