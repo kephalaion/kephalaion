@@ -56,6 +56,11 @@ type docHub struct {
 	fetched   []contract.FetchRequest
 	fetchErr  error
 	fetchResp contract.FetchResponse
+	// requests merkt je Account und Schlüssel (request_id) die Antwort
+	// eines gelungenen Schreibvorgangs, wie der Hub (ohne Fingerabdruck und
+	// Frist); requestIDs sind die Schlüssel, die ankamen, leer ohne.
+	requests   map[string]contract.WriteResponse
+	requestIDs []string
 }
 
 func (f *docHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
@@ -313,10 +318,11 @@ func notFound(name string) error {
 
 // do führt einen Schreibvorgang aus: fn prüft und schreibt und liefert die
 // Zeilen; fail und answerID wirken danach.
-func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contract.AccountContent) ([]contract.Row, error)) (contract.WriteResponse, error) {
+func (f *docHub) do(acc contract.AccountAuth, coll, name, requestID string, fn func(c contract.AccountContent) ([]contract.Row, error)) (contract.WriteResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes++
+	f.requestIDs = append(f.requestIDs, requestID)
 	if f.fail != nil && !f.failAfter {
 		return contract.WriteResponse{}, f.fail
 	}
@@ -327,22 +333,38 @@ func (f *docHub) do(acc contract.AccountAuth, coll, name string, fn func(c contr
 	if err != nil {
 		return contract.WriteResponse{}, err
 	}
+	key := acc.Account + "\x00" + requestID
+	if prev, ok := f.requests[key]; ok && requestID != "" {
+		ids := make([]string, len(prev.Rows))
+		for i, r := range prev.Rows {
+			ids[i] = r.ID
+		}
+		return contract.WriteResponse{HubID: prev.HubID, Version: contract.Version, Revision: prev.Revision,
+			Rows: []contract.Row{}, Replayed: true, IDs: ids}, nil
+	}
 	rows, err := fn(c)
 	if err != nil {
 		return contract.WriteResponse{}, err
-	}
-	if f.fail != nil {
-		return contract.WriteResponse{}, f.fail
 	}
 	id := f.id
 	if f.answerID != "" {
 		id = f.answerID
 	}
-	return contract.WriteResponse{HubID: id, Version: contract.Version, Revision: rows[0].Revision, Rows: rows}, nil
+	resp := contract.WriteResponse{HubID: id, Version: contract.Version, Revision: rows[0].Revision, Rows: rows}
+	if requestID != "" {
+		if f.requests == nil {
+			f.requests = map[string]contract.WriteResponse{}
+		}
+		f.requests[key] = resp
+	}
+	if f.fail != nil {
+		return contract.WriteResponse{}, f.fail
+	}
+	return resp, nil
 }
 
 func (f *docHub) Create(_ context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, req.RequestID, func(c contract.AccountContent) ([]contract.Row, error) {
 		if !c.Rights.Write {
 			return nil, &contract.Error{Code: contract.CodeForbidden, Message: "anlegen: write fehlt"}
 		}
@@ -367,7 +389,7 @@ func (f *docHub) Create(_ context.Context, req contract.CreateRequest) (contract
 }
 
 func (f *docHub) Write(_ context.Context, req contract.WriteRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, req.RequestID, func(c contract.AccountContent) ([]contract.Row, error) {
 		doc, ok := f.live(req.Collection, req.Name)
 		if !ok {
 			return nil, &contract.Error{Code: contract.CodeNotFound, Message: "Dokument " + req.Name + " gibt es nicht"}
@@ -416,7 +438,7 @@ func (f *docHub) source(c contract.AccountContent, coll, name string, base *int6
 }
 
 func (f *docHub) Delete(_ context.Context, req contract.DeleteRequest) (contract.WriteResponse, error) {
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, req.RequestID, func(c contract.AccountContent) ([]contract.Row, error) {
 		if !req.Recursive {
 			if _, ok := f.live(req.Collection, req.Name); !ok && len(f.under(req.Collection, req.Name)) > 0 {
 				return nil, contract.Invalid(req.Name + " ist ein Verzeichnis; löschen nur mit recursive")
@@ -440,7 +462,7 @@ func (f *docHub) Rename(_ context.Context, req contract.RenameRequest) (contract
 	if err := ident.CheckRename(req.Name, req.NewName); err != nil {
 		return contract.WriteResponse{}, contract.Invalid(err.Error())
 	}
-	return f.do(req.Account, req.Collection, req.Name, func(c contract.AccountContent) ([]contract.Row, error) {
+	return f.do(req.Account, req.Collection, req.Name, req.RequestID, func(c contract.AccountContent) ([]contract.Row, error) {
 		docs, dir, err := f.source(c, req.Collection, req.Name, req.BaseRevision)
 		if err != nil {
 			return nil, err

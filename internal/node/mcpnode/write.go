@@ -20,7 +20,12 @@ import (
 // und reicht Account und Token dann an den Hub; ob geschrieben werden darf,
 // entscheidet allein der Hub. Nach Erfolg schreibt der Node die Zeilen der
 // Antwort in die Replica, bevor er antwortet, und stößt den Abgleich des Hubs
-// an, ohne zu warten — ebenso nach unklarem Ausgang. Nie wiederholt.
+// an, ohne zu warten — ebenso nach unklarem Ausgang. Der Node wiederholt nie
+// selbst. Mit dem Argument request_id (Task 032) darf der Client nach
+// outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal
+// schicken: Hatte der Hub geschrieben, antwortet er replayed — dann schreibt
+// der Node nichts in die Replica, stößt den Abgleich an und antwortet mit
+// replayed, Name, ids und Revision, ohne Art.
 //
 // Jeder Fehler trägt neben der Meldung einen Code: das Ergebnis hat isError,
 // der Text ist die Meldung, und die Struktur trägt error.code und
@@ -63,7 +68,9 @@ const (
 	// CodeUnreachable: Der Hub ist nicht erreicht worden; nichts gespeichert.
 	CodeUnreachable = "unreachable"
 	// CodeOutcomeUnknown: abgeschickt, aber keine brauchbare Antwort — der
-	// Hub kann gespeichert haben. Nicht wiederholen, nachsehen.
+	// Hub kann gespeichert haben. Ohne request_id nicht wiederholen, sondern
+	// nachsehen; mit request_id denselben Aufruf mit demselben Schlüssel noch
+	// einmal schicken.
 	CodeOutcomeUnknown = "outcome_unknown"
 	// CodeUnsupported: Der Hub kennt den Vorgang nicht, oder der Node kann
 	// den Transport des Hub-Eintrags noch nicht; nichts gespeichert.
@@ -80,11 +87,18 @@ const (
 // go-sdk nähme sonst nur 4 MiB.
 const MaxRequestBytes = 6*contract.MaxDocumentBytes + 1<<20
 
+// requestIDSchema beschreibt das Argument request_id, gleich bei allen
+// vier Werkzeugen.
+const requestIDSchema = "wahlweise ein Schlüssel je Aufruf (etwa eine UUID; 1–128 Zeichen aus A–Z, a–z, 0–9, " +
+	"'.', '_', '-'), gültig 24 Stunden: Nach outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal " +
+	"schicken — hatte der Hub schon geschrieben, antwortet er replayed, ohne erneut zu schreiben"
+
 // CreateInput sind die Argumente von create.
 type CreateInput struct {
 	Collection string `json:"collection" jsonschema:"<hub>:<collection>, Hub-Teil entbehrlich bei nur einem Hub"`
 	Name       string `json:"name" jsonschema:"Name des Dokuments in der Collection"`
 	Content    string `json:"content" jsonschema:"der ganze Inhalt als Text, auch leer"`
+	RequestID  string `json:"request_id,omitempty" jsonschema:"wahlweise ein Schlüssel je Aufruf (etwa eine UUID; 1–128 Zeichen aus A–Z, a–z, 0–9, Punkt, Unterstrich, Bindestrich), 24 Stunden gültig: nach outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal schicken; hatte der Hub schon geschrieben, antwortet er replayed"`
 }
 
 // WriteInput sind die Argumente von write.
@@ -93,6 +107,7 @@ type WriteInput struct {
 	Name         string `json:"name" jsonschema:"Name des Dokuments in der Collection"`
 	Content      string `json:"content" jsonschema:"der ganze neue Inhalt als Text, auch leer"`
 	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der der Inhalt beruht (aus read); hat das Dokument eine andere: stale_revision"`
+	RequestID    string `json:"request_id,omitempty" jsonschema:"wahlweise ein Schlüssel je Aufruf (etwa eine UUID; 1–128 Zeichen aus A–Z, a–z, 0–9, Punkt, Unterstrich, Bindestrich), 24 Stunden gültig: nach outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal schicken; hatte der Hub schon geschrieben, antwortet er replayed"`
 }
 
 // DeleteInput sind die Argumente von delete.
@@ -101,6 +116,7 @@ type DeleteInput struct {
 	Name         string `json:"name" jsonschema:"Name des Dokuments oder Verzeichnisses in der Collection"`
 	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der das Löschen beruht (aus read); hat das Dokument eine andere: stale_revision. Nur für Dokumente"`
 	Recursive    bool   `json:"recursive,omitempty" jsonschema:"ein Verzeichnis mit allen Dokumenten darunter löschen; ohne es ist ein Verzeichnis invalid. Für ein Dokument ohne Belang"`
+	RequestID    string `json:"request_id,omitempty" jsonschema:"wahlweise ein Schlüssel je Aufruf (etwa eine UUID; 1–128 Zeichen aus A–Z, a–z, 0–9, Punkt, Unterstrich, Bindestrich), 24 Stunden gültig: nach outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal schicken; hatte der Hub schon geschrieben, antwortet er replayed"`
 }
 
 // RenameInput sind die Argumente von rename.
@@ -109,6 +125,7 @@ type RenameInput struct {
 	Name         string `json:"name" jsonschema:"Name des Dokuments oder Verzeichnisses in der Collection"`
 	NewName      string `json:"new_name" jsonschema:"der neue Name in derselben Collection; nicht belegt, nicht unter dem alten"`
 	BaseRevision *int64 `json:"base_revision,omitempty" jsonschema:"wahlweise die Revision, auf der das Umbenennen beruht (aus read); hat das Dokument eine andere: stale_revision. Nur für Dokumente"`
+	RequestID    string `json:"request_id,omitempty" jsonschema:"wahlweise ein Schlüssel je Aufruf (etwa eine UUID; 1–128 Zeichen aus A–Z, a–z, 0–9, Punkt, Unterstrich, Bindestrich), 24 Stunden gültig: nach outcome_unknown denselben Aufruf mit demselben Schlüssel noch einmal schicken; hatte der Hub schon geschrieben, antwortet er replayed"`
 }
 
 // WriteOutput ist die Antwort von create, write, delete und rename: das
@@ -117,9 +134,11 @@ type RenameInput struct {
 // Verzeichnis (delete mit recursive, rename), ist Kind directory und die
 // Antwort trägt Name, Revision, Count und Updated. Bei einem Fehler (isError)
 // tragen nur Address, Name — der des Aufrufs, bei rename der alte — und
-// Error etwas.
+// Error etwas. Eine Wiederholung mit request_id (Replayed) trägt Address,
+// Name, Revision und IDs, ohne Art: Der Hub schickt dann keine Zeilen.
 type WriteOutput struct {
-	// Kind ist document oder directory; fehlt bei einem Fehler.
+	// Kind ist document oder directory; fehlt bei einem Fehler und bei
+	// Replayed.
 	Kind string `json:"kind,omitempty"`
 	// Address ist die Collection als <hub>:<collection>; bei einem Fehler vor
 	// dem Auflösen der Adresse die Angabe des Aufrufs.
@@ -142,6 +161,14 @@ type WriteOutput struct {
 	// Note ist ein Hinweis zu einem Erfolg: Die Replica ließ sich nicht
 	// schreiben; read zeigt den alten Stand, bis der Abgleich nachholt.
 	Note string `json:"note,omitempty"`
+	// Replayed: Der Vorgang mit diesem request_id war schon ausgeführt;
+	// diesmal ist nichts geschrieben. Revision und IDs sind die des
+	// ursprünglichen Vorgangs, die Replica ist unberührt, der Abgleich
+	// angestoßen — danach mit read nachsehen.
+	Replayed bool `json:"replayed,omitempty"`
+	// IDs sind nur bei Replayed die ids der Dokumente, die der ursprüngliche
+	// Vorgang geschrieben hat.
+	IDs []string `json:"ids,omitempty"`
 	// Error ist der Fehler, nur mit isError.
 	Error *WriteError `json:"error,omitempty"`
 }
@@ -154,24 +181,27 @@ type WriteError struct {
 }
 
 const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dokument mit dem Namen: name_taken. " +
-	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; ein Fehler trägt error.code."
+	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; ein Fehler trägt error.code. request_id: " +
+	requestIDSchema + "; derselbe Schlüssel mit anderen Angaben ist invalid. Die Antwort einer Wiederholung trägt " +
+	"replayed, Name, ids und Revision, ohne Art; die Replica holt der angestoßene Abgleich nach."
 
 const writeDescription = "Ersetzt den Inhalt eines Dokuments, über den Hub. Mit base_revision nur, wenn das " +
-	"Dokument noch diese Revision hat, sonst stale_revision. Antwort wie create."
+	"Dokument noch diese Revision hat, sonst stale_revision. Antwort und request_id wie bei create."
 
 const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). base_revision wie bei write, nur für " +
 	"Dokumente. Ein Verzeichnis nur mit recursive: alle Dokumente darunter, alles oder nichts. Antwort wie create, " +
-	"mit deleted; bei einem Verzeichnis kind directory und count."
+	"mit deleted; bei einem Verzeichnis kind directory und count. request_id wie bei create."
 
 const renameDescription = "Benennt ein Dokument oder ein Verzeichnis um, über den Hub, in derselben Collection; die " +
 	"id bleibt, ein Verzeichnis alles oder nichts. Ist das Ziel belegt: name_taken, nichts wird überschrieben. " +
 	"base_revision wie bei write, nur für Dokumente. Antwort wie create unter dem neuen Namen; bei einem " +
-	"Verzeichnis kind directory und count."
+	"Verzeichnis kind directory und count. request_id wie bei create."
 
 // writeOp ist ein Aufruf eines Werkzeugs, das schreibt: Werkzeug, Adresse,
 // Name und der Vorgang am Hub. newName ist bei rename der neue Name; um ihn
 // geht dann die Antwort. dir sagt, dass der Vorgang auch ein Verzeichnis
-// nehmen kann (delete, rename).
+// nehmen kann (delete, rename). requestID ist der Schlüssel des Aufrufs,
+// leer ohne.
 type writeOp struct {
 	tool       string
 	collection string
@@ -179,6 +209,7 @@ type writeOp struct {
 	rename     bool
 	newName    string
 	dir        bool
+	requestID  string
 	call       func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 		collection string) (contract.WriteResponse, error)
 }
@@ -192,39 +223,43 @@ func (op writeOp) result() string {
 }
 
 func (n *Node) create(ctx context.Context, req *mcp.CallToolRequest, in CreateInput) (*mcp.CallToolResult, WriteOutput, error) {
-	return n.write(ctx, req, writeOp{tool: "create", collection: in.Collection, name: in.Name,
+	return n.write(ctx, req, writeOp{tool: "create", collection: in.Collection, name: in.Name, requestID: in.RequestID,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Create(ctx, contract.CreateRequest{Version: contract.Version, Auth: node, Account: account,
-				Collection: coll, Name: in.Name, Content: in.Content})
+				Collection: coll, Name: in.Name, Content: in.Content, RequestID: in.RequestID})
 		}})
 }
 
 func (n *Node) replace(ctx context.Context, req *mcp.CallToolRequest, in WriteInput) (*mcp.CallToolResult, WriteOutput, error) {
-	return n.write(ctx, req, writeOp{tool: "write", collection: in.Collection, name: in.Name,
+	return n.write(ctx, req, writeOp{tool: "write", collection: in.Collection, name: in.Name, requestID: in.RequestID,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Write(ctx, contract.WriteRequest{Version: contract.Version, Auth: node, Account: account,
-				Collection: coll, Name: in.Name, Content: in.Content, BaseRevision: in.BaseRevision})
+				Collection: coll, Name: in.Name, Content: in.Content, BaseRevision: in.BaseRevision,
+				RequestID: in.RequestID})
 		}})
 }
 
 func (n *Node) remove(ctx context.Context, req *mcp.CallToolRequest, in DeleteInput) (*mcp.CallToolResult, WriteOutput, error) {
 	return n.write(ctx, req, writeOp{tool: "delete", collection: in.Collection, name: in.Name, dir: true,
+		requestID: in.RequestID,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Delete(ctx, contract.DeleteRequest{Version: contract.Version, Auth: node, Account: account,
-				Collection: coll, Name: in.Name, BaseRevision: in.BaseRevision, Recursive: in.Recursive})
+				Collection: coll, Name: in.Name, BaseRevision: in.BaseRevision, Recursive: in.Recursive,
+				RequestID: in.RequestID})
 		}})
 }
 
 func (n *Node) rename(ctx context.Context, req *mcp.CallToolRequest, in RenameInput) (*mcp.CallToolResult, WriteOutput, error) {
 	return n.write(ctx, req, writeOp{tool: "rename", collection: in.Collection, name: in.Name, rename: true,
-		newName: in.NewName, dir: true,
+		newName: in.NewName, dir: true, requestID: in.RequestID,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Rename(ctx, contract.RenameRequest{Version: contract.Version, Auth: node, Account: account,
-				Collection: coll, Name: in.Name, NewName: in.NewName, BaseRevision: in.BaseRevision})
+				Collection: coll, Name: in.Name, NewName: in.NewName, BaseRevision: in.BaseRevision,
+				RequestID: in.RequestID})
 		}})
 }
 
@@ -277,6 +312,11 @@ func (n *Node) doWrite(ctx context.Context, req *mcp.CallToolRequest, op writeOp
 			return &toolError{msg: "new_name: " + err.Error()}
 		}
 		if err := ident.CheckRename(op.name, op.newName); err != nil {
+			return &toolError{msg: err.Error()}
+		}
+	}
+	if op.requestID != "" {
+		if err := contract.CheckRequestID(op.requestID); err != nil {
 			return &toolError{msg: err.Error()}
 		}
 	}
@@ -355,8 +395,9 @@ func (n *Node) hubFailure(ctx context.Context, h store.Hub, t target, err error)
 		reqlog.NoteError(ctx, err)
 		n.kick(h)
 		return &toolError{msg: fmt.Sprintf("Hub %s: Ausgang unklar — abgeschickt, aber keine brauchbare Antwort; "+
-			"gespeichert sein kann es. Nicht wiederholen: Der Abgleich ist angestoßen, danach mit read nachsehen "+
-			"(Revision, geändert).", t.Hub), code: CodeOutcomeUnknown}
+			"gespeichert sein kann es. Ohne request_id nicht wiederholen: Der Abgleich ist angestoßen, danach mit read "+
+			"nachsehen (Revision, geändert). Mit request_id denselben Aufruf mit demselben Schlüssel noch einmal "+
+			"schicken.", t.Hub), code: CodeOutcomeUnknown}
 	case errors.Is(err, contract.ErrUnknownOperation):
 		return &toolError{msg: fmt.Sprintf("Hub %s kann noch nicht schreiben (älter als dieser Node); nichts "+
 			"gespeichert", t.Hub), code: CodeUnsupported}
@@ -373,6 +414,14 @@ func (n *Node) hubFailure(ctx context.Context, h store.Hub, t target, err error)
 // gespeichert.
 func (n *Node) accept(ctx context.Context, h store.Hub, t target, op writeOp, resp contract.WriteResponse) WriteOutput {
 	name := op.result()
+	if resp.Replayed {
+		// Eine Wiederholung hat keine Zeilen und schreibt nichts in die
+		// Replica: Zeilen des heutigen Stands könnten unter anderem Namen
+		// liegen, alte setzten sie zurück. Den Stand holt der Abgleich.
+		reqlog.Note(ctx, "replayed", "ja")
+		return WriteOutput{Address: t.Address(), Name: name, Revision: resp.Revision, Replayed: true,
+			IDs: append([]string{}, resp.IDs...)}
+	}
 	out := WriteOutput{Kind: KindDocument, Address: t.Address(), Name: name, Revision: resp.Revision}
 	doc, dir, err := answerShape(t.Collection, name, op.dir, resp.Rows)
 	if err == nil {
