@@ -1168,7 +1168,8 @@ Replicas legt der erste Abgleich neu an. Pro User dasselbe ohne `sudo` mit den O
 `~/.local/share/kephalaion/` und `kephalaion service uninstall` bzw. `install` statt
 `systemctl` (README, „Einrichten“).
 
-**`hub.db` neu anlegen** (zuletzt 5 → 6 mit `collections.public` und dem geholten Stand, Task
+**`hub.db` neu anlegen** (zuletzt 6 → 7 mit der Tabelle `requests` für den Idempotenzschlüssel
+der Schreibvorgänge, Task 032; davor 5 → 6 mit `collections.public` und dem geholten Stand, Task
 031) geht denselben Weg mit `hub` statt `node` — Export mit dem alten Binary, `serve` stoppen,
 `hub.db` und `hub.db.lock` entfernen, den Abschnitt `hub:` herausnehmen, `hub init --db
 sqlite:///var/lib/kephalaion/hub.db --listen 127.0.0.1:7434`, `config import` —, danach:
@@ -1184,6 +1185,13 @@ Collection als schon aktuell. **Rechte auf `k-playbook` weist der Import ab:** G
 Collection dieses Namens (in k-playbook bis 2026-10-09 die Entwicklungs-Collection), vor dem
 Import im Export umbenennen — unter `collections`, `node_collections` und den Rechten der
 Accounts, etwa in `k-playbook-dev` — und ihre Dokumente unter dem neuen Namen einspielen.
+
+**Ab Task 032 erst den Hub, dann die Nodes.** Der Sprung auf Fassung 7 betrifft nur `hub.db`; die
+Nodes bekommen nur das neue Binary, `node.db` bleibt. Die Reihenfolge zählt: Ein Hub vor Task 032
+übergeht den Schlüssel `request_id` still und schriebe eine Wiederholung ein zweites Mal; ein Node
+vor Task 032 lehnt einen Aufruf mit `request_id` dagegen laut ab (das go-sdk verbietet
+unbekannte Argumente) und schreibt nichts. Die Tabelle `requests` steht nicht im Export: Nach dem
+Neuanlegen kennt der Hub keinen Schlüssel mehr — ohne Folgen, sie gelten ohnehin nur 24 Stunden.
 
 ## Upgrade: was Kephalaion meldet
 

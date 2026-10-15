@@ -393,6 +393,17 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 032 — Idempotenzschlüssel für die Schreibvorgänge** (2026-10-15, Etappen 1–5
+  ausgeführt; Anlass k-playbook Task 088): wahlweise `request_id` bei `create`, `write`, `delete`
+  und `rename` im Vertrag und an den Werkzeugen des Nodes; der Hub merkt sich einen Erfolg in
+  derselben Transaktion (Tabelle `requests`, Hub-Store Fassung 7, nicht im Export, Frist 24
+  Stunden) und antwortet auf eine Wiederholung `replayed` mit Revision und `ids`, ohne Zeilen;
+  derselbe Schlüssel für einen anderen Vorgang ist `invalid` (`vertrag.md`, „Wiederholung mit
+  Schlüssel“). Lokal mit curl gegen Hub und Node durchgespielt. **Reihenfolge beim Einspielen:
+  erst den Hub (Export/Import, `installation.md`, „Neue Schemafassung“), dann die Nodes** — ein
+  älterer Hub übergeht den Schlüssel still. Offen das Einspielen auf der VM. Befund
+  `schreiben-wiederholen.md`.
+
 - **Task 031 — Eine Collection, die der Hub selbst aus einem Release füllt** (2026-10-12,
   Etappen 1–5 ausgeführt): `public` als Eigenschaft jeder Collection, die eingebettete Liste
   der Quellen (`internal/hub/source`, erster Eintrag `k-playbook`), fest abonnierte

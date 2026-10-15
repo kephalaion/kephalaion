@@ -168,7 +168,9 @@ Schemafassung verwirft der Abgleich selbst und gleicht sie neu ab. Mit `https` s
 des Hubs auf Schemafassung 6 (neu in `collections`: `public`, der geholte Stand) und die Replica
 auf Fassung 5 (Merkmale in `sync_state`; der Abgleich legt sie selbst neu an) — derselbe Weg mit
 `hub` statt `node` (`hub.db`, Abschnitt `hub:`, `hub init`), danach die Dokumente mit `hub
-import` und eine Collection mit Quelle mit `hub collection fetch <name>`. Der Weg für `node.db`,
+import` und eine Collection mit Quelle mit `hub collection fetch <name>`. Mit Task 032 stieg die
+Datenbank des Hubs auf Schemafassung 7 (neu: die Tabelle `requests` für den Idempotenzschlüssel
+`request_id` der Schreibvorgänge) — derselbe Weg; erst den Hub, dann die Nodes. Der Weg für `node.db`,
 in dieser Reihenfolge (`init` überschreibt nicht und bricht bei eingetragener Rolle ab):
 
 ```sh
@@ -520,7 +522,7 @@ dem Code, nicht nach der Meldung:
 | `not_readable` | nicht lesbar, wie beim Lesen — auch ein Account, den der Hub nicht (mehr) annimmt |
 | `invalid` | ungültig: Name, Inhalt (kein UTF-8, ein NUL-Byte, über 1 MiB), ein Verzeichnis ohne `recursive` |
 | `unreachable` | der Hub ist nicht erreicht worden, nichts gespeichert; gelesen wird weiter |
-| `outcome_unknown` | abgeschickt, aber keine brauchbare Antwort — gespeichert sein kann es; nicht wiederholen, nach dem angestoßenen Abgleich mit `read` nachsehen |
+| `outcome_unknown` | abgeschickt, aber keine brauchbare Antwort — gespeichert sein kann es; ohne `request_id` nicht wiederholen, nach dem angestoßenen Abgleich mit `read` nachsehen; mit `request_id` denselben Aufruf mit demselben Schlüssel noch einmal schicken (Antwort dann `replayed`, wenn der Hub schon geschrieben hatte) |
 | `unsupported` | der Hub kann noch nicht schreiben, oder sein Transport (`ssh`) ist noch nicht gebaut; nichts gespeichert |
 | `internal` | ein Fehler des Nodes selbst (`node.db`, Replica nicht lesbar); nichts abgeschickt |
 

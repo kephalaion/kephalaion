@@ -1189,8 +1189,11 @@ Token in der Nutzerkonfiguration mit engen Rechten, nie im Repository.
   „Name vergeben“ oder einen Konflikt mit sich selbst. Die Meldung sagt, dass gespeichert sein
   kann; der Node gleicht danach ab, und der Aufrufer sieht nach. Früher stand hier, der Node
   wiederhole mit wachsendem Abstand und melde danach „nichts gespeichert“ — das lässt sich ohne
-  einen Schlüssel, an dem der Hub eine Wiederholung erkennt, nicht halten. Ein solcher
-  Schlüssel kommt, wenn überhaupt, später; `https` (Task 018) hat ihn nicht gebracht.
+  einen Schlüssel, an dem der Hub eine Wiederholung erkennt, nicht halten. Seit Task 032 gibt
+  es ihn, wahlweise: Schickt der Aufrufer einen `request_id` mit, darf **er** nach unklarem
+  Ausgang denselben Aufruf mit demselben Schlüssel noch einmal schicken; der Hub erkennt die
+  Wiederholung, schreibt nicht erneut und antwortet `replayed` (`vertrag.md`, „Wiederholung mit
+  Schlüssel“). Transport, Node und Erweiterung wiederholen weiterhin nie selbst.
 
 ## Authentifizierung
 
@@ -2443,8 +2446,10 @@ Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und
   geschriebenen Zeilen; der Node schreibt sie in die Replica, bevor er antwortet, und stößt
   danach den Abgleich an. Sonst lieferte `read` nach dem Speichern noch die alte Revision, und
   schon das zweite Speichern scheiterte an der eigenen Vorbedingung.
-- **Nie wiederholt**, siehe „Transport, Token und Fehlschläge“. Nach Erfolg und nach
-  unklarem Ausgang stößt der Node den Abgleich an, auch bei `sync_interval` `0`.
+- **Nie von selbst wiederholt**, siehe „Transport, Token und Fehlschläge“; mit `request_id`
+  darf der Aufrufer wiederholen (Task 032), eine erkannte Wiederholung antwortet `replayed`
+  und lässt die Replica unberührt. Nach Erfolg, nach `replayed` und nach unklarem Ausgang stößt
+  der Node den Abgleich an, auch bei `sync_interval` `0`.
 - **Leere Verzeichnisse** gibt es am Hub weiter nicht; die Erweiterung für VS Code merkt sich
   ein neu angelegtes, bis darin etwas liegt.
 - **Grenzen:** Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB, leer erlaubt; über HTTP trägt ein
