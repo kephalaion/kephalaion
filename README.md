@@ -153,6 +153,8 @@ kephalaion status       # welche Rollen, wo ihre Datenbank liegt, ob serve läuf
 kephalaion config show  # config und settings je Rolle
 kephalaion config set node sync_interval 1m          # Abstand des Abgleichs im Hintergrund
 kephalaion config unset node sync_interval           # wieder der Standard (30s)
+kephalaion config set hub public_url https://<name>/kephalaion/hub   # für den Einrichtungscode
+kephalaion config set hub alias vm                   # der Alias, unter dem Nodes den Hub eintragen
 kephalaion config export --output keph-config.yaml   # Einstellungen sichern, ohne Inhalte
 kephalaion config import keph-config.yaml            # in eingerichtete Rollen zurückschreiben
 ```
@@ -232,7 +234,12 @@ der Präfix gehört dem Proxy, `/hub` dem Binary): TLS beendet ein Reverse-Proxy
 Rechner, das Zertifikat prüft der Node gegen die System-Roots oder eine mitgegebene CA
 (`--ca-file <pfad>`, gespeichert wird der Inhalt); `node hub check` erklärt Zertifikatsfehler,
 einen Proxy ohne Hub dahinter, die Host-Prüfung und eine Adresse ohne `/hub` — Aufbau in
-[`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“. `ssh`
+[`docs/installation.md`](docs/installation.md), „Hub für Nodes anderer Rechner“. Einfacher
+geht ein Node auf einem anderen Rechner mit einem **Einrichtungscode**: Mit `public_url` und
+`alias` in den settings des Hubs gibt `kephalaion hub node add <name> --grant <collection>` ihn
+genau einmal aus, und `kephalaion node setup <code>` richtet auf dem Rechner des Nodes alles
+ein — Node, Hub-Eintrag, Rotieren des Node-Tokens (danach ist der Code wertlos), Collections,
+Dienst und Assistenten —, wiederholbar und mit einer Übersicht zum Schluss (dort, „Node-Seite“). `ssh`
 (`--address [user@]host[:port]`, optional `--ssh-key`) lässt sich eintragen, aber noch nicht
 benutzen. Namen von Collections, Nodes, Accounts und Hub-Aliasen bestehen aus
 `a–z`, `0–9`, `.`, `_` und `-`, beginnen mit Buchstabe oder Ziffer, haben höchstens 63 Zeichen

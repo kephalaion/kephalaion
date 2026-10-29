@@ -403,7 +403,8 @@ Exit-Codes von `add`, `remove` und `status`: 0 fertig, 1 Fehler bei einem Assist
 Der Hub lauscht nur auf Loopback und spricht kein TLS — das bleibt so. Ein Node auf einem
 anderen Rechner erreicht ihn über einen **Reverse-Proxy auf dem Rechner des Hubs** (hier
 Caddy), der nach außen `https` spricht, TLS beendet und `/kephalaion/hub/*` an
-`localhost:7434` weiterreicht. Der Hub braucht dafür keine Änderung und keine Einstellung:
+`localhost:7434` weiterreicht. Der Hub braucht dafür keine Änderung und keine Einstellung —
+außer Adresse und Alias für den Einrichtungscode („Am Hub: Adresse und Alias für den Einrichtungscode“ unten):
 Der Proxy nimmt nur seinen Präfix `/kephalaion` weg — das Binary ordnet seine Teile selbst,
 der Hub-Listener bedient den Vertrag unter `/hub/` und antwortet an seiner Wurzel einem
 Browser mit der Weboberfläche, allem anderen mit einer Begrüßung — und setzt `Host` auf die
@@ -627,12 +628,70 @@ In Azure geschieht das in der NSG vor der VM. Steht vor der VM ein Load Balancer
 eine Firewall (der Metadatendienst nennt am NIC keine öffentliche IP), braucht der Port auch
 dort eine Regel — auf der VM zu bestätigen.
 
+### Am Hub: Adresse und Alias für den Einrichtungscode
+
+Damit `hub node add` einen **Einrichtungscode** ausgibt statt des rohen Tokens, nennt der Hub in
+seinen `settings`, wie Nodes ihn erreichen und unter welchem Alias sie ihn eintragen (Task 034).
+Beides gehört nicht in die `config.yaml` (die trägt nur `db` und `listen`), sondern in die
+Datenbank des Hubs; es geht mit `config export|import`. Einmal, als der User bzw.
+Systembenutzer des Hubs:
+
+```sh
+kephalaion config set hub public_url https://hub.example.org/kephalaion/hub   # Weg 2: https://9.141.8.157/kephalaion/hub
+kephalaion config set hub alias vm
+kephalaion config show                     # settings hub: alias = vm, public_url = …
+```
+
+`public_url` ist dieselbe Adresse wie bei `node hub add --address` (nur `https`, bis `/hub`);
+`alias` folgt der Namensregel eines Hub-Alias und ist auf allen Rechnern derselbe — die
+Token-Dateien der Accounts liegen unter `tokens/<alias>/`. Ohne `alias` verlangt `node setup`
+`--alias`; ohne `public_url` gibt `hub node add` wie früher das Token aus (oder den Code mit
+`--address <url>`).
+
 ### Node-Seite
 
 ```sh
-# Am Hub: ein Node je Rechner; das Token geht per SSH zum Rechner des Nodes, nie als Argument.
-kephalaion hub node add wsl-kleist
-kephalaion hub node grant wsl-kleist test
+# Am Hub: ein Node je Rechner, gleich mit seinen Collections. Ausgegeben wird der
+# Einrichtungscode (kephsetup_…) genau einmal; er trägt Adresse, Alias, Node-Namen und Token.
+kephalaion hub node add wsl-kleist --grant test
+# Den Code zum User des Nodes bringen (per SSH, Messenger …). Er ist wertlos, sobald
+# node setup ihn eingelöst hat; bis dahin gilt er wie ein Token.
+
+# Auf dem Rechner des Nodes, als der User, dem der Node gehört (Installation pro User, oben):
+kephalaion node setup <code>                          # Weg 1, Name
+kephalaion node setup <code> --ca-file ~/vm-ca.pem    # Weg 2, IP mit CA (die CA kommt nicht mit dem Code)
+# ohne Shell-Verlauf: kephalaion node setup --code-stdin (eine Zeile)
+```
+
+`node setup` macht, was früher acht Befehle waren, je Schritt mit einer Zeile: `node init`
+(falls die Rolle fehlt), den Hub-Eintrag unter dem Alias vom Hub — erst nach einem gelungenen
+`whoami` gespeichert, ein gescheiterter Check (etwa ohne nötige `--ca-file`) hinterlässt nichts
+—, das **Rotieren des Node-Tokens** (`node_rotate`: danach ist der Code wertlos), die erlaubten
+Collections (`node collection add`, ohne die fest abonnierten), `service install` (außer
+`--no-service` oder schon eingerichtet) und den Eintrag bei den Assistenten (wie `node mcp add
+--auto`; ohne Token-Datei unter `tokens/<alias>/` der Hinweis auf `node account setup`). Zum
+Schluss eine Übersicht: Ort und Inhalt der `config.yaml`, der Hub-Eintrag (Token gekürzt), die
+Collections, der Dienst samt Log, die Assistenten und die Token-Dateien.
+
+Wiederholbar: Ein zweiter Aufruf setzt fort, wo der erste stehen blieb, und überschreibt
+nichts, was anders eingerichtet ist — steht der Alias mit anderer Adresse, anderem Node-Namen,
+Transport oder anderer CA da, bricht er ab. Ob schon rotiert ist, fragt er den Hub (`whoami`).
+Ein neuer Code aus `hub node token <name>` für einen vorhandenen Eintrag wird übernommen und
+rotiert. Lehnt der Hub alles ab (ein alter Code, inzwischen ersetzt), nennt er `hub node token
+<name>`. Kennt der Hub `node_rotate` noch nicht (älter als Task 034), bricht er ab: **erst den
+Hub aktualisieren, dann die Nodes** — derselbe Aufruf setzt danach fort. `node setup` gibt es
+nur pro User; neben der globalen config bricht es ab. Exit 0 eingerichtet, 1 Fehler, 2 falscher
+Aufruf. Den Code darf `node setup` als Argument nehmen, weil er sofort rotiert wird; bricht es
+vorher ab, gilt er weiter (Grenzen: [`konzept.md`](konzept.md), „Einen Node mit einem Code
+einrichten“).
+
+**Der alte Weg, als Sonderfall** — für einen vorhandenen Node, Automatisierung oder wer das
+Token selbst eintragen will: `--no-code` gibt das Token statt des Codes aus, auch wenn
+`public_url` gesetzt ist; ohne `public_url` (und ohne `--address`) ist das ohnehin so.
+
+```sh
+# Am Hub: das Token geht per SSH zum Rechner des Nodes, nie als Argument.
+kephalaion hub node add wsl-kleist --grant test --no-code
 
 # Am Node (Weg 1, Name):
 read -rs TOKEN; printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
@@ -644,7 +703,14 @@ printf '%s\n' "$TOKEN" | kephalaion node hub add vm --node wsl-kleist \
 kephalaion node hub check vm          # erreichbar, hub_id, Node-Name, erlaubte Collections
 kephalaion node collection add vm:test
 kephalaion node sync vm
+kephalaion node hub rotate vm         # das übergebene Token gegen eines tauschen, das nur der Node kennt
 ```
+
+`node hub rotate <alias>` macht den Wechsel aus `node setup` einzeln (über `local`, `http`,
+`https`): Das neue Token liegt vorher in `hub-<entry_id>.pending` neben der `node.db` (`0600`)
+und ersetzt danach das in `node.db`; bei unklarem Ausgang klärt der nächste Aufruf über
+`whoami`, ohne erneut zu rotieren (Exit 3: die `.pending` galt nicht und ist verworfen —
+erneut aufrufen).
 
 `node hub check` nennt, was schiefgeht: „Zertifikat von … nicht vertraut (Aussteller …;
 --ca-file?)“, „Zertifikat gilt nicht für …“, „Zertifikat abgelaufen seit …“, „Proxy
@@ -723,8 +789,10 @@ außerhalb der VM, etwa in Terraform):
 `Caddyfile.j2` ist die Vorlage oben mit `{{ caddy_site }}` in der ersten Zeile und
 `{{ caddy_tls }}` an der Stelle von `tls internal` (leer bei Weg 1). Bei `tls internal`
 holt ein Lauf das CA-Zertifikat für die Nodes mit `ansible.builtin.slurp` von
-`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`; das Token je Node bleibt
-Handarbeit (`hub node add`, Übergabe per SSH).
+`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt`. Adresse und Alias für den
+Einrichtungscode setzt ein Lauf mit `config set hub public_url …` und `config set hub alias …`
+als Systembenutzer (wiederholbar, „Für Automatisierung“). Der Code je Node bleibt Handarbeit
+(`hub node add`, Übergabe an den User des Nodes).
 
 ### Bekannte Grenze
 
@@ -1290,6 +1358,7 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
 | Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth` mit `copy_headers X-User X-User-Email X-User-Roles` in `route`, dazu für die ganze Site `request_header -X-User*` und `-X_User*` (entfernt jeden Header ab `X-User` des Browsers, auch `X-User-Roles`; die alte Vorlage mit vier einzelnen Zeilen vor dem Upgrade auf die Admin-Ansicht anpassen); nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
+| settings des Hubs | `public_url` (die Adresse für Nodes, `https://<name>/kephalaion/hub`) und `alias` (der Alias, unter dem Nodes den Hub eintragen): stehen im Einrichtungscode von `hub node add` und `hub node token`; gesetzt mit `config set hub …` |
 
 Reihenfolge und Regeln:
 
@@ -1305,7 +1374,13 @@ Reihenfolge und Regeln:
    (oben); eingetauscht wird das Einrichtungstoken vom User selbst (`kephalaion node account
    setup`), die Tokens der User gehören den Usern bzw. k-playbook. Bei den KI-Assistenten trägt
    Ansible nichts ein; das macht `setup` bzw. jeder User selbst (`kephalaion node mcp add`,
-   „Bei den Assistenten anmelden“).
+   „Bei den Assistenten anmelden“). Ebenso der Einrichtungscode eines Nodes (`hub node add`)
+   und `node setup` auf dem Rechner des Nodes.
+6. **Am Hub die Angaben für den Einrichtungscode**, in den `settings` (nicht in der config):
+   `kephalaion config set hub public_url https://<name>/kephalaion/hub` und `kephalaion config
+   set hub alias <alias>`, als Systembenutzer mit `--config /etc/kephalaion/config.yaml`. Beide
+   prüft `config set` (`public_url` nur `https`, `alias` nach der Namensregel); ein zweiter Lauf
+   mit denselben Werten ändert nichts, `config show` zeigt sie.
 
 Alle Schritte sind wiederholbar: Ein zweiter Lauf ändert nichts, solange Version und Unit
 gleich bleiben.
