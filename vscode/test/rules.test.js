@@ -228,3 +228,92 @@ test('changes: ein Hub, dessen Collections alle dropped sind', () => {
   assert.deepStrictEqual(droppedHubs([], readable), []);
   assert.deepStrictEqual(droppedHubs(undefined, readable), []);
 });
+
+// --- Task 035: die Suche nach der config wie config.Locate im Binary ---
+
+const {
+  locateConfig, userConfigDir, parseNodeListen, configSourceText, DEFAULT_NODE_LISTEN,
+} = require('../rules');
+
+// stat über eine Tabelle: Pfad → undefined (gibt es) oder Fehlercode.
+function statOf(table) {
+  return (p) => (p in table ? table[p] : 'ENOENT');
+}
+const HOME = '/home/u';
+const USER = '/home/u/.config/kephalaion/config.yaml';
+const SYS = '/etc/kephalaion/config.yaml';
+const base = { env: {}, home: HOME, systemPath: SYS, cwd: '/work' };
+
+test('config: nur User, nur global, beide, keine', () => {
+  const only = locateConfig({ ...base, stat: statOf({ [USER]: undefined }) });
+  assert.deepStrictEqual(only, { path: USER, source: 'user', userPath: USER, systemPath: SYS, checked: [USER, SYS],
+    userExists: true, systemExists: false, bothKinds: false });
+  const sys = locateConfig({ ...base, stat: statOf({ [SYS]: undefined }) });
+  assert.strictEqual(sys.path, SYS);
+  assert.strictEqual(sys.source, 'system');
+  assert.deepStrictEqual([sys.userExists, sys.systemExists, sys.bothKinds], [false, true, false]);
+  // Beide: die des Users gilt, bothKinds sagt es.
+  const both = locateConfig({ ...base, stat: statOf({ [USER]: undefined, [SYS]: undefined }) });
+  assert.strictEqual(both.path, USER);
+  assert.strictEqual(both.source, 'user');
+  assert.strictEqual(both.bothKinds, true);
+  // Keine: der Ort des Users, die geprüften Orte beide.
+  const none = locateConfig({ ...base, stat: statOf({}) });
+  assert.strictEqual(none.path, USER);
+  assert.strictEqual(none.source, 'user');
+  assert.deepStrictEqual(none.checked, [USER, SYS]);
+  assert.deepStrictEqual([none.userExists, none.systemExists], [false, false]);
+});
+
+test('config: KEPHALAION_CONFIG geht vor, auch relativ, und prüft beide Arten trotzdem', () => {
+  const abs = locateConfig({ ...base, env: { KEPHALAION_CONFIG: '/tmp/k.yaml' }, stat: statOf({ [SYS]: undefined }) });
+  assert.deepStrictEqual([abs.path, abs.source, abs.checked], ['/tmp/k.yaml', 'env', ['/tmp/k.yaml']]);
+  assert.strictEqual(abs.systemExists, true);
+  const rel = locateConfig({ ...base, env: { KEPHALAION_CONFIG: 'etc/k.yaml' }, stat: statOf({}) });
+  assert.deepStrictEqual([rel.path, rel.source], ['/work/etc/k.yaml', 'env']);
+  const both = locateConfig({ ...base, env: { KEPHALAION_CONFIG: '/tmp/k.yaml' },
+    stat: statOf({ [USER]: undefined, [SYS]: undefined }) });
+  assert.strictEqual(both.bothKinds, true);
+});
+
+test('config: EACCES zählt beim User nicht, bei der globalen schon', () => {
+  // Die config des Users ohne Rechte (sudo -u mit fremdem HOME): wie nicht vorhanden — die
+  // globale gilt.
+  const user = locateConfig({ ...base, stat: statOf({ [USER]: 'EACCES', [SYS]: undefined }) });
+  assert.deepStrictEqual([user.path, user.source, user.userExists, user.bothKinds], [SYS, 'system', false, false]);
+  // Nur die des Users ohne Rechte: nichts gilt, der Ort des Users.
+  const alone = locateConfig({ ...base, stat: statOf({ [USER]: 'EACCES' }) });
+  assert.deepStrictEqual([alone.path, alone.source, alone.userExists], [USER, 'user', false]);
+  // Die globale ohne Rechte zählt: Sie gilt, das Lesen meldet dann den Fehler.
+  const sys = locateConfig({ ...base, stat: statOf({ [SYS]: 'EACCES' }) });
+  assert.deepStrictEqual([sys.path, sys.source, sys.systemExists], [SYS, 'system', true]);
+});
+
+test('config: XDG_CONFIG_HOME nur absolut, wie UserPath und TokensDir', () => {
+  assert.strictEqual(userConfigDir({ XDG_CONFIG_HOME: '/x' }, HOME), '/x/kephalaion');
+  assert.strictEqual(userConfigDir({ XDG_CONFIG_HOME: 'rel' }, HOME), '/home/u/.config/kephalaion');
+  assert.strictEqual(userConfigDir({}, HOME), '/home/u/.config/kephalaion');
+  assert.strictEqual(userConfigDir({ XDG_CONFIG_HOME: 'rel' }, undefined), undefined);
+  const rel = locateConfig({ ...base, env: { XDG_CONFIG_HOME: 'rel' }, stat: statOf({ [USER]: undefined }) });
+  assert.strictEqual(rel.path, USER);
+  const abs = locateConfig({ ...base, env: { XDG_CONFIG_HOME: '/x' }, stat: statOf({ '/x/kephalaion/config.yaml': undefined }) });
+  assert.strictEqual(abs.path, '/x/kephalaion/config.yaml');
+  // Heimatverzeichnis unbekannt: die globale gilt, wenn es sie gibt, sonst ein Fehler.
+  const sys = locateConfig({ ...base, home: undefined, stat: statOf({ [SYS]: undefined }) });
+  assert.strictEqual(sys.source, 'system');
+  const none = locateConfig({ ...base, home: undefined, stat: statOf({}) });
+  assert.match(none.error, /Heimatverzeichnis unbekannt/);
+  assert.deepStrictEqual(none.checked, [SYS]);
+  assert.strictEqual(configSourceText('system'), 'global');
+});
+
+test('listen aus dem Abschnitt node: Standard, Port allein, kein Abschnitt', () => {
+  assert.deepStrictEqual(parseNodeListen('node:\n  db: sqlite:///x/node.db\n  listen: "127.0.0.1:7500"\n'),
+    { listen: '127.0.0.1:7500' });
+  assert.deepStrictEqual(parseNodeListen('hub:\n  listen: 127.0.0.1:7434\nnode:\n  db: sqlite:///x/node.db\n'),
+    { listen: DEFAULT_NODE_LISTEN });
+  assert.deepStrictEqual(parseNodeListen('node: # Node\n  listen: :7500\n'), { listen: '127.0.0.1:7500' });
+  assert.deepStrictEqual(parseNodeListen('hub:\n  listen: 127.0.0.1:7434\n'), { reason: 'node_not_set_up' });
+  assert.deepStrictEqual(parseNodeListen(''), { reason: 'node_not_set_up' });
+  assert.deepStrictEqual(parseNodeListen('node:\n'), { reason: 'node_not_set_up' });
+});

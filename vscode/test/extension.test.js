@@ -111,7 +111,13 @@ const vscode = {
   Disposable,
   ThemeColor: class {},
   MarkdownString: class {
-    appendMarkdown() {}
+    constructor() {
+      this.value = '';
+    }
+
+    appendMarkdown(s) {
+      this.value += s;
+    }
   },
   StatusBarAlignment: { Left: 1 },
   FileChangeType: { Changed: 1, Created: 2, Deleted: 3 },
@@ -504,11 +510,12 @@ test('Schranke: Node beim Start nicht erreichbar — eine Probe, nichts weiter, 
     start();
     const uri = { authority: 'vm', path: '/test', toString: () => 'keph://vm/test' };
     const e = await rejects(fsProvider.stat(uri), 'Unavailable');
-    assert.match(e.message, /nicht erreichbar \(ECONNREFUSED\); nächste Probe in \d+ s, bis dahin nichts gefragt/);
+    assert.match(e.message, /antwortet nicht \(ECONNREFUSED\); nächste Probe in \d+ s, bis dahin nichts gefragt/);
     await settle();
     assert.strictEqual(calls.length, 1, `${calls.length} Anfragen an den Node`);
     assert.deepStrictEqual(hubsOf(calls[0].headers), ['vm']);
-    assert.strictEqual(statusItem.text, '$(warning) Keph: Node nicht erreichbar');
+    // Die Ursache (reason) geht durch die Schranke mit (pause.closedError, Task 035).
+    assert.strictEqual(statusItem.text, '$(warning) Keph: Node antwortet nicht');
     assert.ok(logs.some((l) => l.includes('ohne Ergebnis') && l.includes('1. Mal')), logs.join('\n'));
     // Der Node ist zurück, das Paar ungültig: Innerhalb des Abstands geht nichts hinaus — weder
     // changes noch das Dateisystem noch der Start des MCP-Servers.
@@ -619,6 +626,200 @@ test('Erkennen: 401 des Proxys und dropped in changes pausieren das Paar', async
     assert.strictEqual(statusItem.text, '$(warning) Keph vm');
     await fsProvider.pollChanges();
     assert.strictEqual(calls.length, n + 1, 'nach dropped ging noch eine Anfrage hinaus');
+  } finally {
+    reply = null;
+  }
+});
+
+// --- Task 035: die Suche nach der config wie das Binary, die Meldungen nach Ursache ---
+
+// Der feste Ort der globalen config, für die Tests umgelenkt (setSystemPath, wie SystemPath in Go).
+const systemConfig = path.join(home, 'etc', 'kephalaion', 'config.yaml');
+ext.setSystemPath(systemConfig);
+const userConfig = path.join(home, 'config', 'kephalaion', 'config.yaml');
+
+function putConfig(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+}
+
+function rmConfig(file) {
+  fs.rmSync(file, { recursive: true, force: true });
+}
+
+// Die Tests der Suche heben das KEPHALAION_CONFIG der Testdatei auf und stellen es danach wieder her.
+async function withoutEnvConfig(fn) {
+  const saved = process.env.KEPHALAION_CONFIG;
+  delete process.env.KEPHALAION_CONFIG;
+  delete settings.nodeUrl;
+  try {
+    await fn();
+  } finally {
+    process.env.KEPHALAION_CONFIG = saved;
+    reply = null;
+    rmConfig(userConfig);
+    rmConfig(systemConfig);
+  }
+}
+
+// Der Tooltip als Text, gleich ob String oder MarkdownString.
+const tooltip = () => (typeof statusItem.tooltip === 'string' ? statusItem.tooltip : statusItem.tooltip.value);
+
+// Nur die globale config: whoami geht an ihr listen, mit den Paaren aus tokens/ des Users; der
+// MCP-Server für Copilot wird gemeldet. Log und Status nennen Ort und Quelle.
+test('globale config: listen daraus, die Token-Dateien des Users, MCP-Server gemeldet', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putConfig(systemConfig, 'node:\n  db: sqlite:////var/lib/kephalaion/node.db\n  listen: "127.0.0.1:7500"\n');
+  Object.assign(settings, { hubs: [], accounts: {} });
+  logs.length = 0;
+  start();
+  await settle();
+  assert.ok(calls.length > 0, 'keine Anfrage an den Node');
+  for (const c of calls) {
+    assert.strictEqual(c.url, 'http://127.0.0.1:7500/mcp');
+    assert.deepStrictEqual(hubsOf(c.headers), ['vm']);
+  }
+  assert.strictEqual(statusItem.text, '$(database) Keph vm');
+  const [def] = provider.provideMcpServerDefinitions();
+  assert.strictEqual(def.uri.s, 'http://127.0.0.1:7500/mcp');
+  assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(def)).headers), ['vm']);
+  assert.ok(logs.some((l) => l.includes(`config ${systemConfig} (global)`)), logs.join('\n'));
+  assert.ok(tooltip().includes(`config ${systemConfig} (global)`), tooltip());
+  assert.ok(!tooltip().includes('zwei Arten'));
+}));
+
+// Fehlt listen im Abschnitt node:, gilt 127.0.0.1:7433 wie im Binary.
+test('listen fehlt: 127.0.0.1:7433', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putConfig(userConfig, 'node:\n  db: sqlite:///x/node.db\n');
+  Object.assign(settings, { hubs: [], accounts: {} });
+  start();
+  await settle();
+  assert.ok(calls.length > 0);
+  for (const c of calls) assert.strictEqual(c.url, 'http://127.0.0.1:7433/mcp');
+  assert.ok(tooltip().includes(`config ${userConfig} (pro User)`), tooltip());
+}));
+
+// Ohne config: eigene Meldung in Leiste und Tooltip, mit beiden geprüften Orten; keine Anfrage.
+test('keine config: eigene Meldung mit den geprüften Orten', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { hubs: [], accounts: {} });
+  logs.length = 0;
+  start();
+  await settle();
+  assert.strictEqual(calls.length, 0, 'eine Anfrage ohne Adresse');
+  assert.strictEqual(statusItem.text, '$(warning) Keph: keine config');
+  assert.ok(tooltip().includes(`geprüft: ${userConfig}, ${systemConfig}`), tooltip());
+  assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
+  assert.ok(logs.some((l) => l.includes('keine Adresse: keine config gefunden')), logs.join('\n'));
+  logs.length = 0;
+  await registered['kephalaion.showStatus']();
+  assert.ok(logs.some((l) => l.startsWith('keine config: keine config gefunden (geprüft:')), logs.join('\n'));
+}));
+
+// Der Node antwortet nicht (ECONNREFUSED): „antwortet nicht“ mit Adresse.
+test('Node antwortet nicht: eigene Meldung mit Adresse', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putConfig(userConfig, 'node:\n  db: sqlite:///x/node.db\n  listen: 127.0.0.1:7500\n');
+  Object.assign(settings, { hubs: [], accounts: {} });
+  reply = () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); };
+  start();
+  await settle();
+  assert.strictEqual(statusItem.text, '$(warning) Keph: Node antwortet nicht');
+  assert.ok(tooltip().includes('Node http://127.0.0.1:7500/mcp antwortet nicht (ECONNREFUSED)'), tooltip());
+}));
+
+// config nicht lesbar (hier ein Verzeichnis an ihrem Ort) und kein Abschnitt node:: je eine eigene
+// Meldung in Leiste und Tooltip.
+test('config nicht lesbar und Node nicht eingerichtet: eigene Meldungen', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  fs.mkdirSync(userConfig, { recursive: true });
+  Object.assign(settings, { hubs: [], accounts: {} });
+  start();
+  await settle();
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(statusItem.text, '$(warning) Keph: config nicht lesbar');
+  assert.ok(tooltip().includes(`config ${userConfig} nicht lesbar (EISDIR)`), tooltip());
+  stop();
+  rmConfig(userConfig);
+  putConfig(userConfig, 'hub:\n  db: sqlite:///x/hub.db\n  listen: 127.0.0.1:7434\n');
+  start();
+  await settle();
+  assert.strictEqual(calls.length, 0);
+  assert.strictEqual(statusItem.text, '$(warning) Keph: Node nicht eingerichtet');
+  assert.ok(tooltip().includes(`Node nicht eingerichtet in ${userConfig} (kein Abschnitt node:)`), tooltip());
+}));
+
+// Beide Arten: die config des Users gilt; Tooltip und Log nennen den Fehler mit demselben Weg wie
+// kephalaion status.
+test('zwei Arten der Installation: die des Users gilt, Tooltip und Log nennen den Fehler', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putConfig(userConfig, 'node:\n  db: sqlite:///x/node.db\n  listen: 127.0.0.1:7501\n');
+  putConfig(systemConfig, 'node:\n  db: sqlite:///y/node.db\n  listen: 127.0.0.1:7502\n');
+  Object.assign(settings, { hubs: [], accounts: {} });
+  logs.length = 0;
+  start();
+  await settle();
+  assert.ok(calls.length > 0);
+  for (const c of calls) assert.strictEqual(c.url, 'http://127.0.0.1:7501/mcp');
+  assert.strictEqual(statusItem.text, '$(database) Keph vm');
+  const want = `zwei Arten der Installation auf diesem Rechner — es gibt die config pro User (${userConfig}) und die globale `
+    + `(${systemConfig})`;
+  assert.ok(tooltip().includes(`Fehler: ${want}`), tooltip());
+  assert.ok(tooltip().includes('Installation pro User entfernen'), tooltip());
+  assert.ok(logs.some((l) => l.includes(`Fehler: ${want}`)), logs.join('\n'));
+}));
+
+// Ohne Ursache entscheidet kind: 5xx ist unklar, 403 abgelehnt.
+test('5xx und 403: die Texte für unclear und rejected', () => withoutEnvConfig(async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putConfig(userConfig, 'node:\n  db: sqlite:///x/node.db\n');
+  Object.assign(settings, { hubs: [], accounts: {} });
+  reply = () => new Response('down', { status: 503, headers: { 'content-type': 'text/plain' } });
+  start();
+  await settle();
+  assert.strictEqual(statusItem.text, '$(warning) Keph: Antwort unklar');
+  assert.ok(tooltip().includes('HTTP 503'), tooltip());
+  stop();
+  reply = () => new Response('no', { status: 403, headers: { 'content-type': 'text/plain' } });
+  start();
+  await settle();
+  assert.strictEqual(statusItem.text, '$(warning) Keph: Anfrage abgelehnt');
+  assert.ok(tooltip().includes('HTTP 403'), tooltip());
+}));
+
+// An einer entfernten nodeUrl mit geschlossener Schranke: ensure wirft dieselbe Art wie bisher
+// (kind unreachable), fsError liefert denselben Fehler wie bisher (Unavailable); die Ursache
+// kommt nur dazu.
+test('Schranke an einer entfernten nodeUrl: kind wie bisher, reason daneben', async () => {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  Object.assign(settings, { nodeUrl: REMOTE, hubs: ['vm'], accounts: {} });
+  reply = () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); };
+  try {
+    start();
+    const uri = { authority: 'vm', path: '/test', toString: () => 'keph://vm/test' };
+    const e = await rejects(fsProvider.stat(uri), 'Unavailable');
+    assert.match(e.message, /antwortet nicht \(ECONNREFUSED\); nächste Probe/);
+    await settle();
+    const [def] = provider.provideMcpServerDefinitions();
+    let thrown;
+    try {
+      await provider.resolveMcpServerDefinition(def);
+    } catch (err) {
+      thrown = err;
+    }
+    assert.ok(thrown, 'ensure warf nicht');
+    assert.strictEqual(thrown.kind, 'unreachable');
+    assert.strictEqual(thrown.reason, 'no_answer');
+    assert.strictEqual(calls.length, 1);
   } finally {
     reply = null;
   }

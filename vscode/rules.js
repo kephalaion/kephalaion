@@ -5,7 +5,99 @@
 
 'use strict';
 
+const path = require('path');
 const { pauseWarning } = require('./pause');
+
+// --- Die config (Task 035; docs/installation.md, „Verwalten“) ---
+
+// Der Standard für listen im Abschnitt node:, wenn er dort fehlt (config.DefaultListenNode).
+const DEFAULT_NODE_LISTEN = '127.0.0.1:7433';
+
+// Das Verzeichnis der config des Users — wie config.UserPath im Binary: $XDG_CONFIG_HOME/kephalaion,
+// wenn die Variable einen absoluten Pfad trägt, sonst ~/.config/kephalaion. Darin liegt tokens/,
+// gleich welche config gilt (assistant.TokensDir). home ist das Heimatverzeichnis; undefined, wenn
+// beides unbekannt ist.
+function userConfigDir(env, home) {
+  const xdg = env.XDG_CONFIG_HOME;
+  if (xdg && path.isAbsolute(xdg)) return path.join(xdg, 'kephalaion');
+  if (!home) return undefined;
+  return path.join(home, '.config', 'kephalaion');
+}
+
+// Die Suche nach der config wie config.Locate im Binary, Fall für Fall: KEPHALAION_CONFIG (zu einem
+// absoluten Pfad aufgelöst, gegen cwd) > die config des Users, wenn es sie gibt > die globale
+// (systemPath, /etc/kephalaion/config.yaml), wenn es sie gibt > der Ort des Users, an dem sie fehlt.
+// stat(p) liefert undefined, wenn es die Datei gibt, sonst den Fehlercode (ENOENT, EACCES, …). Bei
+// der config des Users zählen ENOENT und EACCES als „gibt es nicht“ (sie gehört dann einem anderen
+// User, wie userFileExists); bei der globalen nur ENOENT (wie fileExists): Ein Rechteproblem soll
+// das Lesen melden, nicht die Suche übergehen. Liefert { path, source: env|user|system, userPath,
+// systemPath, checked, userExists, systemExists, bothKinds } oder { error }, wenn das
+// Heimatverzeichnis unbekannt ist und nichts anderes gilt. Ob es beide gibt (zwei Arten der
+// Installation), prüft sie in jedem Fall.
+function locateConfig({ env, home, systemPath, stat, cwd }) {
+  const userDir = userConfigDir(env || {}, home);
+  const userPath = userDir ? path.join(userDir, 'config.yaml') : undefined;
+  const userCode = userPath ? stat(userPath) : 'ENOENT';
+  const systemCode = stat(systemPath);
+  const out = {
+    userPath,
+    systemPath,
+    userExists: userCode !== 'ENOENT' && userCode !== 'EACCES',
+    systemExists: systemCode !== 'ENOENT',
+  };
+  out.bothKinds = out.userExists && out.systemExists;
+  const explicit = env && env.KEPHALAION_CONFIG;
+  if (explicit) {
+    out.path = path.resolve(cwd || process.cwd(), explicit);
+    out.source = 'env';
+    out.checked = [out.path];
+    return out;
+  }
+  out.checked = [userPath, systemPath].filter(Boolean);
+  if (out.userExists) {
+    out.path = userPath;
+    out.source = 'user';
+  } else if (out.systemExists) {
+    out.path = path.normalize(systemPath);
+    out.source = 'system';
+  } else if (!userPath) {
+    return { error: 'Heimatverzeichnis unbekannt (HOME fehlt, XDG_CONFIG_HOME ist nicht absolut)', checked: out.checked };
+  } else {
+    out.path = userPath;
+    out.source = 'user';
+  }
+  return out;
+}
+
+// Der Text zur Quelle der config, wie kephalaion status sie nennt.
+function configSourceText(source) {
+  return { env: 'KEPHALAION_CONFIG', user: 'pro User', system: 'global' }[source] || source;
+}
+
+// listen aus dem Abschnitt node: der config, aus ihrem Text — ohne YAML-Bibliothek, die Datei ist
+// flach. Liefert { listen } (fehlt listen: DEFAULT_NODE_LISTEN, wie das Binary) oder { reason:
+// 'node_not_set_up' }, wenn es den Abschnitt node: nicht gibt. Ein Abschnitt ohne Schlüssel gilt
+// als nicht eingerichtet (node: ohne Inhalt ist in YAML null, im Binary nil).
+function parseNodeListen(text) {
+  let section = '';
+  let nodeSection = false;
+  let listen;
+  for (const line of text.split('\n')) {
+    const top = line.match(/^([A-Za-z_]+):\s*(?:#.*)?$/);
+    if (top) {
+      section = top[1];
+      continue;
+    }
+    if (section !== 'node') continue;
+    if (/^\s+[A-Za-z_]+:/.test(line)) nodeSection = true;
+    const m = line.match(/^\s+listen:\s*["']?([^"'\s#]+)/);
+    if (m && listen === undefined) listen = m[1];
+  }
+  if (!nodeSection) return { reason: 'node_not_set_up' };
+  if (!listen) listen = DEFAULT_NODE_LISTEN;
+  if (listen.startsWith(':')) listen = '127.0.0.1' + listen;
+  return { listen };
+}
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const DOCKER_HOST = 'host.docker.internal';
@@ -276,5 +368,5 @@ function droppedHubs(dropped, readable) {
 
 module.exports = {
   parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, whoamiOutcome,
-  droppedHubs, PROXY_HINT,
+  droppedHubs, PROXY_HINT, userConfigDir, locateConfig, configSourceText, parseNodeListen, DEFAULT_NODE_LISTEN,
 };

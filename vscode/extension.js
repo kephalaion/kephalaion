@@ -12,41 +12,77 @@ const pause = require('./pause');
 const SCHEME = 'keph';
 const POLL_MS = 30000;
 
-// --- Orte (docs/konzept.md, „Orte nach XDG“) ---
+// --- Orte (docs/konzept.md, „Orte nach XDG“; docs/installation.md, „Verwalten“) ---
 
+// Der feste Ort der globalen config (config.SystemConfig). Tests lenken ihn über setSystemPath in
+// ein temporäres Verzeichnis — nur dafür, wie SystemPath im Binary: keine Umgebungsvariable, keine
+// Einstellung.
+let systemPath = '/etc/kephalaion/config.yaml';
+
+function setSystemPath(p) {
+  systemPath = p;
+}
+
+// Das Verzeichnis der config des Users, darin tokens/ — auch wenn die globale config gilt
+// (assistant.TokensDir): Die Token-Dateien bleiben beim User.
 function configDir() {
-  const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(xdg, 'kephalaion');
+  return rules.userConfigDir(process.env, os.homedir()) || path.join(os.homedir(), '.config', 'kephalaion');
 }
 
-function configFile() {
-  return process.env.KEPHALAION_CONFIG || path.join(configDir(), 'config.yaml');
+function tokensDir() {
+  return path.join(configDir(), 'tokens');
 }
 
-// listen aus dem Abschnitt node: der config — ohne YAML-Bibliothek, die Datei ist flach.
-function nodeListen(file) {
+// Gibt es die Datei? undefined, sonst der Fehlercode — für rules.locateConfig.
+function statCode(p) {
+  try {
+    fs.statSync(p);
+    return undefined;
+  } catch (e) {
+    return e.code || 'EIO';
+  }
+}
+
+// Die Suche nach der config wie das Binary (rules.locateConfig): KEPHALAION_CONFIG > die des Users,
+// wenn es sie gibt > die globale, wenn es sie gibt > der Ort des Users.
+function locateConfig() {
+  return rules.locateConfig({ env: process.env, home: os.homedir(), systemPath, stat: statCode, cwd: process.cwd() });
+}
+
+// Die Warnung, wenn es die config des Users und die globale nebeneinander gibt — derselbe Fehler
+// mit demselben Weg wie bei kephalaion status; undefined sonst.
+function bothKindsWarning(loc) {
+  if (!loc || !loc.bothKinds) return undefined;
+  return `zwei Arten der Installation auf diesem Rechner — es gibt die config pro User (${loc.userPath}) und die globale `
+    + `(${loc.systemPath}); es gilt die pro User. Weg: die Installation pro User entfernen (docs/installation.md, `
+    + '„Installation pro User entfernen“)';
+}
+
+// listen aus dem Abschnitt node: der gefundenen config (rules.parseNodeListen; fehlt listen, gilt
+// 127.0.0.1:7433 wie im Binary). Liefert { listen } oder { error, reason }: no_config (die Datei
+// fehlt; die Meldung nennt die geprüften Orte), config_unreadable (ein anderer Fehler beim Lesen)
+// oder node_not_set_up (kein Abschnitt node:).
+function nodeListen(loc) {
+  if (loc.error) return { error: `keine config: ${loc.error}`, reason: 'no_config' };
   let text;
   try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch {
-    return undefined;
-  }
-  let section = '';
-  for (const line of text.split('\n')) {
-    const top = line.match(/^([A-Za-z_]+):\s*$/);
-    if (top) {
-      section = top[1];
-      continue;
+    text = fs.readFileSync(loc.path, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      return { error: `keine config gefunden (geprüft: ${loc.checked.join(', ')}) — kephalaion node init, oder `
+        + 'kephalaion.nodeUrl setzen', reason: 'no_config' };
     }
-    const m = line.match(/^\s+listen:\s*["']?([^"'\s#]+)/);
-    if (m && section === 'node') return m[1];
+    return { error: `config ${loc.path} nicht lesbar (${e.code || e.message})`, reason: 'config_unreadable' };
   }
-  return undefined;
+  const r = rules.parseNodeListen(text);
+  if (r.reason) return { error: `Node nicht eingerichtet in ${loc.path} (kein Abschnitt node:) — kephalaion node init`, reason: r.reason };
+  return r;
 }
 
 // Die Adresse des Nodes: kephalaion.nodeUrl, geprüft wie node dir --node (rules.parseNodeUrl:
-// http nur zu Loopback und host.docker.internal, sonst https), sonst listen aus der config.
-// Liefert { endpoint, remote } oder { error }.
+// http nur zu Loopback und host.docker.internal, sonst https), sonst listen aus der gefundenen
+// config. Liefert { endpoint, remote } oder { error, reason? } — die Ursache nach nodeListen, wenn
+// es eine der config ist; dazu location, die gefundene config (ohne nodeUrl).
 function nodeTarget() {
   const set = vscode.workspace.getConfiguration('kephalaion').get('nodeUrl');
   if (set) {
@@ -56,10 +92,10 @@ function nodeTarget() {
       return { error: e.message };
     }
   }
-  let listen = nodeListen(configFile());
-  if (!listen) return { error: `keine Adresse des Nodes: listen fehlt in ${configFile()}` };
-  if (listen.startsWith(':')) listen = '127.0.0.1' + listen;
-  return { endpoint: `http://${listen}/mcp`, remote: false };
+  const loc = locateConfig();
+  const r = nodeListen(loc);
+  if (r.error) return { error: r.error, reason: r.reason, location: loc };
+  return { endpoint: `http://${r.listen}/mcp`, remote: false, location: loc };
 }
 
 function nodeUrl() {
@@ -81,7 +117,7 @@ function hubSelection() {
 // Token-Dateien: tokens/<hub>/<account>.token; *.pending wird übergangen.
 // Liefert je Hub die Accounts, nach Namen sortiert.
 function tokenAccounts() {
-  const base = path.join(configDir(), 'tokens');
+  const base = tokensDir();
   const out = {};
   let hubs = [];
   try {
@@ -110,7 +146,7 @@ function chosenAccounts() {
 // first (mehrere, keiner oder ein unbekannter gewählt — der erste nach Namen).
 // Nur die Hubs aus hubSelection: An eine entfernte nodeUrl gehen nur die gewählten.
 function readCredentials(log) {
-  const base = path.join(configDir(), 'tokens');
+  const base = tokensDir();
   const chosen = chosenAccounts();
   const creds = {};
   const all = tokenAccounts();
@@ -180,7 +216,7 @@ function mcpLogins() {
 // Die Header-Paare für den Start des Servers, aus den Token-Dateien; ein pausiertes Paar (paused:
 // { hub: … }, Task 025) fehlt. Meldungen nennen nie ein Token.
 function mcpHeaders(log, paused) {
-  const base = path.join(configDir(), 'tokens');
+  const base = tokensDir();
   const { logins, skipped } = mcpLogins();
   for (const s of skipped) log(`MCP-Server: Hub ${s}`);
   const active = logins.filter((l) => {
@@ -195,7 +231,7 @@ function mcpHeaders(log, paused) {
 // Stand, an dem sich zeigt, ob die Definition neu zu melden ist: Adresse, Einstellung, Trace,
 // Hubs mit ihren Accounts und die Token-Dateien (Name, Größe, Zeit) — ohne ihren Inhalt.
 function mcpState() {
-  const base = path.join(configDir(), 'tokens');
+  const base = tokensDir();
   const files = [];
   for (const [hub, accounts] of Object.entries(tokenAccounts())) {
     for (const a of accounts) {
@@ -280,11 +316,29 @@ const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EADDRNOTAVAIL', 'EHOSTUN
 
 // Ein Fehler auf dem Weg zum Node, keine Antwort eines Werkzeugs. kind: unreachable (nichts
 // abgeschickt), unclear (abgeschickt, keine brauchbare Antwort) oder rejected (der Node hat
-// die Anfrage abgelehnt, bevor ein Werkzeug lief).
-function nodeError(message, kind) {
+// die Anfrage abgelehnt, bevor ein Werkzeug lief). reason (Task 035) nennt daneben die Ursache
+// für die Leiste, wenn es eine der bekannten ist: no_config, config_unreadable, node_not_set_up
+// (ein Fehler der config, nichts abgeschickt) oder no_answer (nichts abgeschickt, NOT_SENT) —
+// nicht in Error.cause, das bei fetch schon belegt ist. pause.js und fsError entscheiden nach
+// kind, nie nach reason.
+function nodeError(message, kind, reason) {
   const err = new Error(message);
   err.kind = kind;
+  if (reason) err.reason = reason;
   return err;
+}
+
+// Der Text der Leiste zu einem Fehler auf dem Weg zum Node: nach reason, sonst nach kind.
+const REASON_TEXT = {
+  no_config: 'keine config',
+  config_unreadable: 'config nicht lesbar',
+  node_not_set_up: 'Node nicht eingerichtet',
+  no_answer: 'Node antwortet nicht',
+};
+const KIND_TEXT = { unclear: 'Antwort unklar', rejected: 'Anfrage abgelehnt' };
+
+function errorText(e) {
+  return (e && REASON_TEXT[e.reason]) || (e && KIND_TEXT[e.kind]) || 'Node nicht erreichbar';
 }
 
 class Node {
@@ -389,7 +443,7 @@ class Node {
   async request(tool, args, opts = {}) {
     const target = nodeTarget();
     const url = target.endpoint;
-    if (!url) throw nodeError(target.error, 'unreachable');
+    if (!url) throw nodeError(target.error, 'unreachable', target.reason);
     const sel = hubSelection();
     if (sel.error) throw nodeError(sel.error, 'unreachable');
     const creds = this.credentials();
@@ -430,7 +484,7 @@ class Node {
     } catch (e) {
       const code = e.cause && e.cause.code;
       const why = code || (e.cause && e.cause.message) || e.message;
-      if (NOT_SENT.has(code)) throw nodeError(`Node ${url} nicht erreichbar (${why})`, 'unreachable');
+      if (NOT_SENT.has(code)) throw nodeError(`Node ${url} antwortet nicht (${why})`, 'unreachable', 'no_answer');
       throw nodeError(`Verbindung zum Node ${url} abgebrochen (${why})`, 'unclear');
     }
     // Eine 401 des Proxys zählt an dessen Jail wie ein Fehlversuch — für die ganze Adresse.
@@ -503,6 +557,7 @@ class Status {
       } else {
         this.who = undefined;
         this.error = e.message;
+        this.errorText = errorText(e);
         this.log(`whoami: ${this.error}`);
       }
     }
@@ -560,11 +615,22 @@ class Status {
       : `Version Node ${this.who.version}, Erweiterung ${ext.packageJSON.version}`;
   }
 
+  // Die Zeile zur config: Ort und Quelle, dazu die Warnung bei zwei Arten der Installation.
+  configLines() {
+    const t = nodeTarget();
+    if (!t.location) return [];
+    const loc = t.location;
+    const out = loc.error ? [`config: ${loc.error}`] : [`config ${loc.path} (${rules.configSourceText(loc.source)})`];
+    const w = bothKindsWarning(loc);
+    if (w) out.push(`Fehler: ${w}`);
+    return out;
+  }
+
   // Dasselbe wie der Tooltip, als Text — für „Kephalaion: Status anzeigen“.
   summary() {
-    const lines = [`Kephalaion — Node ${nodeUrl() || '(keine Adresse)'}`];
+    const lines = [`Kephalaion — Node ${nodeUrl() || '(keine Adresse)'}`, ...this.configLines()];
     if (!this.who) {
-      lines.push(`nicht erreichbar: ${this.error}`);
+      lines.push(`${this.errorText || 'Node nicht erreichbar'}: ${this.error}`);
       return lines;
     }
     if (this.who.hidden) {
@@ -598,15 +664,19 @@ class Status {
 
   render() {
     const it = this.item;
+    // Der Tooltip beginnt mit der config — mit dem Fehler, wenn es zwei Arten der Installation gibt.
+    const cfg = this.configLines().join('\n');
     if (!this.who) {
-      it.text = '$(warning) Keph: Node nicht erreichbar';
-      it.tooltip = this.error;
+      // Der Text nach der Ursache (Task 035): keine config, config nicht lesbar, Node nicht
+      // eingerichtet, Node antwortet nicht; sonst nach kind; sonst „Node nicht erreichbar“.
+      it.text = `$(warning) Keph: ${this.errorText || 'Node nicht erreichbar'}`;
+      it.tooltip = cfg ? `${this.error}\n${cfg}` : this.error;
       it.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       return;
     }
     if (this.who.hidden) {
       it.text = '$(warning) Keph: nicht angemeldet';
-      it.tooltip = `Keine gültige Anmeldung am Node ${nodeUrl()}: ${HIDDEN_HINT}`;
+      it.tooltip = `Keine gültige Anmeldung am Node ${nodeUrl()}: ${HIDDEN_HINT}${cfg ? `\n${cfg}` : ''}`;
       it.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       return;
     }
@@ -617,6 +687,7 @@ class Status {
 
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**Kephalaion** — ${this.versionLine()}\n\n`);
+    if (cfg) md.appendMarkdown(`${cfg.replace(/\n/g, '\n\n')}\n\n`);
     if (!st.used.length) md.appendMarkdown(`${st.warning}\n\n`);
     for (const s of st.hubs) {
       const h = this.hubs().find((x) => x.hub === s.hub);
@@ -1214,7 +1285,7 @@ function activate(context) {
       const all = tokenAccounts();
       const hubs = Object.keys(all).sort();
       if (hubs.length === 0) {
-        vscode.window.showWarningMessage(`Kephalaion: keine Token-Dateien unter ${path.join(configDir(), 'tokens')}.`);
+        vscode.window.showWarningMessage(`Kephalaion: keine Token-Dateien unter ${tokensDir()}.`);
         return;
       }
       const creds = node.credentials();
@@ -1302,7 +1373,12 @@ function activate(context) {
     mcp.check();
   }));
 
-  log(`Node: ${nodeUrl() || '(keine Adresse)'}, config ${configFile()}`);
+  // Beim Start: Adresse, Ort und Quelle der config (Task 035), der Fehler bei zwei Arten.
+  const target = nodeTarget();
+  const loc = target.location || locateConfig();
+  log(`Node: ${target.endpoint || `(keine Adresse: ${target.error})`}, config ${loc.error ? `unbekannt (${loc.error})`
+    : `${loc.path} (${rules.configSourceText(loc.source)})`}`);
+  if (bothKindsWarning(loc)) log(`Fehler: ${bothKindsWarning(loc)}`);
   status.refresh();
   // Alle 30 s: Status, und ob sich Token-Dateien geändert haben (rotate, neuer Account).
   const timer = setInterval(() => {
@@ -1329,4 +1405,5 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+// setSystemPath nur für die Tests (vscode/test/extension.test.js), wie SystemPath im Binary.
+module.exports = { activate, deactivate, setSystemPath };

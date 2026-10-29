@@ -577,6 +577,8 @@ class Gate {
     const why = own ? own.message : `Probe an ${address} in einem anderen Fenster ohne Ergebnis`;
     const err = new Error(`${why}; nächste Probe ${inTime(u.nextProbe - this.now())}, bis dahin nichts gefragt`);
     err.kind = own && own.kind ? own.kind : 'unreachable';
+    // Die Ursache (reason, Task 035) neben kind, wenn dieses Fenster sie kennt.
+    if (own && own.reason) err.reason = own.reason;
     err.unanswered = u.count;
     return err;
   }
