@@ -63,6 +63,10 @@ type Store interface {
 	Settings(ctx context.Context) (map[string]string, error)
 	// ReplaceSettings ersetzt alle settings in einer Transaktion.
 	ReplaceSettings(ctx context.Context, settings map[string]string) error
+	// SetSetting setzt einen bekannten Schlüssel nach Prüfung des Werts
+	// (CheckSetting); UnsetSetting entfernt ihn und sagt, ob er gesetzt war.
+	SetSetting(ctx context.Context, key, value string) error
+	UnsetSetting(ctx context.Context, key string) (bool, error)
 
 	Collections(ctx context.Context) ([]Collection, error)
 	// Collection liest eine Collection; ErrNotFound, wenn es sie nicht gibt.
@@ -153,8 +157,9 @@ type Store interface {
 
 	// Tables liest die lokalen Tabellen für den Export.
 	Tables(ctx context.Context) (Tables, error)
-	// Import ersetzt in einer Transaktion die settings und, wenn tables nicht
-	// nil ist, die lokalen Tabellen, und schreibt config.import in actions.
+	// Import ersetzt in einer Transaktion die settings (vorher geprüft wie
+	// config set, CheckSettings) und, wenn tables nicht nil ist, die lokalen
+	// Tabellen, und schreibt config.import in actions.
 	// Die Accounts gleicht es nur an, wenn tables.KeepAccounts nicht gilt:
 	// accounts ersetzen und die SYSTEM:A:-Zeilen angleichen, unter einer
 	// Revision.

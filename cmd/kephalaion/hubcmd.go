@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/hub/source"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
+	"github.com/kephalaion/kephalaion/internal/setupcode"
 )
 
 const hubCollectionUsage = `Aufruf:
@@ -61,7 +64,8 @@ Optionen:
 `
 
 const hubNodeUsage = `Aufruf:
-  kephalaion hub node add    <name> [--description text]
+  kephalaion hub node add    <name> [--description text] [--grant <collection>]…
+                             [--address url] [--no-code]
   kephalaion hub node list
   kephalaion hub node show   <name>
   kephalaion hub node set    <name> --description text
@@ -70,10 +74,12 @@ const hubNodeUsage = `Aufruf:
   kephalaion hub node unlock <name>
   kephalaion hub node grant  <node> <collection>
   kephalaion hub node revoke <node> <collection>
-  kephalaion hub node token  <name>
+  kephalaion hub node token  <name> [--address url] [--no-code]
 
 Kommandos:
-  add      legt einen Node an und zeigt sein Token — genau einmal
+  add      legt einen Node an und zeigt seinen Einrichtungscode bzw. sein
+           Token — genau einmal; mit --grant gleich die Collections, die er
+           abgleichen darf
   list     zeigt alle Nodes
   show     zeigt einen Node samt erlaubten Collections
   set      ändert die Beschreibung
@@ -81,15 +87,31 @@ Kommandos:
   lock     sperrt einen Node; unlock hebt die Sperre auf
   grant    erlaubt dem Node, die Collection abzugleichen (replicate);
            revoke nimmt es zurück
-  token    erzeugt ein neues Token und zeigt es einmal; das alte gilt nicht mehr
+  token    erzeugt ein neues Token und zeigt es einmal, als Einrichtungscode
+           wie add; das alte gilt nicht mehr
 
-Gespeichert wird nur der Hash des Tokens. Am Node wird es mit
-kephalaion node hub add … --node <name> --token-stdin eingetragen. Node-Namen folgen den
-Regeln für Collections, admin ist reserviert, und sie sind gemeinsam mit den
+Einrichtungscode: add und token geben einen Code aus (kephsetup_…), wenn die
+settings des Hubs public_url tragen (kephalaion config set hub public_url
+https://host/kephalaion/hub) oder --address kommt. Er enthält Adresse, Alias
+(settings alias, wenn gesetzt), Node-Namen und Token; auf dem Rechner des
+Nodes macht kephalaion node setup <code> daraus einen laufenden Node und
+rotiert das Token sofort — danach ist der Code wertlos. Ohne public_url und
+--address, oder mit --no-code, zeigen add und token das Token selbst; am
+Node trägt es kephalaion node hub add … --node <name> --token-stdin ein.
+
+Gespeichert wird nur der Hash des Tokens. Node-Namen folgen den Regeln für
+Collections, admin ist reserviert, und sie sind gemeinsam mit den
 Account-Namen eindeutig.
 
 Optionen:
   --description text   Kurzbeschreibung
+  --grant collection   die Collection gleich erlauben, wie hub node grant;
+                       wiederholbar
+  --address url        die Adresse des Hubs im Code statt public_url:
+                       https://host[:port][/pfad], auf diesem Rechner auch
+                       http://localhost:<port>/hub
+  --no-code            das Token statt des Codes zeigen (der Weg über
+                       node hub add … --token-stdin)
   --config pfad        Ort der config (siehe kephalaion hub init --help)
 `
 
@@ -247,13 +269,47 @@ func runHubNode(args []string, stdout, stderr io.Writer) int {
 		"add": func(a []string) int {
 			c := newCommand("hub node add", u, stdout, stderr, "<name>")
 			desc := c.fs.String("description", "", "")
+			var grants stringList
+			c.fs.Var(&grants, "grant", "")
+			out := newCodeFlags(c)
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
-				token, err := s.AddNode(ctx, pos[0], *desc)
+				name := pos[0]
+				// Vorher prüfen, was ohne den Node geht: Adresse und
+				// Collections. Ein Recht, das danach doch scheitert, nennt
+				// die Meldung; der Code steht dann trotzdem da.
+				if err := out.check(); err != nil {
+					return err
+				}
+				seen := map[string]bool{}
+				for _, g := range grants {
+					if seen[g] {
+						return fmt.Errorf("--grant %s steht zweimal", g)
+					}
+					seen[g] = true
+					if _, err := s.Collection(ctx, g); err != nil {
+						return fmt.Errorf("--grant: %w", err)
+					}
+				}
+				token, err := s.AddNode(ctx, name, *desc)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(stdout, "Node %s angelegt.\n", pos[0])
-				printToken(stdout, token, "kephalaion node hub add <alias> --transport … --node "+pos[0]+" --token-stdin")
+				fmt.Fprintf(stdout, "Node %s angelegt.\n", name)
+				var failed []string
+				for _, g := range grants {
+					if err := s.Grant(ctx, name, g); err != nil {
+						failed = append(failed, fmt.Sprintf("%s: %v", g, err))
+						continue
+					}
+					fmt.Fprintf(stdout, "Node %s: %s erlaubt.\n", name, g)
+				}
+				if err := out.print(ctx, stdout, s, name, token); err != nil {
+					return err
+				}
+				if len(failed) > 0 {
+					return fmt.Errorf("nicht erlaubt (nachholen mit kephalaion hub node grant %s <collection>):\n  %s",
+						name, strings.Join(failed, "\n  "))
+				}
 				return nil
 			})
 		},
@@ -323,13 +379,20 @@ func runHubNode(args []string, stdout, stderr io.Writer) int {
 		}),
 		"token": func(a []string) int {
 			c := newCommand("hub node token", u, stdout, stderr, "<name>")
+			out := newCodeFlags(c)
+			out.renew = true
 			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
+				if err := out.check(); err != nil {
+					return err
+				}
 				token, err := s.NewNodeToken(ctx, pos[0])
 				if err != nil {
 					return err
 				}
 				fmt.Fprintf(stdout, "Node %s: neues Token, das alte gilt nicht mehr.\n", pos[0])
-				printToken(stdout, token, "kephalaion node hub token <alias> --token-stdin")
+				if err := out.print(ctx, stdout, s, pos[0], token); err != nil {
+					return err
+				}
 				fmt.Fprintln(stdout, "Bis dahin weist der Hub den Node ab.")
 				return nil
 			})
@@ -373,6 +436,82 @@ func (c *command) hubDo(args []string, fn func(ctx context.Context, s hubstore.S
 		return c.fail(err)
 	}
 	return 0
+}
+
+// codeFlags sind --address und --no-code von hub node add und token: ob
+// und mit welcher Adresse sie einen Einrichtungscode statt des Tokens
+// ausgeben.
+type codeFlags struct {
+	address *string
+	noCode  *bool
+	// renew: hub node token — der Weg am Node ist dann node hub token bzw.
+	// ein erneutes node setup.
+	renew bool
+}
+
+func newCodeFlags(c *command) *codeFlags {
+	return &codeFlags{address: c.fs.String("address", "", ""), noCode: c.fs.Bool("no-code", false, "")}
+}
+
+// check prüft die Angaben, bevor etwas geschrieben wird.
+func (f *codeFlags) check() error {
+	if *f.address == "" {
+		return nil
+	}
+	if *f.noCode {
+		return errors.New("--address gilt für den Code; --no-code passt nicht dazu")
+	}
+	if err := setupcode.CheckAddress(*f.address); err != nil {
+		return fmt.Errorf("--address: %w", err)
+	}
+	return nil
+}
+
+// print zeigt das neue Token eines Nodes — das einzige Mal: als
+// Einrichtungscode, wenn public_url gesetzt ist oder --address kam und nicht
+// --no-code; sonst das Token selbst mit dem Weg über node hub add. Der Code
+// steht genau einmal da, das Token dann nirgends.
+func (f *codeFlags) print(ctx context.Context, w io.Writer, s hubstore.Store, node, token string) error {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	address := *f.address
+	if address == "" {
+		address = settings[hubstore.SettingPublicURL]
+	}
+	if *f.noCode || address == "" {
+		cmd := "kephalaion node hub add <alias> --transport … --node " + node + " --token-stdin"
+		if f.renew {
+			cmd = "kephalaion node hub token <alias> --token-stdin"
+		}
+		printToken(w, token, cmd)
+		if !*f.noCode {
+			fmt.Fprintln(w, "Einen Einrichtungscode statt des Tokens (für kephalaion node setup) gibt es mit "+
+				"kephalaion config set hub public_url https://<host>/kephalaion/hub oder --address.")
+		}
+		return nil
+	}
+	alias := settings[hubstore.SettingAlias]
+	code, err := setupcode.Encode(setupcode.Code{Address: address, Alias: alias, Node: node, Token: token})
+	if err != nil {
+		// Eine public_url aus einem Import, die nicht passt: Das Token
+		// steht nirgends sonst — ohne Ausgabe wäre es verloren.
+		printToken(w, token, "kephalaion node hub add <alias> --transport … --node "+node+" --token-stdin")
+		return fmt.Errorf("kein Einrichtungscode: %w", err)
+	}
+	aliasText := alias
+	if aliasText == "" {
+		aliasText = "keiner — node setup braucht dann --alias <alias> (am Hub setzen: kephalaion config set hub alias <alias>)"
+	}
+	fmt.Fprintln(w, "Einrichtungscode (wird nicht wieder angezeigt, gespeichert ist nur der Hash des Tokens darin):")
+	fmt.Fprintf(w, "  %s\n", code)
+	fmt.Fprintf(w, "Darin: Adresse %s, Alias %s, Node %s.\n", address, aliasText, node)
+	fmt.Fprintln(w, "Auf dem Rechner des Nodes, als der User, dem er gehört — rotiert das Token sofort, danach ist der "+
+		"Code wertlos:")
+	fmt.Fprintln(w, "  kephalaion node setup <code>")
+	fmt.Fprintln(w, "  (oder ohne Shell-Verlauf: kephalaion node setup --code-stdin)")
+	return nil
 }
 
 // printToken zeigt ein neues Token — das einzige Mal — und wie es an den

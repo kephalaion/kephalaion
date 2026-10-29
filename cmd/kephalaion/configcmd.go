@@ -162,7 +162,17 @@ Schlüssel am Node:
   sync_interval   Abstand des Abgleichs im Hintergrund (serve), eine Dauer
                   wie 30s oder 2m, mindestens 1s; 0 schaltet ihn ab —
                   außer nach einem Schreibvorgang über MCP. Standard 30s.
-Am Hub gibt es noch keine.
+
+Schlüssel am Hub (beide stehen im Einrichtungscode, den hub node add und
+hub node token für node setup ausgeben):
+  public_url      die Adresse, unter der Nodes anderer Rechner den Hub
+                  erreichen: https://host[:port][/pfad], hinter einem
+                  Reverse-Proxy etwa https://host/kephalaion/hub. Ohne sie
+                  geben hub node add|token das Token statt des Codes aus
+                  (außer mit --address).
+  alias           der Alias, unter dem Nodes diesen Hub eintragen, etwa vm
+                  (Namensregel wie ein Hub-Alias). Ohne ihn verlangt node
+                  setup --alias.
 
 Optionen:
   --config pfad   Ort der config (siehe kephalaion hub init --help)
@@ -185,19 +195,30 @@ func runConfigSet(args []string, stdout, stderr io.Writer, unset bool) int {
 		return c.fail(fmt.Errorf("unbekannte Rolle %q; erwartet hub oder node", pos[0]))
 	}
 	key := pos[1]
+	check, errUnknown := nodestore.CheckSetting, nodestore.ErrUnknownSetting
 	if r == config.Hub {
-		return c.fail(fmt.Errorf("unbekannter Schlüssel %q; die Rolle hub kennt noch keine", key))
+		check, errUnknown = hubstore.CheckSetting, hubstore.ErrUnknownSetting
 	}
 	// Erst prüfen, dann die Datenbank öffnen.
 	if !unset {
-		if err := nodestore.CheckSetting(key, pos[2]); err != nil {
+		if err := check(key, pos[2]); err != nil {
 			return c.fail(err)
 		}
-	} else if err := nodestore.CheckSetting(key, ""); errors.Is(err, nodestore.ErrUnknownSetting) {
+	} else if err := check(key, ""); errors.Is(err, errUnknown) {
 		return c.fail(err)
 	}
 	ctx := context.Background()
-	s, _, err := c.openNode(ctx)
+	var s interface {
+		SetSetting(ctx context.Context, key, value string) error
+		UnsetSetting(ctx context.Context, key string) (bool, error)
+		Close() error
+	}
+	var err error
+	if r == config.Hub {
+		s, err = c.openHub(ctx)
+	} else {
+		s, _, err = c.openNode(ctx)
+	}
 	if err != nil {
 		return c.fail(err)
 	}
@@ -345,8 +366,8 @@ Hub-Einträge mit, die der Import nicht mehr enthält; sie sind abgeleitet.
 Vorab wird alles geprüft, mit denselben Regeln wie beim Anlegen über die
 Kommandozeile: Fassung des Formats, jede Rolle des Exports eingerichtet und mit
 allen ihren Teilen (ein fehlender Teil oder null bricht ab, nur ein leerer
-leert), Namen (auch der User), Token, Transporte, keine Collection mit
-Dokumenten fiele weg.
+leert), Namen (auch der User), Token, Transporte, die Werte von public_url
+und alias in den settings des Hubs, keine Collection mit Dokumenten fiele weg.
 Geschrieben wird erst der Hub, dann der Node.
 
 Optionen:
@@ -418,7 +439,13 @@ func runConfigImport(args []string, stdout, stderr io.Writer) int {
 		return nothing(errors.New(strings.Join(missing, "\n")))
 	}
 
-	// … die Tabellen nach denselben Regeln wie die CLI …
+	// … die settings des Hubs und die Tabellen nach denselben Regeln wie die
+	// CLI …
+	if settings, ok := exp.Settings[config.Hub]; ok {
+		if err := hubstore.CheckSettings(settings); err != nil {
+			return nothing(fmt.Errorf("Rolle hub: settings: %w", err))
+		}
+	}
 	hubInConfig := cfg.Section(config.Hub) != nil
 	var hubTables *hubstore.Tables
 	var nodeTables *nodestore.Tables

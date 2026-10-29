@@ -722,6 +722,9 @@ func (s *sqliteStore) Tables(ctx context.Context) (Tables, error) {
 }
 
 func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, tables *Tables) error {
+	if err := CheckSettings(settings); err != nil {
+		return err
+	}
 	if tables != nil {
 		if err := CheckTables(*tables); err != nil {
 			return err

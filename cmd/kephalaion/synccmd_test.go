@@ -221,7 +221,7 @@ func TestConfigSetUnset(t *testing.T) {
 		{[]string{"node", "sync_intervall", "5s"}, `unbekannter Schlüssel "sync_intervall"`},
 		{[]string{"node", "sync_interval", "bald"}, `"bald" ist keine Dauer`},
 		{[]string{"node", "sync_interval", "500ms"}, "kürzer als 1s"},
-		{[]string{"hub", "sync_interval", "5s"}, "die Rolle hub kennt noch keine"},
+		{[]string{"hub", "sync_interval", "5s"}, "unbekannter Schlüssel"},
 		{[]string{"beide", "sync_interval", "5s"}, `unbekannte Rolle "beide"`},
 	} {
 		runT(t, append(append([]string{"config", "set"}, bad.args...), c)...).want(t, 1, bad.msg)
