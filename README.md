@@ -72,12 +72,14 @@ dem Release. Alles Weitere, auch für Ansible und KI, steht in
 curl -fsSL https://github.com/kephalaion/kephalaion/releases/latest/download/install.sh | sh
 kephalaion node init          # Rollen einrichten, siehe „Einrichten“
 kephalaion service install    # Dienst: systemd --user bzw. LaunchAgent, startet serve
-kephalaion vscode install     # Erweiterung für VS Code (Cursor usw.: --code cursor), siehe „VS Code“
 ```
 
 Das Skript lädt das Binary der Plattform und `SHA256SUMS` aus dem neuesten Release, prüft die
 Prüfsumme und legt das Binary nach `~/.local/bin/kephalaion`. Liegt `~/.local/bin` nicht im
-`PATH`, nennt es die Zeile fürs Shell-Profil. Eine bestimmte Version:
+`PATH`, nennt es die Zeile fürs Shell-Profil. Danach installiert es die Erweiterung für VS Code
+mit, wenn das Editor-CLI eindeutig ist (`code`, sonst das einzige von `code-insiders`, `cursor`,
+`codium`; siehe „VS Code“). Sind es mehrere, nennt es `kephalaion vscode install --code <cli>`;
+scheitert die Installation, bleibt es bei einem Hinweis. Eine bestimmte Version:
 `… | KEPHALAION_VERSION=v0.1.0 sh`. `service install` schreibt die Unit
 `~/.config/systemd/user/kephalaion.service` (auf macOS den LaunchAgent
 `io.github.kephalaion`), startet den Dienst und bricht ab, solange `serve` von Hand läuft;

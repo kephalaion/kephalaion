@@ -78,7 +78,11 @@ für `~/.zshrc`.
 
 ### Erweiterung für VS Code
 
-Die Erweiterung steckt im Binary und trägt seine Version. Als eigener User, nicht über sudo:
+Die Erweiterung steckt im Binary und trägt seine Version. `install.sh` installiert sie gleich
+mit, wenn das Editor-CLI im `PATH` eindeutig ist — dieselbe Wahl wie `vscode install` ohne
+`--code`. Stehen mehrere zur Wahl, nennt es den Befehl mit `--code`; scheitert die Installation,
+bleibt es bei einem Hinweis, und die Installation des Binarys gilt trotzdem. Von Hand, als
+eigener User, nicht über sudo:
 
 ```sh
 kephalaion vscode install                # VS Code; Cursor, VSCodium, Insiders: --code cursor usw.

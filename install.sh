@@ -5,7 +5,9 @@
 #
 # Ohne Angabe das neueste Release; eine bestimmte Version über
 # KEPHALAION_VERSION=vX.Y.Z. Geladen werden das Binary der Plattform und
-# SHA256SUMS; installiert wird nur, wenn die Prüfsumme stimmt.
+# SHA256SUMS; installiert wird nur, wenn die Prüfsumme stimmt. Danach meldet
+# es den Node bei den KI-Assistenten an und installiert die Erweiterung für
+# VS Code, wenn das Editor-CLI eindeutig ist.
 #
 # POSIX-sh. Braucht curl oder wget und sha256sum oder shasum.
 #
@@ -202,30 +204,58 @@ next_steps() {
 	vscode_step
 }
 
-# vscode_step: eine Zeile zur Erweiterung für VS Code, nur wenn ein Editor-CLI
-# im PATH ist. Dieselbe Wahl wie kephalaion vscode install ohne --code: code,
-# sonst das einzige der anderen; sind es mehrere, nennt die Zeile --code.
+# vscode_step: die Zeile zur Erweiterung für VS Code, wenn install_vscode sie
+# nicht selbst installiert hat — weil mehrere Editor-CLIs zur Wahl standen
+# oder die Installation scheiterte.
 vscode_step() {
-	if command -v code >/dev/null 2>&1; then
-		say "  kephalaion vscode install     die Erweiterung für VS Code installieren"
-		return 0
-	fi
-	found=""
-	for cli in code-insiders cursor codium; do
-		if command -v "$cli" >/dev/null 2>&1; then
-			found="${found:+$found, }$cli"
-		fi
-	done
-	case "$found" in
-	"") ;;
-	*", "*)
+	case "$VSCODE_STEP" in
+	choose)
 		say "  kephalaion vscode install --code <cli>"
-		say "                                die Erweiterung installieren ($found)"
+		say "                                die Erweiterung installieren ($VSCODE_FOUND)"
 		;;
-	*)
-		say "  kephalaion vscode install     die Erweiterung für $found installieren"
+	failed)
+		say "  kephalaion vscode install --code $VSCODE_CLI"
+		say "                                die Erweiterung installieren (scheiterte oben)"
 		;;
 	esac
+}
+
+# install_vscode: die Erweiterung für VS Code gleich mit, wenn das Editor-CLI
+# im PATH eindeutig ist. Dieselbe Wahl wie kephalaion vscode install ohne
+# --code: code, sonst das einzige der anderen. Sind es mehrere, wählt der
+# Nutzer; dann nur die Zeile in den nächsten Schritten. Ohne Editor-CLI
+# nichts. Scheitert es, nur ein Hinweis: Die Installation ist trotzdem
+# gelungen. Ohne diesen Schritt bekäme sie niemand von selbst, denn
+# kephalaion upgrade erneuert sie nur dort, wo sie schon liegt. Kennt das
+# Binary vscode nicht (eine ältere Version), entfällt es.
+install_vscode() {
+	VSCODE_STEP=""
+	VSCODE_FOUND=""
+	VSCODE_CLI=""
+	"$TARGET" vscode --help >/dev/null 2>&1 || return 0
+	if command -v code >/dev/null 2>&1; then
+		VSCODE_CLI=code
+	else
+		for cli in code-insiders cursor codium; do
+			if command -v "$cli" >/dev/null 2>&1; then
+				VSCODE_FOUND="${VSCODE_FOUND:+$VSCODE_FOUND, }$cli"
+				VSCODE_CLI="$cli"
+			fi
+		done
+		case "$VSCODE_FOUND" in
+		"") return 0 ;;
+		*", "*)
+			VSCODE_STEP=choose
+			return 0
+			;;
+		esac
+	fi
+	say ""
+	if ! "$TARGET" vscode install --code "$VSCODE_CLI" </dev/null; then
+		VSCODE_STEP=failed
+		say ""
+		say "Hinweis: Die Erweiterung für VS Code ist nicht installiert (siehe oben)."
+	fi
 }
 
 # register_assistants: der automatische Anstoß bei den KI-Assistenten. Ob es
@@ -270,6 +300,7 @@ main() {
 	"$TARGET" version || true
 	path_hint
 	register_assistants
+	install_vscode
 	next_steps
 }
 

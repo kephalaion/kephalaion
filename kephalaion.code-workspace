@@ -1,0 +1,27 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "Keph vm:omni",
+			"uri": "keph://vm/omni"
+		},
+		{
+			"name": "Keph vm:test",
+			"uri": "keph://vm/test"
+		},
+		{
+			"name": "Keph vm:k-playbook",
+			"uri": "keph://vm/k-playbook"
+		}
+	],
+	"settings": {
+		"window.title": "📚 kephalaion${separator}${dirty}${activeEditorShort}",
+		"workbench.colorCustomizations": {
+			"titleBar.activeBackground": "#004d40",
+			"titleBar.activeForeground": "#ffffff",
+			"statusBar.background": "#004d40"
+		}
+	}
+}

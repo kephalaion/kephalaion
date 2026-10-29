@@ -506,8 +506,13 @@ Installation).
 
 ## Installation — ohne Marketplace
 
-Der Marketplace ist nicht nötig. Die Erweiterung steckt im Binary (Task 027) und installiert
-sich mit einem Befehl, **als eigener User, nicht über sudo**:
+Der Marketplace ist nicht nötig. Die Erweiterung steckt im Binary (Task 027). `install.sh`
+installiert sie nach dem Binary gleich mit, wenn das Editor-CLI eindeutig ist — `code`, sonst
+das einzige von `code-insiders`, `cursor`, `codium` —, über `vscode install --code <cli>`. Sind
+es mehrere, nennt es nur den Befehl; ohne CLI tut es nichts; scheitert es, bleibt es bei einem
+Hinweis. Ohne diesen Schritt bekäme sie niemand von selbst, denn `kephalaion upgrade` erneuert
+sie nur dort, wo sie schon liegt. Von Hand installiert sie sich mit einem Befehl, **als
+eigener User, nicht über sudo**:
 
 ```sh
 kephalaion vscode install                # VS Code; sonst das einzige Editor-CLI im PATH
