@@ -162,7 +162,7 @@ kephalaion hub import --help
 
 const nodeUsage = `Aufruf:
   kephalaion node init [--db sqlite:///pfad/node.db] [--config pfad]
-  kephalaion node hub add|check|list|show|set|rm|token …
+  kephalaion node hub add|check|list|show|set|rm|token|rotate …
   kephalaion node collection add|list|rm …
   kephalaion node account setup|rotate|check|list …
   kephalaion node sync [<alias>]
@@ -174,7 +174,8 @@ const nodeUsage = `Aufruf:
 Kommandos:
   init         richtet den Node ein: Datenbank, Schema, Abschnitt node: in der config
   hub          trägt die Hubs dieses Nodes ein: Transport, Adresse, Token;
-               check fragt einen Hub, wer der Node für ihn ist
+               check fragt einen Hub, wer der Node für ihn ist; rotate
+               ersetzt das Token des Nodes beim Hub
   collection   die Collections, die der Node von seinen Hubs haben will
   account      richtet einen Account mit seinem Einrichtungstoken über einen
                Node ein (setup), ersetzt das Token am Hub (rotate), prüft es

@@ -248,9 +248,11 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	qHubUpdate = `UPDATE hubs SET node_name = ?, transport = ?, address = ?, ssh_key = ?, ca = ? WHERE name = ?`
 	qHubToken  = `UPDATE hubs SET token = ? WHERE name = ?`
-	qHubID     = `UPDATE hubs SET hub_id = ? WHERE name = ? AND entry_id = ?`
-	qHubDelete = `DELETE FROM hubs WHERE name = ?`
-	qHubsClear = `DELETE FROM hubs`
+	// qHubTokenOf schreibt das Token nur für den Eintrag mit dieser entry_id.
+	qHubTokenOf = `UPDATE hubs SET token = ? WHERE name = ? AND entry_id = ?`
+	qHubID      = `UPDATE hubs SET hub_id = ? WHERE name = ? AND entry_id = ?`
+	qHubDelete  = `DELETE FROM hubs WHERE name = ?`
+	qHubsClear  = `DELETE FROM hubs`
 
 	qWantedAll    = `SELECT hub, collection FROM hub_collections ORDER BY hub, collection`
 	qWantedOfHub  = `SELECT collection FROM hub_collections WHERE hub = ? ORDER BY collection`
@@ -499,12 +501,18 @@ func (s *sqliteStore) SetHubID(ctx context.Context, name, entryID, hubID string)
 // RemoveHub entfernt die Replica innerhalb der Transaktion, vor dem Eintrag:
 // Scheitert danach das Commit, fehlt nur die Replica, und die ist abgeleitet
 // — der nächste Abgleich legt sie neu an. Andersherum bliebe eine Replica
-// ohne Eintrag liegen, die ein späteres add unter demselben Alias erbte.
+// ohne Eintrag liegen, die ein späteres add unter demselben Alias erbte. Die
+// .pending des Eintrags geht erst nach dem Commit: Sie ist nicht abgeleitet,
+// vielleicht das einzige gültige Token, und bleibt sie doch liegen, gilt sie
+// für keinen späteren Eintrag (die entry_id kehrt nie wieder).
 func (s *sqliteStore) RemoveHub(ctx context.Context, name string) error {
-	return s.inTx(ctx, func(tx *sql.Tx) error {
-		if _, err := getHub(ctx, tx, name); err != nil {
+	var entryID string
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		h, err := getHub(ctx, tx, name)
+		if err != nil {
 			return err
 		}
+		entryID = h.EntryID
 		if _, err := tx.ExecContext(ctx, qWantedOfDel, name); err != nil {
 			return err
 		}
@@ -519,6 +527,13 @@ func (s *sqliteStore) RemoveHub(ctx context.Context, name string) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if err := RemovePendingToken(s.PendingTokenPath(entryID)); err != nil {
+		return fmt.Errorf("Hub %s entfernt, aber seine .pending nicht: %w", name, err)
+	}
+	return nil
 }
 
 func (s *sqliteStore) Collections(ctx context.Context) ([]Wanted, error) {
@@ -580,7 +595,8 @@ func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, ta
 			return err
 		}
 	}
-	return s.inTx(ctx, func(tx *sql.Tx) error {
+	var gone []string
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := sqlitedb.ReplaceSettingsTx(ctx, tx, settings); err != nil {
 			return err
 		}
@@ -594,6 +610,15 @@ func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, ta
 		entryIDs := make(map[string]string, len(before))
 		for _, h := range before {
 			entryIDs[h.Name] = h.EntryID
+		}
+		keep := make(map[string]bool, len(tables.Hubs))
+		for _, h := range tables.Hubs {
+			keep[h.Name] = true
+		}
+		for _, h := range before {
+			if !keep[h.Name] {
+				gone = append(gone, h.EntryID)
+			}
 		}
 		for _, del := range []string{qWantedClear, qSyncClear, qHubsClear} {
 			if _, err := tx.ExecContext(ctx, del); err != nil {
@@ -619,6 +644,15 @@ func (s *sqliteStore) Import(ctx context.Context, settings map[string]string, ta
 		}
 		return removeStaleReplicas(s, before, tables.Hubs)
 	})
+	if err != nil {
+		return err
+	}
+	// Die .pending der wegfallenden Einträge erst nach dem Commit, wie bei
+	// RemoveHub; eine, die liegen bleibt, gilt für keinen späteren Eintrag.
+	for _, id := range gone {
+		_ = RemovePendingToken(s.PendingTokenPath(id))
+	}
+	return nil
 }
 
 // removeStaleReplicas entfernt die Replicas der Einträge, die ein Import

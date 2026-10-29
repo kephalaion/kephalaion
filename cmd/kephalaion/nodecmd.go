@@ -34,6 +34,7 @@ const nodeHubUsage = `Aufruf:
   kephalaion node hub show  <alias>
   kephalaion node hub set   <alias> [--node …] [--transport …] [--address …] [--ca-file …] [--ssh-key …]
   kephalaion node hub token <alias> --token-stdin
+  kephalaion node hub rotate <alias>
   kephalaion node hub rm    <alias>
 
 Kommandos:
@@ -53,7 +54,10 @@ Kommandos:
           (Subject, Gültigkeit, SHA-256-Fingerabdruck je Zertifikat)
   set     ändert Node-Namen, Transport, Adresse, CA oder Schlüssel; der Rest
           bleibt
-  token   ersetzt das Token dieses Nodes beim Hub
+  token   ersetzt das Token dieses Nodes in node.db (eines, das der Admin mit
+          hub node token erzeugt hat)
+  rotate  ersetzt das Token dieses Nodes beim Hub selbst (node_rotate): ein
+          neues, das nur dieser Node kennt (kephalaion node hub rotate --help)
   rm      entfernt den Eintrag samt seinen gewünschten Collections und seiner
           Replica
 
@@ -288,6 +292,7 @@ func runNodeHub(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				return nil
 			})
 		},
+		"rotate": func(a []string) int { return runNodeHubRotate(a, stdout, stderr) },
 		"rm": func(a []string) int {
 			c := newCommand("node hub rm", u, stdout, stderr, "<alias>")
 			return c.nodeDo(a, func(ctx context.Context, s nodestore.Store, _ bool, pos []string) error {

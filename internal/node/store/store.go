@@ -53,13 +53,21 @@ type Store interface {
 	// denselben Regeln wie AddHub; siehe ApplyUpdate.
 	SetHub(ctx context.Context, name string, u HubUpdate, hubInConfig bool) error
 	SetHubToken(ctx context.Context, name, token string) error
+	// ReplaceHubToken schreibt das Token eines Eintrags nur, solange er der
+	// mit entryID ist, sonst ErrEntryGone — das Übernehmen nach node_rotate.
+	ReplaceHubToken(ctx context.Context, name, entryID, token string) error
+	// PendingTokenPath ist der Ort der .pending eines Hub-Eintrags:
+	// hub-<entry_id>.pending neben node.db (Task 034). Die Datei muss es
+	// nicht geben.
+	PendingTokenPath(entryID string) string
 	// SetHubID schreibt die Kopie der hub_id in den Hub-Eintrag. Maßgeblich
 	// ist die hub_id in db_info der Replica; der Abgleich schreibt die Kopie
 	// danach, für Anzeige und Export. Geschrieben wird nur, solange der
 	// Eintrag noch der mit entryID ist, sonst ErrEntryGone.
 	SetHubID(ctx context.Context, name, entryID, hubID string) error
 	// RemoveHub entfernt einen Hub-Eintrag samt seinen gewünschten
-	// Collections, seinem Stand des Abgleichs und seiner Replica.
+	// Collections, seinem Stand des Abgleichs, seiner Replica und — nach dem
+	// Commit — seiner .pending.
 	RemoveHub(ctx context.Context, name string) error
 
 	// RecordSync hält das Ergebnis eines Abgleichs im Stand des Eintrags
@@ -83,8 +91,9 @@ type Store interface {
 	Tables(ctx context.Context) (Tables, error)
 	// Import ersetzt in einer Transaktion die settings und, wenn tables nicht
 	// nil ist, die lokalen Tabellen. Die Replicas der Aliase, die danach
-	// fehlen, entfernt es mit, wie RemoveHub; der Stand des Abgleichs geht
-	// ganz. Ein Alias, der bleibt, behält seine entry_id.
+	// fehlen, entfernt es mit, wie RemoveHub, ebenso nach dem Commit ihre
+	// .pending; der Stand des Abgleichs geht ganz. Ein Alias, der bleibt,
+	// behält seine entry_id (und damit seine .pending).
 	Import(ctx context.Context, settings map[string]string, tables *Tables, hubInConfig bool) error
 
 	Close() error
