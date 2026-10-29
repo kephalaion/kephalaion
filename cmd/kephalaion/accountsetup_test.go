@@ -399,7 +399,7 @@ func TestNodeAccountSetupOutcomes(t *testing.T) {
 
 	// Hub nicht erreicht.
 	runIn(t, dummyTokenA, "node", "hub", "add", "tot", "--node", "laptop-tot", "--transport", "http", "--address",
-		"http://127.0.0.1:1/hub", "--token-stdin", e.c).want(t, 0)
+		"http://"+closedPort(t)+"/hub", "--token-stdin", e.c).want(t, 0)
 	e.setup(t, "", "tot", "o2", e.newToken(t)).want(t, 1, "Hub tot nicht erreichbar", "ist gelöscht",
 		"gilt weiter")
 	if exists(e.file("tot", "o2") + ".pending") {

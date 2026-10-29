@@ -152,7 +152,7 @@ func TestNodeAccountList(t *testing.T) {
 
 	// Node nicht erreichbar: keine Anfrage, alle nicht geprüft.
 	before, _ = e.checks()
-	r = e.list(t, "--node", "http://127.0.0.1:1")
+	r = e.list(t, "--node", "http://"+closedPort(t))
 	r.want(t, 1, "nicht erreichbar")
 	if got := rowState(r.out, "eigen", "ok1", "token"); got != "nicht geprüft – –" {
 		t.Errorf("Node nicht erreichbar: %q\n%s", got, r.out)
@@ -167,8 +167,8 @@ func TestNodeAccountList(t *testing.T) {
 
 	// Keine Token-Dateien.
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(e.dir, "leer"))
-	e.list(t, "--node", "http://127.0.0.1:1").want(t, 0, "Keine Token-Dateien unter")
-	r = e.list(t, "--node", "http://127.0.0.1:1", "--json")
+	e.list(t, "--node", "http://"+closedPort(t)).want(t, 0, "Keine Token-Dateien unter")
+	r = e.list(t, "--node", "http://"+closedPort(t), "--json")
 	if r.code != 0 || !strings.Contains(r.out, `"files": []`) {
 		t.Errorf("--json ohne Dateien: %d\n%s", r.code, r.out)
 	}
@@ -180,7 +180,7 @@ func TestNodeAccountListHubUnreachable(t *testing.T) {
 	slow(t, "der Node wiederholt whoami am nicht erreichbaren Hub (0,5 s, 1 s, 2 s)")
 	e := newSetupEnv(t)
 	runIn(t, dummyTokenA, "node", "hub", "add", "tot", "--node", "laptop-tot", "--transport", "http", "--address",
-		"http://127.0.0.1:1/hub", "--token-stdin", e.c).want(t, 0)
+		"http://"+closedPort(t)+"/hub", "--token-stdin", e.c).want(t, 0)
 	e.put(t, "tot", "y.token", e.newToken(t)+"\n")
 	r := e.list(t, e.c)
 	r.want(t, 0, "tot/y (.token): nicht geprüft", "Hub tot nicht erreichbar")

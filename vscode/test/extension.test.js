@@ -713,6 +713,7 @@ test('keine config: eigene Meldung mit den geprüften Orten', () => withoutEnvCo
   assert.strictEqual(calls.length, 0, 'eine Anfrage ohne Adresse');
   assert.strictEqual(statusItem.text, '$(warning) Keph: keine config');
   assert.ok(tooltip().includes(`geprüft: ${userConfig}, ${systemConfig}`), tooltip());
+  assert.ok(tooltip().includes(`config ${userConfig} (pro User, fehlt)`), tooltip());
   assert.deepStrictEqual(provider.provideMcpServerDefinitions(), []);
   assert.ok(logs.some((l) => l.includes('keine Adresse: keine config gefunden')), logs.join('\n'));
   logs.length = 0;

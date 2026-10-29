@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,6 +41,17 @@ func TestMain(m *testing.M) {
 	// Kein Test ruft einen echten KI-Assistenten auf: ohne Ersatz liegt keiner
 	// im PATH, und jeder Aufruf scheitert.
 	newAssistantManager = assistanttest.New(dir).Manager
+	// Kein Test ruft den echten Node dieses Rechners: Eine Verbindung zur
+	// Standardadresse (status probt sie seit Task 035, wenn listen fehlt) wird
+	// verweigert, als lauschte dort nichts. Tests, die nodeDial selbst setzen,
+	// stellen diesen Stand danach wieder her.
+	nodeDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == config.DefaultListenNode {
+			return nil, &net.OpError{Op: "dial", Net: network, Err: &os.SyscallError{Syscall: "connect",
+				Err: syscall.ECONNREFUSED}}
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
 	// Kein Test fragt GitHub: serve und node whoami fragen einen
 	// nachgespielten, der v0.2.0 als neuestes Release nennt, zu fester Zeit.
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -620,7 +620,10 @@ class Status {
     const t = nodeTarget();
     if (!t.location) return [];
     const loc = t.location;
-    const out = loc.error ? [`config: ${loc.error}`] : [`config ${loc.path} (${rules.configSourceText(loc.source)})`];
+    // Ohne config nennt die Zeile den Ort, an dem sie fehlt (wie „(fehlt)“ bei kephalaion status).
+    const missing = t.reason === 'no_config' && !loc.error ? ', fehlt' : '';
+    const out = loc.error ? [`config: ${loc.error}`]
+      : [`config ${loc.path} (${rules.configSourceText(loc.source)}${missing})`];
     const w = bothKindsWarning(loc);
     if (w) out.push(`Fehler: ${w}`);
     return out;
