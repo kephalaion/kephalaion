@@ -129,6 +129,10 @@ func (f *acctHub) Rename(context.Context, contract.RenameRequest) (contract.Writ
 	return contract.WriteResponse{}, errors.New("nicht in der Attrappe")
 }
 
+func (f *acctHub) RotateNode(context.Context, contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	return contract.NodeRotateResponse{}, errors.New("node_rotate: in der Attrappe nicht umgesetzt")
+}
+
 func (f *acctHub) Fetch(context.Context, contract.FetchRequest) (contract.FetchResponse, error) {
 	return contract.FetchResponse{}, errors.New("nicht in der Attrappe")
 }

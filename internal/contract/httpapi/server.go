@@ -92,6 +92,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.Version, req.Auth = version, auth
 		reqlog.Note(ctx, "account", req.Account)
 		resp, err = h.hub.Rotate(ctx, req)
+	case OpNodeRotate:
+		var req contract.NodeRotateRequest
+		if !decode(w, r, body, &req) {
+			return
+		}
+		req.Version, req.Auth = version, auth
+		resp, err = h.hub.RotateNode(ctx, req)
 	case OpSync:
 		var req contract.SyncRequest
 		if !decode(w, r, body, &req) {

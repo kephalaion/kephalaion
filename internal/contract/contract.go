@@ -44,6 +44,11 @@ type Hub interface {
 	Rotate(ctx context.Context, req RotateRequest) (RotateResponse, error)
 	// Sync liefert eine Seite des Abgleichs.
 	Sync(ctx context.Context, req SyncRequest) (SyncResponse, error)
+	// RotateNode ersetzt das Token des Nodes selbst (Task 034): das bisherige
+	// zur Anmeldung, Hash des neuen. Nicht wiederholbar wie Rotate; ein
+	// Transport wiederholt es nie. Ein unklarer Ausgang wird mit Whoami und
+	// dem neuen Token geklärt.
+	RotateNode(ctx context.Context, req NodeRotateRequest) (NodeRotateResponse, error)
 
 	// Die Schreibvorgänge schreiben im Namen eines Accounts, getragen vom
 	// Node. Ein Transport wiederholt sie nie — ohne Schlüssel ergäbe ein
@@ -154,6 +159,30 @@ type RotateResponse struct {
 	// und dem User, je eine erlaubte Collection des Accounts, nach
 	// Collection; updated_by ist der User.
 	Rows []Row `json:"rows"`
+}
+
+// NodeRotateRequest ersetzt das Token des Nodes, der die Anfrage stellt
+// (Task 034). Angemeldet ist er mit dem bisherigen Token (Auth); zum Hub geht
+// nur der Hash des neuen.
+type NodeRotateRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes mit dem bisherigen Token; über HTTP
+	// in Headern.
+	Auth NodeAuth `json:"-"`
+	// NewHash ist sha256 des neuen Tokens, 64 Zeichen hex, nicht der Hash
+	// des bisherigen. Das neue Token selbst geht nie zum Hub: Es bleibt beim
+	// Node.
+	NewHash string `json:"new_hash"`
+}
+
+// NodeRotateResponse bestätigt den Wechsel. Danach gilt nur noch das neue
+// Token.
+type NodeRotateResponse struct {
+	HubID   string `json:"hub_id"`
+	Version int    `json:"version"`
+	// Node ist der Name des Nodes am Hub.
+	Node string `json:"node"`
 }
 
 // CreateRequest legt ein Dokument an: ein lebendes Dokument mit dem Namen
@@ -421,7 +450,8 @@ type Code string
 // Fehlercodes der Fassung 1.
 const (
 	// CodeUnauthenticated: Node unbekannt, Token falsch oder Node gesperrt —
-	// dieselbe Antwort für alle drei.
+	// dieselbe Antwort für alle drei. Bei RotateNode auch: das Token ist
+	// inzwischen ersetzt.
 	CodeUnauthenticated Code = "unauthenticated"
 	// CodeInvalid: die Anfrage ist ungültig.
 	CodeInvalid Code = "invalid"

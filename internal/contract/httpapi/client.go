@@ -107,6 +107,16 @@ func (c *Client) Rotate(ctx context.Context, req contract.RotateRequest) (contra
 	return resp, nil
 }
 
+// RotateNode schickt den Wechsel des Node-Tokens genau einmal; Ausgang wie
+// bei Rotate.
+func (c *Client) RotateNode(ctx context.Context, req contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	var resp contract.NodeRotateResponse
+	if err := c.call(ctx, OpNodeRotate, req.Version, req.Auth, req, &resp, false, c.ShortTimeout); err != nil {
+		return contract.NodeRotateResponse{}, err
+	}
+	return resp, nil
+}
+
 // Sync holt eine Seite; bei Fehlern des Transports mit Wiederholung.
 func (c *Client) Sync(ctx context.Context, req contract.SyncRequest) (contract.SyncResponse, error) {
 	var resp contract.SyncResponse

@@ -611,6 +611,37 @@ func (s *sqliteStore) NewNodeToken(ctx context.Context, name string) (string, er
 	return token, nil
 }
 
+func (s *sqliteStore) RotateNode(ctx context.Context, name, oldHash, newHash string) error {
+	if !contract.IsTokenHash(newHash) {
+		return errors.New("neuer Hash ist kein sha256 in Hex")
+	}
+	sqlTx, tx, err := s.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sqlTx.Rollback() }()
+	// Die erste Anweisung ist das bedingte Schreiben; es sperrt die Zeile
+	// zugleich, wie AccountRotate.
+	res, err := tx.ExecContext(ctx, q(queries.NodeRotate), name, newHash, oldHash)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNodeAuth
+	}
+	// Kein Account: actions.account ist der Node (Node- und Account-Namen
+	// sind gemeinsam eindeutig), Träger und Ziel ebenso; keine Revision, denn
+	// keine Zeile in documents ändert sich.
+	if err := logActionFull(ctx, tx, sqlitedb.NowMillis(), name, name, "node.rotate", name, 0); err != nil {
+		return err
+	}
+	return sqlTx.Commit()
+}
+
 func (s *sqliteStore) RemoveNode(ctx context.Context, name string) error {
 	return s.write(ctx, "node.rm", name, func(tx *sql.Tx) error {
 		if _, err := getNode(ctx, tx, name); err != nil {

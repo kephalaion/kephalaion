@@ -50,6 +50,15 @@ Ausführlich: [`konzept.md`](konzept.md).
   Hintergrund, eine Go-Dauer (`30s`, `2m`), mindestens `1s`; `0` schaltet ihn ab, auch den
   beim Start — nicht aber den Abgleich, den ein Schreibvorgang über MCP für seinen Hub
   anstößt. Standard 30 s. `serve` liest ihn je Runde, ein Neustart ist nicht nötig.
+- **public_url** — Schlüssel der `settings` des Hubs (Task 034): die Adresse, unter der Nodes
+  anderer Rechner den Hub erreichen, `https://<host>[/<präfix>]/hub` (etwa
+  `https://vm.example/kephalaion/hub`), geprüft wie `node hub add --address` bei `https`. Steht
+  im **setup code**; ohne sie geben `hub node add|token` das Token statt des Codes aus (außer
+  mit `--address`). Gesetzt mit `config set hub public_url …`, auf der VM von Ansible.
+- **alias** (Schlüssel der Rolle hub) — Schlüssel der `settings` des Hubs (Task 034): der Alias,
+  unter dem Nodes diesen Hub eintragen (Namensregel wie ein Hub-Alias am Node, etwa `vm`). Steht
+  im **setup code**, damit der Alias überall derselbe ist und die Token-Pfade der Accounts
+  (`tokens/<alias>/<account>.token`) stimmen. Ohne ihn verlangt `node setup` `--alias`.
 - **db_info** — Tabelle `db_info (key, value)` in der Datenbank jeder Rolle und in jeder
   Replica. Hält die Schemafassung (`schema_version`), die Rolle (`role`: `hub`, `node` oder
   `replica`), die Anlagezeit (`created_at`), am Hub auch die Revision (`revision`), in der
@@ -672,7 +681,32 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **setup token** (Einrichtungstoken) — das Token, das `hub account add` und `hub account
   token` einmal anzeigen: das erste Token des Accounts. Sein erster Vorgang tauscht es per
   `rotate` gegen ein eigenes, danach ist es wertlos — üblich mit **node account setup** durch
-  den User selbst; das ist das einzige Kommando, bei dem ein Token als Argument kommen darf.
+  den User selbst; neben **node setup** (mit dem **setup code**) das einzige Kommando, bei dem
+  ein Token als Argument kommen darf.
+- **setup code** (Einrichtungscode, Task 034) — alles, was ein Node braucht, um sich an einen
+  Hub anzuschließen, in einer Zeile: Fassung, Adresse (`public_url` oder `--address`), Alias
+  (`alias`, wenn gesetzt), Node-Name und Token des Nodes. Format
+  `kephsetup_<base64url ohne Padding>` — der Präfix lässt Scanner wie gitleaks ihn erkennen wie
+  `keph_` ein Token; darin JSON (`v` 1, `address`, `alias`, `node`, `token`). Keine CA: Der Hub
+  kennt sie nicht. `hub node add <name> [--grant <collection>]… [--address <url>]` und `hub
+  node token <name> [--address <url>]` geben ihn genau einmal aus, wenn `public_url` gesetzt
+  ist oder `--address` kommt; sonst wie bisher das Token. `--no-code` gibt in jedem Fall das
+  Token aus (der Weg über `node hub add … --token-stdin`). **node setup** rotiert das Token
+  sofort; danach ist der Code wertlos. Angezeigt nur gekürzt (`kephsetup_…` und die letzten
+  vier Zeichen), außer genau einmal bei `hub node add|token`.
+- **node setup** — `kephalaion node setup [<code> | --code-stdin] [--alias <alias>] [--ca-file
+  <pfad>] [--no-service]` (Task 034): richtet mit einem **setup code** einen Node pro User ein,
+  der den Hub abgleicht und bei den Assistenten eingetragen ist — je Schritt eine Zeile, Tokens
+  nur gekürzt: Code prüfen (vorher alles, was kein Token braucht), `node init`, falls die Rolle
+  fehlt (nicht neben der globalen config), Hub-Eintrag (fehlt er, erst nach gelungenem
+  `whoami` gespeichert; steht er mit anderen Angaben da, Abbruch), **node_rotate**, die erlaubten
+  Collections abonnieren (ohne die fest abonnierten), `service install` (außer `--no-service`
+  oder schon eingerichtet), `node mcp add` wie **--auto**, eine Übersicht zum Schluss.
+  Wiederholbar: Ein zweiter Aufruf erkennt am Hub per `whoami`, was gilt — eine liegende
+  `.pending` des Eintrags, das gespeicherte Token oder das aus dem Code (ein neuer Code aus
+  `hub node token`) — und setzt fort. Der Code darf als Argument kommen, weil er sofort rotiert
+  wird (Grenzen: [`konzept.md`](konzept.md), „Einen Node mit einem Code einrichten“). Exit 0
+  eingerichtet, 1 Fehler, 2 falscher Aufruf.
 - **token** — Geheimnis eines Accounts, Format `keph_<geheimnis>`. Jede Anfrage trägt
   Account-Name und Token. Gespeichert wird nur der Hash. Unabhängig vom Transport.
 - **account token** (Account-Token) — das **token** eines Accounts, wenn es von anderen zu
@@ -740,7 +774,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Ziel einer Handlung ohne Dokument — Collection, Node oder `<node>:<collection>`. Ein
   Schreibvorgang über einen Node trägt je Dokument eine Zeile mit `account`, `carrier` (der
   Node) und `action` (`create`, `update`, `delete`, `rename`) unter der Revision des Vorgangs;
-  die CLI am Hub schreibt `admin` ohne Träger.
+  die CLI am Hub schreibt `admin` ohne Träger. **node_rotate** schreibt `node.rotate` mit dem
+  Node als `account`, `carrier` und `subject`, ohne Revision.
 - **--token-stdin** — liest ein Token als eine Zeile von der Standardeingabe. Ein Token wird
   nie als Argument übergeben und nur gekürzt angezeigt (`keph_…` und die letzten vier
   Zeichen).
@@ -802,6 +837,20 @@ Ausführlich: [`konzept.md`](konzept.md).
   --token-stdin)` — ein CLI-Kommando, kein MCP-Werkzeug. Ohne eigenen Node rotiert ein Client
   über den Node: **node account setup** und **/account/rotate**; das neue Token erzeugt dann
   der Client.
+- **node_rotate** — Vorgang des Vertrags (Task 034): ersetzt das Token des Nodes selbst — das
+  bisherige zur Anmeldung, Hash des neuen. Nie wiederholt; ein unklarer Ausgang wird über
+  `whoami` mit dem neuen Token geklärt. Am Hub eine Zeile `node.rotate` in `actions`, keine
+  Revision. Das neue Token liegt vorher in der **.pending** des Hub-Eintrags:
+  `hub-<entry_id>.pending` neben der `node.db` (`0600`; `entry_id` im Namen und im Inhalt, nicht
+  im Export, `node hub rm` und `config import` räumen sie ab). Übernommen heißt: erst in
+  `node.db`, dann die Datei gelöscht; verworfen wird sie nur, wenn ein anderes Token per
+  `whoami` nachweislich gilt oder der Hub eindeutig abgelehnt hat. Ein Hub vor Task 034 kennt den
+  Vorgang nicht: Abbruch mit dem Hinweis, erst den Hub zu aktualisieren.
+- **node hub rotate** — `kephalaion node hub rotate <alias>` (Task 034): **node_rotate** für einen
+  Hub-Eintrag, über `local`, `http` oder `https` (`ssh` noch nicht). Liegt eine `.pending` des
+  Eintrags, rotiert es nicht, sondern klärt sie. Exit 0 rotiert (auch: die liegende `.pending`
+  galt und ist übernommen), 1 Fehler, 2 falscher Aufruf, 3 die `.pending` galt nicht und ist
+  verworfen — erneut aufrufen. Den ersten Wechsel nach dem Einrichten macht **node setup**.
 - **whoami** — Vorgang des Vertrags: bestätigt den Node, nennt die `hub_id` und seine
   erlaubten Collections (dazu `public` und `subscribed` unter ihnen) und prüft wahlweise einen
   Account (`valid`). Am Node auch ein

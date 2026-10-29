@@ -80,6 +80,14 @@ func (e *echoHub) Rotate(_ context.Context, req contract.RotateRequest) (contrac
 	return contract.RotateResponse{HubID: "01H", Version: req.Version, Rows: []contract.Row{}}, nil
 }
 
+func (e *echoHub) RotateNode(_ context.Context, req contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	e.auth, e.last = req.Auth, req
+	if e.err != nil {
+		return contract.NodeRotateResponse{}, e.err
+	}
+	return contract.NodeRotateResponse{HubID: "01H", Version: req.Version, Node: req.Auth.Node}, nil
+}
+
 func (e *echoHub) Sync(_ context.Context, req contract.SyncRequest) (contract.SyncResponse, error) {
 	e.auth = req.Auth
 	if e.err != nil {
@@ -376,5 +384,54 @@ func TestFetchOverHTTP(t *testing.T) {
 		if !errors.As(err, &ce) || ce.Code != code || errors.Is(err, contract.ErrOutcomeUnknown) {
 			t.Errorf("%s: %v", code, err)
 		}
+	}
+}
+
+// node_rotate über HTTP: Anmeldung in Headern, nur new_hash im Body, genau
+// einmal geschickt; eine Zeitüberschreitung ist unklar, ein Code des
+// Vertrags eindeutig.
+func TestRotateNodeOverHTTP(t *testing.T) {
+	hub := &echoHub{}
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		NewHandler(hub).ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	hash := strings.Repeat("a", 64)
+	resp, err := c.RotateNode(context.Background(), contract.NodeRotateRequest{Version: 1, Auth: auth, NewHash: hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Node != "laptop" || resp.HubID != "01H" || hub.auth != auth {
+		t.Errorf("Antwort %+v, Anmeldung %+v", resp, hub.auth)
+	}
+	if got := strings.TrimSpace(string(body)); got != `{"new_hash":"`+hash+`"}` {
+		t.Errorf("Body %s", got)
+	}
+
+	hub.err = contract.ErrUnauthenticated
+	if _, err := c.RotateNode(context.Background(), contract.NodeRotateRequest{Version: 1, Auth: auth, NewHash: hash}); !errors.Is(err, contract.ErrUnauthenticated) {
+		t.Errorf("abgelehnt: %v", err)
+	}
+
+	release := make(chan struct{})
+	var calls atomic.Int32
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		<-release
+	}))
+	defer slow.Close()
+	defer close(release)
+	c = newClient(t, slow.URL)
+	c.ShortTimeout = 50 * time.Millisecond
+	_, err = c.RotateNode(context.Background(), contract.NodeRotateRequest{Version: 1, Auth: auth, NewHash: hash})
+	if !errors.Is(err, contract.ErrOutcomeUnknown) || calls.Load() != 1 {
+		t.Errorf("Zeitüberschreitung: %d Aufrufe, %v", calls.Load(), err)
+	}
+	if strings.Contains(err.Error(), "geheim") {
+		t.Errorf("Fehler nennt das Token: %v", err)
 	}
 }

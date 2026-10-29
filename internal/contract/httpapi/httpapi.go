@@ -37,10 +37,13 @@ const (
 	// OpFetch holt das neueste Release einer Collection mit Quelle; ein
 	// Schreibvorgang mit kleinem Body.
 	OpFetch = "fetch"
+	// OpNodeRotate ersetzt das Token des Nodes (Task 034); nie wiederholt
+	// wie rotate.
+	OpNodeRotate = "node_rotate"
 )
 
-// MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate, sync und
-// fetch:
+// MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate,
+// node_rotate, sync und fetch:
 // 1 MiB. Antworten sind nicht begrenzt — eine Seite des Abgleichs kann eine
 // große Revision ganz tragen.
 const MaxBodyBytes = 1 << 20
@@ -55,7 +58,7 @@ const MaxWriteBodyBytes = 6*contract.MaxDocumentBytes + MaxBodyBytes
 // wenn der Hub den Vorgang nicht kennt.
 func bodyLimit(op string) (limit int64, ok bool) {
 	switch op {
-	case OpWhoami, OpRotate, OpSync, OpFetch:
+	case OpWhoami, OpRotate, OpNodeRotate, OpSync, OpFetch:
 		return MaxBodyBytes, true
 	case OpCreate, OpWrite, OpDelete, OpRename:
 		return MaxWriteBodyBytes, true
@@ -70,7 +73,7 @@ const (
 	ReadTimeout       = 60 * time.Second
 	WriteTimeout      = 10 * time.Minute
 	IdleTimeout       = 2 * time.Minute
-	// ShortTimeout gilt am Client für whoami, rotate und die
+	// ShortTimeout gilt am Client für whoami, rotate, node_rotate und die
 	// Schreibvorgänge, SyncTimeout für eine Seite des Abgleichs.
 	ShortTimeout = 30 * time.Second
 	SyncTimeout  = 10 * time.Minute

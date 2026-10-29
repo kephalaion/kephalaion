@@ -63,6 +63,10 @@ type docHub struct {
 	requestIDs []string
 }
 
+func (f *docHub) RotateNode(context.Context, contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	return contract.NodeRotateResponse{}, errors.New("node_rotate: in der Attrappe nicht umgesetzt")
+}
+
 func (f *docHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.FetchResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

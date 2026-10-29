@@ -190,6 +190,10 @@ func (f *fakeHub) Rename(context.Context, contract.RenameRequest) (contract.Writ
 	return contract.WriteResponse{}, errors.New("rename: in der Attrappe nicht umgesetzt")
 }
 
+func (f *fakeHub) RotateNode(context.Context, contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	return contract.NodeRotateResponse{}, errors.New("node_rotate: in der Attrappe nicht umgesetzt")
+}
+
 func (f *fakeHub) Fetch(context.Context, contract.FetchRequest) (contract.FetchResponse, error) {
 	return contract.FetchResponse{}, errors.New("fetch: in der Attrappe nicht umgesetzt")
 }

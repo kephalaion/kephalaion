@@ -1264,17 +1264,93 @@ vollständig, ohne `--write` wird `write` entzogen, ohne `--vendor` jeder Scope 
 Kurzbeschreibung (`kephalaion hub node add <name>`)
 und die Collections, die er abgleichen darf (`kephalaion hub node grant <node>
 <collection>`). In beiden Fällen erzeugt der Hub ein Token, zeigt es einmal an und speichert
-nur den Hash. Das Token wird vorerst von Hand übergeben. Ein Node trägt sein Token in seine
+nur den Hash. Das Token wird von Hand übergeben — für einen Node seit Task 034 meist als
+Einrichtungscode, den `node setup` einlöst (unten). Ein Node trägt sein Token sonst in seine
 Datenbank ein (`kephalaion node hub add …`); steht der Hub in derselben config, legt `node hub
 add … --transport local --create` den Node dort selbst an und trägt das Token direkt ein, ohne
 es anzuzeigen.
 
-**Auch der erste Vorgang eines Nodes ist ein `rotate` — entschieden am 2026-09-26**, gebaut
-wird es nach dem `rotate` der Accounts. Das angezeigte Token taugt dann nur zur Einrichtung,
+**Auch der erste Vorgang eines Nodes ist ein `rotate` — entschieden am 2026-09-26**, gebaut in
+Task 034 als Vorgang `node_rotate` ([`vertrag.md`](vertrag.md)), angestoßen von `node setup`
+und einzeln von `node hub rotate`. Das angezeigte Token taugt dann nur zur Einrichtung,
 und das erste `rotate` prüft Verbindung und Zusammenspiel gleich beim Einrichten statt später.
 Anders als ein Account legt der Node das neue Token selbst ab, in `node.db`; eine fremde
 Konfiguration muss dafür niemand ändern. Grundsatz: Ein Node wird behandelt wie ein Account,
 außer wo es anders sinnvoll ist.
+
+**Einen Node mit einem Code einrichten — entschieden am 2026-10-29, gebaut in Task 034.** Bis
+dahin brauchte ein Node auf einem anderen Rechner zwei Seiten, ein übergebenes Token und acht
+Befehle mit Angaben, die der User kennen musste (Adresse, Alias, Node-Name, Collections). Jetzt
+gibt `hub node add <name> --grant <collection>…` einen **Einrichtungscode** aus, und `kephalaion
+node setup <code>` macht daraus einen laufenden, abgleichenden Node, der bei den Assistenten
+eingetragen ist ([`begriffe.md`](begriffe.md), „setup code“, „node setup“).
+
+- **Ein Ding zum Übergeben.** Der Code trägt Fassung, Adresse des Hubs, Alias, Node-Name und
+  Token (`kephsetup_…`, Base64url über JSON). Adresse und Alias sind `settings` des Hubs
+  (`public_url`, `alias`; `config set hub …`), nicht die `config.yaml` — die erzeugt auf der VM
+  Ansible und trägt nur `db` und `listen`; die `settings` gehen mit `config export|import`.
+  Ohne `public_url` (und ohne `--address`) gibt der Hub wie bisher das Token aus; ohne `alias`
+  verlangt `node setup` `--alias`. Eine CA steht nicht im Code — der Hub kennt sie nicht —, sie
+  bleibt `--ca-file` von `node setup`.
+- **Der Alias kommt vom Hub**, damit er überall derselbe ist und die Token-Pfade der Accounts
+  (`tokens/<alias>/<account>.token`) zu den Anleitungen passen.
+- **Der Code ist danach wertlos.** `node setup` rotiert das Node-Token sofort (`node_rotate`):
+  Das neue Token erzeugt der Node, legt es vor dem Abschicken in `hub-<entry_id>.pending` neben
+  der `node.db` ab (`0600`) und schickt nur den Hash. Gelingt es, steht das neue Token erst in
+  `node.db`, dann wird die Datei gelöscht. Bei unklarem Ausgang bleibt sie und wird beim
+  nächsten Aufruf geklärt: `whoami` mit ihrem Token — gilt es, wird es übernommen; gilt es
+  nicht, wird sie nur verworfen, wenn das gespeicherte Token oder das aus dem Code nachweislich
+  gilt (wie `clarify` bei `node account setup`), sonst bleibt sie, mit dem Hinweis auf `hub node
+  token`. Hat der Hub eindeutig abgelehnt (`unauthenticated`: das Token ist inzwischen ersetzt,
+  etwa ein alter Code), wird sie gelöscht. Die Datei gehört zur `entry_id`, nicht zum Alias:
+  Nach `node hub rm` und `add` unter demselben Alias gilt eine alte nicht; `node hub rm` und
+  `config import` (für wegfallende Aliase) entfernen sie, der Export nimmt sie nicht mit. Keine
+  Spalte in `hubs`, keine neue Schemafassung an Hub oder Node.
+- **Wiederholbar.** `node setup` vergleicht einen vorhandenen Hub-Eintrag (Alias, Adresse,
+  Node-Name, Transport, CA — nicht das Token; ohne `--ca-file` gilt die gespeicherte CA) und
+  bricht ab, wenn er anders eingerichtet ist. Fehlt er, entsteht er nur im Speicher, wird mit
+  `whoami` geprüft und erst danach gespeichert — ein gescheiterter Check (etwa ohne nötige
+  `--ca-file`) hinterlässt nichts. Steht er da, entscheidet `whoami`, in dieser Reihenfolge: eine
+  liegende `.pending` klären; Token im Code gleich dem gespeicherten: rotieren; anders: gilt das
+  gespeicherte, ist schon rotiert (weiter ohne Rotieren), gilt das aus dem Code, ist es ein neuer
+  Code aus `hub node token` (übernehmen und rotieren), gilt keins, Abbruch mit dem Hinweis auf
+  `hub node token <name>`. Ist der Hub dabei nicht erreicht oder der Ausgang unklar, Abbruch ohne
+  Änderung und ohne diesen Hinweis.
+- **Älterer Hub.** Kennt der Hub `node_rotate` nicht, bricht `node setup` mit dem Hinweis ab,
+  erst den Hub zu aktualisieren; die `.pending` wird gelöscht, der gespeicherte Eintrag bleibt,
+  und mit dem nicht rotierten Token geschieht nichts weiter. Ein späterer Aufruf setzt fort.
+- **Danach** abonniert `node setup` die erlaubten Collections aus `whoami` (nicht die fest
+  abonnierten, die gleichen ohnehin ab), richtet den Dienst ein (`service install`, außer
+  `--no-service` oder schon eingerichtet) und trägt den Node bei den Assistenten ein wie der
+  automatische Anstoß (`node mcp add --auto`: ein abweichender Eintrag dieses Nodes wird
+  ersetzt — „überschreibt nichts“ meint den eigenen Stand des Nodes: Hub-Eintrag, config,
+  Dienst). Fehlt noch jede Token-Datei unter `tokens/<alias>/`, nennt es `node account setup`.
+  Zum Schluss eine **Übersicht**: Ort und Inhalt der `config.yaml`, der Hub-Eintrag (Token
+  gekürzt), die abonnierten Collections, der Dienst samt Ort des Logs, die Assistenten wie `node
+  mcp status` und die Token-Dateien unter `tokens/<alias>/` — die `config.yaml` allein reichte
+  nicht, Hub-Eintrag und Collections stehen in `node.db`.
+- **Der alte Weg bleibt** als Sonderfall: `hub node add|token … --no-code` gibt das Token aus,
+  auch wenn `public_url` gesetzt ist, und `node hub add … --token-stdin` trägt es ein (etwa für
+  einen Node mit Transport `http` auf demselben Rechner, für Automatisierung oder einen
+  vorhandenen Node). `node hub rotate <alias>` macht danach denselben Wechsel einzeln.
+
+**Grenzen des Einrichtens mit Code:**
+
+- **Der Code als Argument.** Weil er sofort rotiert wird, darf er bei `node setup` als Argument
+  kommen (oder über `--code-stdin`) — wie das Einrichtungstoken bei `node account setup`, mit
+  denselben Grenzen: Prozessliste und Shell-Verlauf; wer `/proc` schnell genug liest, könnte
+  vor dem User rotieren. Abhilfe: Der Admin erzeugt mit `hub node token <name>` einen neuen
+  Code.
+- **Abbruch vor dem Rotieren.** Dann bleibt der Code gültig, obwohl er in Prozessliste und
+  Shell-Verlauf stand. Deshalb prüft `node setup` zuerst alles, was kein Token braucht: Form und
+  Adresse des Codes, vorhandene config und Hub-Eintrag, ob `--ca-file` lesbar ist, die globale
+  config. Erst danach benutzt es das Token, zuerst für `whoami`.
+- **Nur pro User.** Neben der globalen config bricht `node setup` ab wie `init`; die globale
+  Installation richtet der Verwalter ein (später vielleicht auch mit Code, Todo).
+- **Das Token eines Accounts steht nicht im Code** — ein Code für Node und Account kommt
+  vielleicht später (Todo); bis dahin `node account setup` mit dem Einrichtungstoken.
+- **Regelmäßiges Rotieren** des Node-Tokens aller Nodes gibt es nicht; `node hub rotate` ist
+  einzeln aufzurufen (Todo).
 
 **Der erste Vorgang jedes Accounts ist ein `rotate`.** Einrichtung und Rotation sind derselbe
 Vorgang:
@@ -1855,7 +1931,8 @@ CREATE TABLE actions (                 -- Protokoll, befristet
   account     TEXT NOT NULL,           -- der Account, nicht der User
   carrier     TEXT,                    -- welcher Node es gebracht hat
   action      TEXT NOT NULL,           -- create, update, rename, delete, rotate,
-                                       -- collection.add, node.grant, config.import …
+                                       -- collection.add, node.grant, node.rotate,
+                                       -- config.import …
   document_id TEXT,
   subject     TEXT,                    -- Ziel ohne Dokument: Collection, Node,
                                        -- bei grant/revoke <node>:<collection>
@@ -1972,7 +2049,9 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
 - **Ein Node-Token ist nie ein Client-Token.** Der Node prüft Clients nur gegen
   `SYSTEM:A:`-Zeilen; ein Node steht dort gar nicht.
 - **Das Token des Nodes steht im Klartext in `node.db`**, denn der Node muss es vorzeigen.
-  Das Verzeichnis hat `0700`, die Datei `0600`.
+  Das Verzeichnis hat `0700`, die Datei `0600`. Während `node_rotate` liegt das neue daneben in
+  `hub-<entry_id>.pending` (`0600`), je Hub-Eintrag eine Datei — keine Spalte in `hubs`, kein
+  neues Schema (Task 034, „Einen Node mit einem Code einrichten“).
 - **Die CLI am Hub handelt als `admin`** — Account und User heißen so. So steht es in
   `created_by` und im Protokoll, ohne Träger. Schreibt ein Account über einen Node, steht sein
   User in `created_by`/`updated_by`, Account und Node im Protokoll (Task 014).

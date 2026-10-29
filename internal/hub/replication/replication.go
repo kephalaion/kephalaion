@@ -216,6 +216,40 @@ func (h *Hub) Rotate(ctx context.Context, req contract.RotateRequest) (contract.
 	return contract.RotateResponse{HubID: info.HubID, Version: contract.Version, Rows: append([]contract.Row{}, rows...)}, nil
 }
 
+// RotateNode ersetzt das Token des Nodes, der fragt (Task 034). Reihenfolge:
+// Fassung, Form des neuen Hashes, Anmeldung des Nodes, neuer Hash nicht der
+// bisherige. Der Store schreibt bedingt — nur wenn das bisherige Token noch
+// gilt und der Node nicht gesperrt ist —, so gelingt von zwei gleichzeitigen
+// genau einer; der andere ist unauthenticated wie jede fehlgeschlagene
+// Anmeldung. Fehlversuche stehen nicht in actions.
+func (h *Hub) RotateNode(ctx context.Context, req contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	if err := checkVersion(req.Version); err != nil {
+		return contract.NodeRotateResponse{}, err
+	}
+	if !contract.IsTokenHash(req.NewHash) {
+		return contract.NodeRotateResponse{}, contract.Invalid("new_hash ist kein sha256 in Hex (64 Zeichen 0-9a-f)")
+	}
+	if _, err := h.authenticate(ctx, req.Auth); err != nil {
+		return contract.NodeRotateResponse{}, err
+	}
+	oldHash := ident.HashToken(req.Auth.Token)
+	if req.NewHash == oldHash {
+		return contract.NodeRotateResponse{}, contract.Invalid("new_hash ist der Hash des bisherigen Tokens")
+	}
+	// Alles, was die Antwort braucht, vor dem Commit.
+	info, err := h.st.Info(ctx)
+	if err != nil {
+		return contract.NodeRotateResponse{}, err
+	}
+	switch err := h.st.RotateNode(ctx, req.Auth.Node, oldHash, req.NewHash); {
+	case errors.Is(err, store.ErrNodeAuth):
+		return contract.NodeRotateResponse{}, contract.ErrUnauthenticated
+	case err != nil:
+		return contract.NodeRotateResponse{}, err
+	}
+	return contract.NodeRotateResponse{HubID: info.HubID, Version: contract.Version, Node: req.Auth.Node}, nil
+}
+
 // checkRequest prüft die Anfrage ohne Datenbank.
 func checkRequest(req contract.SyncRequest) error {
 	if err := checkVersion(req.Version); err != nil {

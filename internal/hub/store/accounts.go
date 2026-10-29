@@ -33,6 +33,9 @@ import (
 var (
 	// ErrAccountAuth: Account unbekannt, Token falsch oder Account gesperrt.
 	ErrAccountAuth = errors.New("Account nicht angemeldet")
+	// ErrNodeAuth: Node unbekannt, Token nicht (mehr) das gespeicherte oder
+	// Node gesperrt (RotateNode).
+	ErrNodeAuth = errors.New("Node nicht angemeldet")
 	// ErrNoSharedCollection: der Account hat keine der Collections des
 	// Nodes.
 	ErrNoSharedCollection = errors.New("keine gemeinsame Collection")

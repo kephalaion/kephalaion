@@ -96,6 +96,14 @@ type Store interface {
 	SetNodeLocked(ctx context.Context, name string, locked bool) error
 	// NewNodeToken ersetzt das Token eines Nodes und liefert das neue.
 	NewNodeToken(ctx context.Context, name string) (token string, err error)
+	// RotateNode ersetzt den Hash des Tokens eines Nodes, den der Node
+	// selbst anstößt (Vorgang node_rotate, Task 034): nur wenn oldHash noch
+	// gilt und der Node nicht gesperrt ist, sonst ErrNodeAuth ohne Änderung.
+	// Das bedingte Schreiben ist die erste Anweisung der Transaktion; von
+	// zwei gleichzeitigen gelingt genau einer. Eine Zeile node.rotate in
+	// actions: account und carrier der Node, subject der Node, ohne
+	// Revision.
+	RotateNode(ctx context.Context, name, oldHash, newHash string) error
 	// RemoveNode entfernt einen Node samt seinen erlaubten Collections.
 	RemoveNode(ctx context.Context, name string) error
 	Grant(ctx context.Context, node, collection string) error
@@ -269,6 +277,7 @@ var queries = struct {
 	NodeSetDesc    string
 	NodeSetLocked  string
 	NodeSetToken   string
+	NodeRotate     string
 	NodeDelete     string
 	NodesDeleteAll string
 	NodeCount      string
@@ -404,9 +413,12 @@ var queries = struct {
 		FROM nodes WHERE name = $1`,
 	NodeInsert: `INSERT INTO nodes (name, description, token_hash, locked, created_at, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
-	NodeSetDesc:    `UPDATE nodes SET description = $2 WHERE name = $1`,
-	NodeSetLocked:  `UPDATE nodes SET locked = $2 WHERE name = $1`,
-	NodeSetToken:   `UPDATE nodes SET token_hash = $2 WHERE name = $1`,
+	NodeSetDesc:   `UPDATE nodes SET description = $2 WHERE name = $1`,
+	NodeSetLocked: `UPDATE nodes SET locked = $2 WHERE name = $1`,
+	NodeSetToken:  `UPDATE nodes SET token_hash = $2 WHERE name = $1`,
+	// NodeRotate ist das bedingte Schreiben von node_rotate und zugleich
+	// seine Sperre: nur mit dem bisherigen Hash und nicht gesperrt.
+	NodeRotate:     `UPDATE nodes SET token_hash = $2 WHERE name = $1 AND token_hash = $3 AND locked = 0`,
 	NodeDelete:     `DELETE FROM nodes WHERE name = $1`,
 	NodesDeleteAll: `DELETE FROM nodes`,
 	NodeCount:      `SELECT COUNT(*) FROM nodes WHERE name = $1`,

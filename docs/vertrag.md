@@ -8,7 +8,7 @@ Prozess, `http` ist HTTP mit JSON (`internal/contract/httpapi`, siehe „HTTP“
 dasselbe; die Tests des Vertrags laufen gegen beide.
 
 Die Vorgänge: `whoami` (wer bin ich, gilt dieser Account und wem gehört er), `rotate` (Token
-eines Accounts ersetzen), `sync` (Abgleich), die Schreibvorgänge `create`, `write`, `delete`
+eines Accounts ersetzen), `node_rotate` (das Token des Nodes selbst ersetzen), `sync` (Abgleich), die Schreibvorgänge `create`, `write`, `delete`
 und `rename` (ein Dokument anlegen, ersetzen, löschen, umbenennen — `delete` und `rename` auch
 ein Verzeichnis als Ganzes —, im Namen eines Accounts) und `fetch` (der Hub holt das neueste
 Release der Quelle einer Collection nach `defaults/`, angestoßen von einem Account). Begriffe:
@@ -43,6 +43,12 @@ Werkzeugen nicht und lehnt einen Aufruf damit laut ab (das go-sdk verbietet zus�
 Eigenschaften im Eingabeschema); geschrieben wird dann nichts. Ein Hub vor Task 032 dagegen
 übergeht das Feld still — er liest den Body ohne Prüfung auf unbekannte Felder — und schreibt
 bei einer Wiederholung ein zweites Mal. Darum zuerst den Hub aktualisieren, dann die Nodes.
+
+Mit Task 034 kam, ebenfalls ohne neue Fassung, der Vorgang `node_rotate` hinzu (siehe dort). Ein
+Hub vor Task 034 kennt ihn nicht und antwortet wie auf jeden unbekannten Vorgang; ausgeführt hat
+er nichts, das Token des Nodes gilt weiter. Ein Node meldet dann, dass erst der Hub zu
+aktualisieren ist (`node setup`, `node hub rotate`), und benutzt das nicht rotierte Token für
+keinen weiteren Schritt. Auch hier: erst den Hub aktualisieren, dann die Nodes.
 
 ## Anmeldung
 
@@ -131,6 +137,39 @@ zweiter Versuch mit ihm scheitert. Ein Transport wiederholt `rotate` deshalb nie
 `whoami`, wer das neue Token hält: der Node selbst (`node account check`) bzw. der Client über
 den Node (Route `/account/check`, `whoami` mit Account-Teil am Hub) — ein Node, der nur den
 Hash kennt, kann das allein nicht klären; er meldet dem Client den unklaren Ausgang.
+
+## node_rotate
+
+Ersetzt das Token des Nodes selbst (Task 034). Zur Anmeldung dient wie bei jedem Vorgang das
+bisherige Token des Nodes (`NodeAuth`); zum Hub geht nur der Hash des neuen. Das neue Token
+erzeugt der Node und behält es, vorgemerkt in einer Datei neben seiner `node.db`, bevor er den
+Vorgang abschickt ([`konzept.md`](konzept.md), „Einen Node mit einem Code einrichten“).
+
+| Feld | JSON | Bedeutung |
+|---|---|---|
+| Fassung, Node, Token | — (Pfad, Header) | wie bei `sync`; das Token ist das bisherige |
+| Neuer Hash | `new_hash` | sha256 des neuen Tokens, 64 Zeichen hex |
+
+Der Hub prüft in dieser Reihenfolge: Fassung, Form von `new_hash` (sonst `invalid`), Anmeldung
+des Nodes (`unauthenticated`), dann, dass `new_hash` nicht der Hash des bisherigen Tokens ist
+(sonst `invalid` — ein solcher Wechsel machte das bisherige Token nicht wertlos). Danach ersetzt
+er den Hash in `nodes` in **einer** Transaktion, deren erste Anweisung das bedingte Schreiben ist
+(nur wenn das bisherige Token noch gilt und der Node nicht gesperrt ist). So gelingt von zwei
+gleichzeitigen `node_rotate` mit demselben Token nur einer; der andere bekommt `unauthenticated`
+wie jede gescheiterte Anmeldung. Kein Dokument ändert sich, also keine Revision. In `actions`
+steht genau eine Zeile: `account` = der Node (Node- und Account-Namen sind gemeinsam eindeutig),
+`carrier` = der Node, `action` = `node.rotate`, `subject` = der Node, ohne Revision.
+Fehlversuche stehen nicht in `actions`, nur im Log des Hubs (ohne Token).
+
+Antwort: `hub_id`, `version` und `node` (der Name des Nodes am Hub). Alles, was die Antwort
+braucht, liest der Hub **vor** dem Commit.
+
+**Nicht wiederholbar.** Nach einem erfolgreichen `node_rotate` gilt das bisherige Token nicht
+mehr; ein zweiter Versuch mit ihm scheitert mit `unauthenticated`. Ein Transport wiederholt
+`node_rotate` deshalb nie (siehe „Ausgang und Wiederholung“). Ist der Ausgang unklar
+(`contract.ErrOutcomeUnknown`), prüft der Node mit `whoami` und dem **neuen** Token, ob es gilt;
+gilt es nicht, mit dem bisherigen. Erst wenn eines davon nachweislich gilt, ist der Ausgang
+geklärt.
 
 ## sync
 
@@ -536,9 +575,9 @@ unter den 30 s, die der Client auf die Antwort wartet; danach `source_unreachabl
 ## Ausgang und Wiederholung
 
 `whoami` und `sync` ändern nichts; ein Transport darf sie wiederholen (über HTTP siehe
-„Wiederholung“). `rotate`, die Schreibvorgänge und `fetch` schickt ein Transport **genau
-einmal**, nie ein zweites Mal — ebenso wenig der Node oder die Erweiterung für VS Code: Nach
-`rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch ohne Schlüssel ergäbe
+„Wiederholung“). `rotate`, `node_rotate`, die Schreibvorgänge und `fetch` schickt ein Transport
+**genau einmal**, nie ein zweites Mal — ebenso wenig der Node oder die Erweiterung für VS Code:
+Nach `rotate` und `node_rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch ohne Schlüssel ergäbe
 `name_taken`, `not_found` oder einen Konflikt mit sich selbst. Wiederholen darf allein der
 **Aufrufer**: einen Schreibvorgang mit `request_id` (siehe „Wiederholung mit Schlüssel“), `fetch`
 immer. Ihr Ausgang ist einer von vier:
@@ -554,7 +593,8 @@ immer. Ihr Ausgang ist einer von vier:
 - **Unklar** — jeder andere Fehler nach dem Abschicken: Zeitüberschreitung, abgebrochene
   Verbindung, unlesbare Antwort, 5xx; über `local` jeder Fehler, der kein Fehler des Vertrags
   ist, auch einer der Datenbank nach dem Commit. Der Hub kann ausgeführt haben. Nach `rotate`
-  prüft mit `whoami`, wer das neue Token hält (der Node oder der Client über ihn); nach einem
+  prüft mit `whoami`, wer das neue Token hält (der Node oder der Client über ihn); nach
+  `node_rotate` prüft der Node mit `whoami` und seinem neuen Token; nach einem
   Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach — oder schickt,
   wenn er einen `request_id` mitgab, denselben Aufruf mit demselben Schlüssel noch einmal und
   bekommt Gewissheit: Erfolg, `replayed` oder eine Ablehnung; nach `fetch`
@@ -574,7 +614,7 @@ nichts geändert.
 
 | Code | HTTP | Bedeutung |
 |---|---|---|
-| `unauthenticated` | 401 | nicht angemeldet: Node unbekannt, Token falsch oder Node gesperrt — dieselbe Meldung für alle drei |
+| `unauthenticated` | 401 | nicht angemeldet: Node unbekannt, Token falsch oder Node gesperrt — dieselbe Meldung für alle drei; bei `node_rotate` auch, wenn das Token inzwischen ersetzt ist |
 | `account_unauthenticated` | 403 | der Node ist angemeldet, der Account nicht: unbekannt, Token falsch oder gesperrt (`rotate`, Schreibvorgänge) |
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
 | `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr und sie ist nicht öffentlich — dieselbe Meldung für alle drei (Schreibvorgänge, `fetch`) |
@@ -583,7 +623,7 @@ nichts geändert.
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |
 | `stale_revision` | 409 | das Dokument hat nicht die Revision `base_revision`; die Meldung nennt die aktuelle |
-| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256, Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, `request_id` ungültig oder schon für einen anderen Vorgang benutzt, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
+| `invalid` | 400 | ungültige Anfrage: Seitengröße ≤ 0, Collection doppelt, `since` negativ, `new_hash` kein sha256 (bei `node_rotate` auch der Hash des bisherigen Tokens), Name oder Inhalt ungültig, `content` fehlt, `base_revision` < 1, `request_id` ungültig oder schon für einen anderen Vorgang benutzt, kein gültiges JSON; ein Verzeichnis ohne `recursive` (`delete`), `base_revision` bei einem Verzeichnis, `new_name` gleich `name` oder darunter; über HTTP auch 404 (unbekannter Vorgang), 405 (nicht POST), 413 (Body zu groß) |
 | `unsupported_version` | 404 | Fassung nicht unterstützt |
 | `no_source` | 409 | die Collection hat keine Quelle (`fetch`) |
 | `source_missing` | 409 | an der Quelle nicht vorhanden: kein Release, oder dem neuesten fehlt das Asset (`fetch`) |
@@ -593,16 +633,16 @@ nichts geändert.
 Alle Codes haben einen Status unter 500: Ein 5xx hieße für den Client „Ausgang unklar“.
 
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
-`sync` versucht der Node es später wieder; `rotate`, die Schreibvorgänge und `fetch` wiederholen
-weder Transport noch Node von selbst,
+`sync` versucht der Node es später wieder; `rotate`, `node_rotate`, die Schreibvorgänge und
+`fetch` wiederholen weder Transport noch Node von selbst,
 ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP antwortet der Hub mit
 500 und dem Code `internal`, der kein Code des Vertrags ist — hat der Node die Anfrage
 abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 
 ## HTTP
 
-- **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/sync`,
-  `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`, `/v1/fetch` — relativ zur Adresse des
+- **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/node_rotate`,
+  `/v1/sync`, `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`, `/v1/fetch` — relativ zur Adresse des
   Hub-Eintrags: Ihr Pfad ist ein Präfix, der Client schickt `<adresse>/v1/<vorgang>`. Die
   Adresse eines `kephalaion serve` endet auf `/hub` (`http://localhost:7434/hub`; hinter einem
   Reverse-Proxy etwa `https://host/kephalaion/hub`, der Proxy nimmt seinen Anteil weg, Caddy:
@@ -627,15 +667,15 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   `{"code": …, "message": …}`. Der Client unterscheidet Fehler am Code im Body, nicht am
   Status: 404 ist `not_found`, `unsupported_version` oder mit `invalid` ein unbekannter
   Vorgang. Diesen meldet er als `contract.ErrUnknownOperation`, nicht als `invalid`.
-- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate`, `sync` und `fetch` darf höchstens
-  1 MiB groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
+- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate`, `node_rotate`, `sync` und `fetch`
+  darf höchstens 1 MiB groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
   größere Grenze trägt jedes Dokument, das der Hub annimmt (1 MiB), auch wenn JSON jedes Byte
   als `\u00XX` schreibt (sechs Byte je Byte), dazu 1 MiB für alles andere. Einen zu großen
   Inhalt lehnt der Hub selbst ab (`invalid`). Antworten sind nicht begrenzt — eine Seite des
   Abgleichs kann eine große Revision ganz tragen. Der Server liest Kopf und Body innerhalb von
   10 s bzw. 60 s und darf eine Antwort bis zu 10 Minuten lang schreiben. Der Client wartet auf
-  `whoami`, `rotate`, die Schreibvorgänge und `fetch` 30 s, auf eine Seite von `sync` 10
-  Minuten. Ein Reverse-Proxy vor dem Hub darf eine Antwort nicht früher abbrechen (Caddy setzt
+  `whoami`, `rotate`, `node_rotate`, die Schreibvorgänge und `fetch` 30 s, auf eine Seite von
+  `sync` 10 Minuten. Ein Reverse-Proxy vor dem Hub darf eine Antwort nicht früher abbrechen (Caddy setzt
   für `reverse_proxy` von sich aus keine Frist).
 - **TLS (Transport `https`):** Der Client prüft das Zertifikat des Hubs gegen die System-Roots
   oder, wenn der Hub-Eintrag eine CA trägt (`--ca-file`), nur gegen diese; TLS mindestens 1.2,
@@ -645,12 +685,12 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   Nodes anderer Rechner“); der Hub selbst spricht nur `http` auf Loopback.
 - **Wiederholung:** `whoami` und `sync` wiederholt der Client bei Fehlern des Transports und
   bei 5xx bis zu dreimal, mit wachsendem Abstand (0,5 s, 1 s, 2 s) — nicht bei einem
-  Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate`, die Schreibvorgänge und `fetch`
-  nie.
+  Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate`, `node_rotate`, die
+  Schreibvorgänge und `fetch` nie.
 - **Weiterleitungen:** Der Client folgt keiner Weiterleitung. Eine 3xx-Antwort ist ein Fehler,
-  ohne Wiederholung; bei `rotate`, den Schreibvorgängen und `fetch` ein eindeutiger — der Hub
+  ohne Wiederholung; bei `rotate`, `node_rotate`, den Schreibvorgängen und `fetch` ein eindeutiger — der Hub
   hat nicht ausgeführt, und Body und Token gehen an kein anderes Ziel.
-- **Unklarer Ausgang bei `rotate`, den Schreibvorgängen und `fetch`:** Kam die Verbindung nicht
+- **Unklarer Ausgang bei `rotate`, `node_rotate`, den Schreibvorgängen und `fetch`:** Kam die Verbindung nicht
   zustande, scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
   antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code des
   Vertrags, bei 404 mit `invalid` (unbekannter Vorgang) und bei 404 ohne Vertragsform (ein

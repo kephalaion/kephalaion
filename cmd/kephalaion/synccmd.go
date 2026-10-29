@@ -150,8 +150,8 @@ func certPool(h nodestore.Hub) (*x509.CertPool, error) {
 // ersetzen sie, etwa um einen Fehler nach dem Commit herbeizuführen.
 var newLocalHub = func(st hubstore.Store) contract.Hub { return replication.New(st).WithSource(newSourceClient()) }
 
-// localHub ist der Hub über local. Ein Fehler von Rotate oder einem
-// Schreibvorgang, der kein Fehler des Vertrags ist (Datenbank, Abbruch),
+// localHub ist der Hub über local. Ein Fehler von Rotate, RotateNode oder
+// einem Schreibvorgang, der kein Fehler des Vertrags ist (Datenbank, Abbruch),
 // lässt offen, ob der Hub ausgeführt hat — der neue Hash schon gilt, das
 // Dokument schon geschrieben ist: Er kommt als contract.ErrOutcomeUnknown
 // an, wie über HTTP ein 500. Der Hub steht in einem Feld, nicht eingebettet:
@@ -174,6 +174,10 @@ func (l localHub) Sync(ctx context.Context, req contract.SyncRequest) (contract.
 
 func (l localHub) Rotate(ctx context.Context, req contract.RotateRequest) (contract.RotateResponse, error) {
 	return outcome(l.hub.Rotate(ctx, req))
+}
+
+func (l localHub) RotateNode(ctx context.Context, req contract.NodeRotateRequest) (contract.NodeRotateResponse, error) {
+	return outcome(l.hub.RotateNode(ctx, req))
 }
 
 func (l localHub) Create(ctx context.Context, req contract.CreateRequest) (contract.WriteResponse, error) {
