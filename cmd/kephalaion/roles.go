@@ -162,6 +162,7 @@ kephalaion hub import --help
 
 const nodeUsage = `Aufruf:
   kephalaion node init [--db sqlite:///pfad/node.db] [--config pfad]
+  kephalaion node setup <code> | --code-stdin [--alias …] [--ca-file …] [--no-service]
   kephalaion node hub add|check|list|show|set|rm|token|rotate …
   kephalaion node collection add|list|rm …
   kephalaion node account setup|rotate|check|list …
@@ -173,6 +174,8 @@ const nodeUsage = `Aufruf:
 
 Kommandos:
   init         richtet den Node ein: Datenbank, Schema, Abschnitt node: in der config
+  setup        richtet mit einem Einrichtungscode vom Hub alles ein: Node,
+               Hub-Eintrag, Token rotieren, Collections, Dienst, Assistenten
   hub          trägt die Hubs dieses Nodes ein: Transport, Adresse, Token;
                check fragt einen Hub, wer der Node für ihn ist; rotate
                ersetzt das Token des Nodes beim Hub
@@ -193,7 +196,8 @@ Kommandos:
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
 
-Hilfe: kephalaion node hub --help, kephalaion node collection --help,
+Hilfe: kephalaion node setup --help, kephalaion node hub --help,
+kephalaion node collection --help,
 kephalaion node account --help, kephalaion node sync --help,
 kephalaion node doc --help, kephalaion node dir --help,
 kephalaion node mcp --help, kephalaion node whoami --help
@@ -225,6 +229,8 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runHubDoc(args[1:], stdin, stdout, stderr)
 	case r == config.Hub && args[0] == "import":
 		return runHubImport(args[1:], stdout, stderr)
+	case r == config.Node && args[0] == "setup":
+		return runNodeSetup(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "hub":
 		return runNodeHub(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "collection":

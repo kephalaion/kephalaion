@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +20,8 @@ import (
 
 // rotateHook spielt am Weg zum Hub einen Ausgang von node_rotate nach: lost
 // führt aus und meldet dann unklar, unclear meldet unklar ohne auszuführen,
-// old ist ein Hub vor Task 034; sonst geht es durch. calls zählt die
+// old ist ein Hub vor Task 034, down-after-rotate rotiert und lässt danach
+// whoami scheitern; sonst geht es durch. calls zählt die
 // Aufrufe.
 type rotateHook struct {
 	contract.Hub
@@ -39,18 +41,38 @@ func (h rotateHook) RotateNode(ctx context.Context, req contract.NodeRotateReque
 		return contract.NodeRotateResponse{}, fmt.Errorf("%w: Zeitüberschreitung", contract.ErrOutcomeUnknown)
 	case "old":
 		return contract.NodeRotateResponse{}, fmt.Errorf("%w: unbekannter Vorgang", contract.ErrUnknownOperation)
+	case "down-after-rotate":
+		// Rotiert, danach ist der Hub nicht mehr erreichbar.
+		resp, err := h.Hub.RotateNode(ctx, req)
+		*h.mode = "whoami-down"
+		return resp, err
 	}
 	return h.Hub.RotateNode(ctx, req)
 }
 
-// hookRotate lenkt den Weg über HTTP durch rotateHook; mode stellt der Test
-// um.
+// Whoami scheitert mit mode whoami-down wie ein Hub, der nicht erreichbar
+// ist; sonst geht es durch.
+func (h rotateHook) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
+	if *h.mode == "whoami-down" {
+		return contract.WhoamiResponse{}, errors.New("dial tcp: Verbindung abgelehnt")
+	}
+	return h.Hub.Whoami(ctx, req)
+}
+
+// hookRotate lenkt den Weg über HTTP durch rotateHook, ohne Wiederholung;
+// mode stellt der Test um.
 func hookRotate(t *testing.T) (mode *string, calls *atomic.Int32) {
 	t.Helper()
 	mode, calls = new(string), new(atomic.Int32)
 	hookHTTP(t, func(address string, rootCAs *x509.CertPool) (contract.Hub, error) {
 		c, err := httpapi.NewClient(address, rootCAs)
-		return rotateHook{Hub: c, mode: mode, calls: calls}, err
+		if err != nil {
+			return nil, err
+		}
+		// Ohne Wiederholung: Ein nicht erreichbarer Hub kostete sonst
+		// Sekunden.
+		c.Retries = 0
+		return rotateHook{Hub: c, mode: mode, calls: calls}, nil
 	})
 	return mode, calls
 }
