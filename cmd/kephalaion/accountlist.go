@@ -203,14 +203,25 @@ func listNotes(w io.Writer, files []tokenEntry) {
 		fmt.Fprintln(w, "„ungültig oder unbekannt“: Über einen Proxy unterscheidet der Node ein falsches Token nicht von "+
 			"einem Hub, den er nicht kennt (<hub> ist der Alias des Hub-Eintrags am Node).")
 	}
+	if hasInvalidToken(files) {
+		fmt.Fprintln(w, invalidTokenHint)
+	}
+}
+
+// invalidTokenHint ist der Hinweis zu einer ungültigen Token-Datei — unter
+// node account list und bei kephalaion status (Task 035).
+const invalidTokenHint = "Eine ungültige Token-Datei ist bei jedem Aufruf ein Fehlversuch am Node. Gilt sie nicht " +
+	"mehr (rotiert, gesperrt, Account entfernt), sie löschen; ein neues Einrichtungstoken erzeugt der Admin " +
+	"(kephalaion hub account token <account>), dann kephalaion node account setup."
+
+// hasInvalidToken sagt, ob eine Token-Datei (nicht .pending) ungültig ist.
+func hasInvalidToken(files []tokenEntry) bool {
 	for _, f := range files {
 		if f.Kind == kindToken && (f.State == stateInvalid || f.State == stateInvalidOrUnknown) {
-			fmt.Fprintln(w, "Eine ungültige Token-Datei ist bei jedem Aufruf ein Fehlversuch am Node. Gilt sie nicht "+
-				"mehr (rotiert, gesperrt, Account entfernt), sie löschen; ein neues Einrichtungstoken erzeugt der Admin "+
-				"(kephalaion hub account token <account>), dann kephalaion node account setup.")
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func hasToken(files []tokenEntry, hub, account string) bool {

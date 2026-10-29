@@ -136,8 +136,11 @@ func TestStatusSystemUnreadable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(data, 0o700) })
 	r := runT(t, "status")
+	// Am Hub bleibt „serve: nicht prüfbar“; am Node steht statt dessen die
+	// Probe (Task 035, statusnode_test.go).
 	r.want(t, 0, "Quelle: global", "hub: eingerichtet", "node: eingerichtet",
-		"serve:         nicht prüfbar", "globale Installation; die Datenbank gehört dem Systembenutzer kephalaion",
+		"serve:         nicht prüfbar", "Antwort:", "Anmeldung:",
+		"globale Installation; die Datenbank gehört dem Systembenutzer kephalaion",
 		"sudo -u kephalaion kephalaion status")
 	if strings.Contains(r.out, "Fehler") {
 		t.Fatalf("Fehler statt Hinweis:\n%s", r.out)

@@ -8,9 +8,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/user"
 	"path/filepath"
 	"time"
 
+	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/config"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
@@ -400,13 +402,26 @@ sync), die hub_id aus seiner Replica und je gewünschter Collection der Stand
 (Revision) und der letzte Abgleich; ohne Replica „noch kein Abgleich“.
 Öffnet die Datenbanken nur, legt nichts an.
 
+Am Node fragt status außerdem, ob der Node antwortet (Antwort: eine Probe ohne
+Token an http://<listen>/mcp, kurze Frist) und ob die Anmeldung des
+aufrufenden Users gilt (Anmeldung: je Token-Datei unter tokens/<hub>/ eine
+Zeile, geprüft über die Route /account/check des Nodes beim Hub, dieselbe
+Prüfung wie node account list, kurze Frist je Datei; nach der Frist „nicht
+geprüft“). Antwortet der Node nicht, geht keine Anfrage mit Token hinaus.
+Kein Token steht in der Ausgabe. Nebenwirkung: Jede ungültige Token-Datei ist
+bei jedem Aufruf ein Fehlversuch am Node (fail2ban hinter einem Proxy zählt
+sie nicht, die Prüfung läuft lokal) — nicht mehr gültige Dateien löschen.
+Beide Zeilen informieren nur und ändern den Exit-Code nicht.
+
 Gilt die globale config und darf der Aufrufer die Datenbanken nicht lesen
 (sie gehören dem Systembenutzer kephalaion), nennt status die globale
-Installation und den Weg, sie zu verwalten, statt eines Fehlers.
+Installation und den Weg, sie zu verwalten, statt eines Fehlers; Antwort und
+Anmeldung prüft es trotzdem.
 
 Exit-Code:
   0   alles geprüft; auch bei einer globalen Installation, deren Datenbanken
-      der Aufrufer nicht lesen darf. Die Zeile Dienst ändert ihn nie.
+      der Aufrufer nicht lesen darf. Die Zeilen Dienst, Antwort und Anmeldung
+      ändern ihn nie.
   1   die config ist nicht lesbar, die Datenbank einer eingerichteten Rolle
       fehlt oder passt nicht, oder es gibt die config des Users und die
       globale nebeneinander (zwei Arten der Installation auf einem Rechner)
@@ -461,13 +476,21 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		}
 		if loc.System() && systemDBUnreadable(sec) {
 			// Ein anderer User als der Systembenutzer: kein Fehler der
-			// Installation, nur nicht von hier aus prüfbar.
-			fmt.Fprintf(stdout, "  serve:         nicht prüfbar (siehe Dienst)\n")
+			// Installation, die Sperrdatei nicht von hier aus prüfbar — statt
+			// der Zeile serve steht die Probe (Task 035).
+			if r == config.Node {
+				printNodeProbe(ctx, stdout, cfg.Listen(r))
+			} else {
+				fmt.Fprintf(stdout, "  serve:         nicht prüfbar (siehe Dienst)\n")
+			}
 			fmt.Fprintf(stdout, "  Hinweis:       globale Installation; die Datenbank gehört dem Systembenutzer %s. "+
 				"Verwaltet wird als dieser, etwa: sudo -u %s kephalaion status\n", config.SystemUser, config.SystemUser)
 			continue
 		}
 		fmt.Fprintf(stdout, "  serve:         %s\n", serveState(sec))
+		if r == config.Node {
+			printNodeProbe(ctx, stdout, cfg.Listen(r))
+		}
 		if err := printRoleStatus(ctx, stdout, r, sec); err != nil {
 			fmt.Fprintf(stdout, "  Fehler:        %v\n", err)
 			failed = true
@@ -483,6 +506,103 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// Die Fristen von status am Node (Task 035): kurz, damit status nicht hängt —
+// statt probeTimeout (15 s) und accountCallTimeout (90 s, node account list).
+// Nach der Frist heißt eine Anmeldung „nicht geprüft“. Tests setzen sie
+// kürzer.
+var (
+	statusProbeTimeout = 3 * time.Second
+	statusCheckTimeout = 5 * time.Second
+)
+
+// currentUserName nennt den aufrufenden Linux-User; leer, wenn unbekannt.
+// Tests ersetzen ihn (der Systembenutzer bekommt keinen Hinweis auf setup).
+var currentUserName = func() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.Username
+}
+
+// printNodeProbe fragt den Node unter listen ohne Token (Antwort) und prüft
+// je Token-Datei des aufrufenden Users die Anmeldung beim Hub (Anmeldung) —
+// pro User wie global, unabhängig von der Datenbank (Task 035). Antwortet
+// der Node nicht, geht keine Anfrage mit Token hinaus, und jede Datei ist
+// „nicht geprüft“, wie bei node account list. Nur Information: kein Token
+// in der Ausgabe, kein Einfluss auf den Exit-Code.
+func printNodeProbe(ctx context.Context, w io.Writer, listen string) {
+	addr := localNodeAddress(listen)
+	info, probeErr := probeNodeWithin(ctx, addr, nil, "", statusProbeTimeout)
+	switch {
+	case probeErr != nil:
+		fmt.Fprintf(w, "  Antwort:       nein — %v\n", probeErr)
+	case info.Version != "":
+		fmt.Fprintf(w, "  Antwort:       ja, Version %s\n", info.Version)
+	default:
+		fmt.Fprintf(w, "  Antwort:       ja\n")
+	}
+
+	dir, err := assistant.TokensDir()
+	if err != nil {
+		fmt.Fprintf(w, "  Anmeldung:     Token-Verzeichnis unbekannt (%v)\n", err)
+		return
+	}
+	files, err := tokenFiles(dir)
+	if err != nil {
+		// Etwa unter sudo -u kephalaion mit dem HOME des Aufrufers (EACCES):
+		// der Grund, kein Hinweis auf setup.
+		fmt.Fprintf(w, "  Anmeldung:     Token-Verzeichnis %s nicht lesbar (%v)\n", dir, pathErrReason(err))
+		return
+	}
+	if len(files) == 0 {
+		if currentUserName() == config.SystemUser {
+			fmt.Fprintf(w, "  Anmeldung:     keine Token-Dateien unter %s\n", dir)
+			return
+		}
+		fmt.Fprintf(w, "  Anmeldung:     keine Token-Dateien unter %s — einen Account einrichten: kephalaion node "+
+			"account setup <hub> <account> <einrichtungstoken>\n", dir)
+		return
+	}
+	var client *accountClient
+	if probeErr == nil {
+		client = newAccountClient(addr, nil, "")
+		client.timeout = statusCheckTimeout
+	}
+	for i := range files {
+		f := &files[i]
+		if client == nil {
+			f.State, f.Reason = stateUnchecked, "Node antwortet nicht"
+		} else {
+			checkFile(client, f)
+		}
+		name := f.Hub + "/" + f.Account
+		if f.Kind == kindPending {
+			name += " (.pending)"
+		}
+		line := name + " " + f.State.text()
+		switch {
+		case f.State == stateValid:
+			line += fmt.Sprintf(" (User %s, Collections %s)", f.User, joinOrDash(f.Collections))
+		case f.Reason != "":
+			line += " — " + f.Reason
+		}
+		fmt.Fprintf(w, "  Anmeldung:     %s\n", line)
+	}
+	if hasInvalidToken(files) {
+		fmt.Fprintf(w, "  Hinweis:       %s\n", invalidTokenHint)
+	}
+}
+
+// pathErrReason ist der Grund eines Dateifehlers ohne den Pfad.
+func pathErrReason(err error) error {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
 }
 
 // systemDBUnreadable sagt, ob die Datenbank einer Rolle mangels Rechten nicht

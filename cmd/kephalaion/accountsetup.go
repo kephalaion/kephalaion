@@ -42,10 +42,13 @@ type accountClient struct {
 	addr   nodeAddress
 	caFile string
 	http   *http.Client
+	// timeout begrenzt einen Aufruf: accountCallTimeout für setup und list;
+	// status setzt eine kurze (Task 035).
+	timeout time.Duration
 }
 
 func newAccountClient(addr nodeAddress, rootCAs *x509.CertPool, caFile string) *accountClient {
-	return &accountClient{addr: addr, caFile: caFile, http: nodeClient(rootCAs, nil)}
+	return &accountClient{addr: addr, caFile: caFile, http: nodeClient(rootCAs, nil), timeout: accountCallTimeout}
 }
 
 // accountOutcome ist, wie ein Aufruf einer Route für Accounts ausging.
@@ -78,7 +81,7 @@ type accountAnswer struct {
 // call schickt eine Anfrage an eine Route für Accounts, genau einmal. Das
 // Token steht nur im Header; keine Meldung nennt es.
 func (c *accountClient) call(path, hub, account, token string, body []byte) accountAnswer {
-	ctx, cancel := context.WithTimeout(context.Background(), accountCallTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 	where := "Node unter " + c.addr.Base + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.addr.Base+path, bytes.NewReader(body))

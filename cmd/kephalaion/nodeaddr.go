@@ -151,7 +151,14 @@ type nodeInfo struct {
 // oder Anmeldung des Proxys (401, 302, HTML), Host-Prüfung, kein Node
 // dahinter. Ohne Token zählt die Probe nie als Fehlversuch am Node.
 func probeNode(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, caFile string) (nodeInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	return probeNodeWithin(ctx, addr, rootCAs, caFile, probeTimeout)
+}
+
+// probeNodeWithin ist probeNode mit eigener Frist — status fragt mit einer
+// kurzen (Task 035).
+func probeNodeWithin(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, caFile string,
+	timeout time.Duration) (nodeInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},` +
 		`"clientInfo":{"name":"kephalaion","version":"1"}}}`
