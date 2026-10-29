@@ -311,8 +311,21 @@ Rechner“ unten; README, „Hub und Node auf einem Rechner“); das Token kommt
 Verwaltet wird als Systembenutzer: `sudo -u kephalaion kephalaion status`, `… hub account
 …`, `… config set node sync_interval 1m` usw. Ein anderer User sieht mit `kephalaion
 status` die globale config (`Quelle: global`), den Zustand der System-Unit und, statt eines
-Fehlers an der Datenbank, den Hinweis auf die globale Installation (Exit-Code 0).
-`kephalaion init` und `kephalaion service install` brechen für ihn ab.
+Fehlers an der Datenbank, den Hinweis auf die globale Installation (Exit-Code 0). Am Node
+stehen für ihn seit Task 035 zwei Zeilen, die auch pro User erscheinen: `Antwort:` — ob der
+Node unter `listen` antwortet (`ja, Version …` oder `nein — <Grund>`; eine Probe ohne Token,
+Frist 3 s) — und je Token-Datei unter `tokens/<hub>/` eine Zeile `Anmeldung: <hub>/<account>
+gültig|ungültig|nicht geprüft|…`, geprüft über `/account/check` des Nodes beim Hub, dieselbe
+Prüfung wie `node account list` (Frist 5 s je Datei, danach `nicht geprüft`; die Erweiterung
+für VS Code prüft dagegen mit `whoami` gegen die Replica). Antwortet der Node nicht, geht
+keine Anfrage mit Token hinaus, und jede Datei heißt `nicht geprüft`. Ohne Token-Dateien
+steht der Hinweis auf `node account setup`; ist das Token-Verzeichnis nicht lesbar (etwa `sudo
+-u kephalaion` mit dem `HOME` des Aufrufers), nur der Grund. Kein Token steht in der Ausgabe,
+und der Exit-Code ändert sich durch beide Zeilen nie. **Nebenwirkung:** Jede ungültige
+Token-Datei ist bei jedem Aufruf von `status` ein Fehlversuch am Node — die Zeile trägt
+denselben Hinweis wie `node account list`: die Datei löschen oder neu einrichten. Eine Option,
+die Prüfung abzuschalten, gibt es nicht. `kephalaion init` und `kephalaion service install`
+brechen für einen anderen User als den Systembenutzer ab.
 
 Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) an `http://127.0.0.1:7433/mcp`, siehe README,

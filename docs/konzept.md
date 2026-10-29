@@ -1623,6 +1623,12 @@ Projekte dieses Rechners.
 | `~/.local/share/kephalaion/replicas/` | wiederherstellbar durch Abgleich | `<alias>.db` je Hub-Eintrag |
 | `~/.local/state/kephalaion/` (`XDG_STATE_HOME`) | Zustand, Logs | `serve.log` des LaunchAgent (macOS); unter Linux geht das Log ins Journal. `vscode-pause.json` der Erweiterung für VS Code (Task 025): Pause und Budget für alle Fenster des Rechners an einer entfernten `nodeUrl`, kein Token ([`begriffe.md`](begriffe.md), „pause file“); lässt sich hier nichts anlegen, liegt sie am Ersatzort `os.tmpdir()/kephalaion-<uid>/`, bis es wieder geht |
 
+- **Global sind die Orte fest** (unten, „Installation und Betrieb“): die config
+  `/etc/kephalaion/config.yaml`, die Daten `/var/lib/kephalaion/`. Die Token-Dateien liegen
+  auch dann unter `~/.config/kephalaion/tokens/` des jeweiligen Users, nie in der globalen
+  config — wer die config sucht (das Binary mit `config.Locate`, die Erweiterung für VS Code
+  seit Task 035 mit `locateConfig`, k-playbook mit `locateEnv`), nimmt das Token-Verzeichnis
+  trotzdem beim User.
 - **Token-Dateien — festgehalten am 2026-09-26:** Die Tokens der Accounts liegen neben der
   config, **eine Datei je Account und Hub**: `~/.config/kephalaion/tokens/<hub>/<account>.token`,
   Rechte `0600`, die Verzeichnisse `0700`, das Token in der ersten Zeile. `<hub>` ist der

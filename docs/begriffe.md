@@ -27,7 +27,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   ihr Dienst lauscht (`listen:`). Alles andere steht in der Datenbank der Rolle. Gefunden wird
   sie ohne Angabe: `--config` > `KEPHALAION_CONFIG` > die des Users, wenn es sie gibt > die
   globale, wenn es sie gibt > der Ort des Users (dort legt `init` an); `status` nennt Ort und
-  **Quelle** (`--config`, `KEPHALAION_CONFIG`, pro User, global).
+  **Quelle** (`--config`, `KEPHALAION_CONFIG`, pro User, global). Die Erweiterung für VS Code
+  sucht seit Task 035 genauso (`locateConfig` in `vscode/rules.js`, ohne `--config`).
   `kephalaion config show` zeigt sie samt den `settings` je Rolle.
   - **config set** / **config unset** — `kephalaion config set <rolle> <schlüssel> <wert>`
     setzt einen bekannten Schlüssel der `settings` einer Rolle, nach Prüfung des Werts;
@@ -71,7 +72,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   einrichten tut es ihn nicht.
 - **status** — `kephalaion status`: welche config gilt und woher, ob der Dienst eingerichtet
   ist und läuft (Zeile `Dienst:`), welche Rollen eingerichtet sind, wo ihre Datenbank liegt,
-  welche Verbindungen bestehen; am Node je Hub der Stand des Abgleichs aus `hub_sync`. Exit 1,
+  welche Verbindungen bestehen; am Node je Hub der Stand des Abgleichs aus `hub_sync`. Am Node
+  seit Task 035 außerdem `Antwort:` (eine Probe ohne Token an `http://<listen>/mcp`, Frist 3 s)
+  und je Token-Datei des aufrufenden Users `Anmeldung: <hub>/<account> …`, geprüft über die
+  **account routes** wie `node account list` (Frist 5 s je Datei; ohne Antwort des Nodes keine
+  Anfrage mit Token, `nicht geprüft`) — pro User wie global, nur Information. Exit 1,
   wenn eine Datenbank fehlt oder nicht passt oder es die config des Users und die globale
   nebeneinander gibt (zwei Arten auf einem Rechner); bei der globalen config ohne Leserecht
   auf die Datenbanken nur ein Hinweis, Exit 0.

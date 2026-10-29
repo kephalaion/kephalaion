@@ -156,8 +156,15 @@ und deren Benachrichtigungen brauchen eine Sitzung.
 - **Klick darauf:** ein kleines Menü — neu verbinden, Token setzen, Collection einbinden,
   Log anzeigen (Output-Channel „Kephalaion“ mit den Aufrufen und Fehlern).
 - **Node nicht erreichbar:** Dann scheitert auch das Lesen, weil die Erweiterung die Replica
-  nie selbst öffnet. Die Statusleiste zeigt das, mit einem Hinweis, wie der Node gestartet
-  wird.
+  nie selbst öffnet. Die Statusleiste zeigt das — seit Task 035 mit der Ursache: „Keph: keine
+  config“ (der Tooltip nennt die geprüften Orte), „Keph: config nicht lesbar“ (mit dem
+  Fehler), „Keph: Node nicht eingerichtet“ (kein Abschnitt `node:` in der Datei), „Keph: Node
+  antwortet nicht“ (nichts abgeschickt, mit Adresse und Grund wie `ECONNREFUSED`); ohne eine
+  dieser Ursachen nach der Art des Fehlers „Keph: Antwort unklar“ (abgeschickt, keine brauchbare
+  Antwort, 5xx) oder „Keph: Anfrage abgelehnt“ (403, 404, Antwort des Proxys); alles Übrige
+  (ungültige `nodeUrl`, Wahl der Hubs) bleibt „Keph: Node nicht erreichbar“. Die Ursache steht
+  im Fehler als eigenes Feld `reason` neben `kind`; `pause.js` und die Fehler des Dateisystems
+  entscheiden weiter nach `kind` (unten, „Die config wie das Binary“).
 - **In VS Code wird gewählt, was angezeigt wird:** „Collection einbinden“ bietet die
   lesbaren Collections aus `whoami` zur Auswahl an und fügt die gewählte als Ordner in den
   Workspace ein.
@@ -165,9 +172,12 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   ist Verwaltung mit Tokens und heute schon Kommandozeile; die Verwaltung über MCP ist im
   Konzept nur vorgemerkt. Nicht doppelt bauen.
 - **Welcher Node:** Es gibt einen je Rechner. Die Erweiterung läuft neben ihm (siehe
-  `extensionKind`) und kann die Adresse aus `listen` in `~/.config/kephalaion/config.yaml`
-  lesen; eine Einstellung `kephalaion.nodeUrl` braucht es nur zum Überschreiben — oder für
-  einen Node auf einem anderen Rechner (unten, „Ein Node auf einem anderen Rechner“).
+  `extensionKind`) und liest die Adresse aus `listen` im Abschnitt `node:` der config, die
+  sie wie das Binary sucht (seit Task 035: `KEPHALAION_CONFIG`, die des Users, wenn es sie
+  gibt, sonst `/etc/kephalaion/config.yaml`; unten, „Die config wie das Binary“); fehlt
+  `listen`, gilt `127.0.0.1:7433`. Eine Einstellung `kephalaion.nodeUrl` braucht es nur zum
+  Überschreiben — oder für einen Node auf einem anderen Rechner (unten, „Ein Node auf einem
+  anderen Rechner“).
 - **Account und Token** trägt die Erweiterung als Header ein, wie jeder Client
   (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`). **Sie liest sie aus den Token-Dateien**
   `~/.config/kephalaion/tokens/<hub>/<account>.token` (siehe [`konzept.md`](konzept.md),
@@ -285,7 +295,8 @@ dieselben Regeln wie für `kephalaion node mcp add --node`:
     Anfrage. **Probe ohne Ergebnis** (keine Verbindung, 5xx des Proxys, etwa 502 beim Neustart
     des Nodes, Abbruch): Die Schranke bleibt zu — keine Anfrage mit ungeprüften Paaren; `stat`,
     `readDirectory` und `readFile` scheitern als `Unavailable` mit der Ursache, der MCP-Server
-    startet nicht, die Leiste zeigt „Node nicht erreichbar“ —, und die Adresse wird mit
+    startet nicht, die Leiste zeigt die Ursache (seit Task 035 etwa „Node antwortet nicht“ oder
+    „Antwort unklar“, vorher immer „Node nicht erreichbar“) —, und die Adresse wird mit
     wachsendem Abstand neu geprobt: 5, 10, 30 s, dann alle 60 s (von allen Fenstern des Rechners
     zusammen höchstens eine Probe je Minute, der Abstand steht in der Pausendatei). Ein geändertes
     Paar und „Neu verbinden“ proben sofort und beginnen den Abstand von vorn. Eine solche Probe
@@ -396,6 +407,55 @@ anmelden“).
 „Developer: Reload Window“: `vendor/test-docs/vscode.md` aus `vm:test` zeigt Markdown samt
 Frontmatter, kein JSON. Eine an `wsl-hallo.md` angehängte Zeile kam beim Speichern als Markdown
 am Hub an (neue Revision). `read` im Copilot-Chat liefert den Inhalt.
+
+## Die config wie das Binary (Task 035)
+
+Bis Task 035 las die Erweiterung nur `KEPHALAION_CONFIG` oder die config des Users. Auf einem
+Rechner mit globaler Installation (die VM, VS Code über Remote-SSH) fand sie so keine config
+und zeigte „Node nicht erreichbar“, obwohl der Node lief; die Umgehung war
+`kephalaion.nodeUrl`. Seitdem sucht sie wie `config.Locate` im Binary — nachgebaut als reine
+Funktion `locateConfig` in [`vscode/rules.js`](../vscode/rules.js), nicht über einen Aufruf
+des Binarys, das nicht im `PATH` des Editor-Servers liegen muss:
+
+1. `KEPHALAION_CONFIG`, zu einem absoluten Pfad aufgelöst.
+2. Die config des Users (`$XDG_CONFIG_HOME/kephalaion/config.yaml`, die Variable zählt wie
+   im Binary nur mit absolutem Wert, sonst `~/.config/kephalaion/config.yaml`), wenn es sie
+   gibt. Eine ohne Leserecht (`EACCES`) zählt als nicht vorhanden, wie `userFileExists`: Sie
+   gehört einem anderen User.
+3. `/etc/kephalaion/config.yaml`, wenn es sie gibt. Hier zählt nur `ENOENT` als „gibt es
+   nicht“, wie `fileExists`: Ein Rechteproblem meldet die Erweiterung als „config nicht
+   lesbar“, statt es still zu übergehen.
+4. Sonst der Ort des Users, an dem die config fehlt — die Meldung „keine config“ nennt beide
+   geprüften Orte.
+
+Die Token-Dateien bleiben in jedem Fall unter `tokens/` neben der config des Users
+(`assistant.TokensDir`), auch wenn die globale gilt; in der globalen stehen sie nie. Fehlt
+`listen` im Abschnitt `node:`, gilt `127.0.0.1:7433` wie `config.DefaultListenNode`; fehlt
+der Abschnitt ganz, heißt es „Node nicht eingerichtet in <Datei>“. Gibt es die config des
+Users und die globale nebeneinander, gilt wie bei `Locate` die des Users; Tooltip, „Status
+anzeigen“ und das Log nennen den Fehler „zwei Arten der Installation“ mit demselben Weg wie
+`kephalaion status`. Das Log beim Start nennt Ort und Quelle der config (`pro User`,
+`global`, `KEPHALAION_CONFIG`), der Tooltip ebenso.
+
+Die Fehler auf dem Weg zum Node tragen neben `kind` (`unreachable`, `unclear`, `rejected`;
+danach entscheiden `pause.js` und die Fehler des Dateisystems, unverändert) ein eigenes Feld
+`reason` mit der Ursache: `no_config`, `config_unreadable`, `node_not_set_up` (Fehler der
+config, nichts abgeschickt) oder `no_answer` (nichts abgeschickt, auch an einer entfernten
+`nodeUrl`). Nicht `Error.cause`: Das trägt in `request` schon den Fehler von `fetch`. Die
+Leiste zeigt je Ursache einen eigenen Text („Status und Auswahl“ oben); `closedError` der
+Schranke reicht `reason` neben `kind` weiter, die Schranke selbst verhält sich wie bisher.
+
+Der feste Ort der globalen config lässt sich nur für die Tests umlenken (ein exportierter
+Setter, wie `SystemPath` im Binary) — keine Einstellung, keine Umgebungsvariable. Tests
+(`make vscode-test`): je Fall von `Locate` ein Test für `locateConfig` in `rules.test.js`
+(nur User, nur global, beide, keine, `KEPHALAION_CONFIG` absolut und relativ, `EACCES` beim
+User und global, relatives `XDG_CONFIG_HOME`), dazu `parseNodeListen`; in `extension.test.js`
+die globale config mit den Token-Dateien des Users und gemeldetem MCP-Server, fehlendes
+`listen`, die Meldungen für keine config, config nicht lesbar, Node nicht eingerichtet, Node
+antwortet nicht, zwei Arten, 5xx und 403, und die Schranke an einer entfernten `nodeUrl` mit
+unverändertem `kind`. Gegenstück auf der Kommandozeile: `kephalaion status` fragt seit Task
+035 auch bei globaler Installation, ob der Node antwortet und ob die Anmeldung des Users gilt
+([`installation.md`](installation.md), „Verwalten“).
 
 ## Sprachen
 
