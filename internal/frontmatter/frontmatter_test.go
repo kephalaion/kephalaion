@@ -204,3 +204,21 @@ func TestIsMarkdown(t *testing.T) {
 		}
 	}
 }
+
+// Body schneidet das Frontmatter ab; ohne Block oder bei offenem Block bleibt
+// der Inhalt.
+func TestBody(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"---\ntitle: x\n---\n# A\ntext\n", "# A\ntext\n"},
+		{"\xef\xbb\xbf---\r\ntitle: x\r\n---\r\nbody", "body"},
+		{"---\n---\n", ""},
+		{"---\ntitle: x\n---", ""},
+		{"# A\n---\nb\n---\n", "# A\n---\nb\n---\n"},
+		{"---\ntitle: x\nnicht zu\n", "---\ntitle: x\nnicht zu\n"},
+		{"", ""},
+	} {
+		if got := Body(c.in); got != c.want {
+			t.Errorf("Body(%q) = %q, erwartet %q", c.in, got, c.want)
+		}
+	}
+}

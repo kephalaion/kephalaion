@@ -83,6 +83,12 @@ type Store interface {
 	// (source.Target, fetch.go).
 	FetchedTag(ctx context.Context, collection string) (string, error)
 	ReplaceDefaults(ctx context.Context, collection, tag string, files []source.File, by source.Actor) (source.Result, error)
+	// RebuildDocs baut docs/ einer Collection neu (rebuild.go, Task 033):
+	// docs/README.md, feste Verzeichnisse, Mahnungen und jede index.md, in
+	// einer Transaktion, die zuerst die Zeile der Collection sperrt, als
+	// system. Ohne docs/ NoDocs; eine Collection mit Quelle ErrForbidden; eine
+	// unbekannte ErrNotFound. by nennt, wer anstößt, für actions.
+	RebuildDocs(ctx context.Context, collection string, by source.Actor) (RebuildResult, error)
 	// RemoveCollection entfernt eine Collection, die kein Node erlaubt hat, in
 	// der kein gesperrter Account Rechte gemerkt hat und in der keine
 	// Dokumente stehen. Löschmarken von Account-Zeilen zählen nicht; sie

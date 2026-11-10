@@ -260,3 +260,29 @@ func scalar(n *yaml.Node) (any, error) {
 func IsMarkdown(name string) bool {
 	return len(name) >= 3 && strings.EqualFold(name[len(name)-3:], ".md")
 }
+
+// Body liefert den Inhalt hinter dem Frontmatter: alles nach der Zeile `---`,
+// die den Block schließt. Hat der Inhalt kein Frontmatter oder ist der Block
+// nicht geschlossen (wie bei Parse, innerhalb von MaxBytes), ist es der ganze
+// Inhalt ohne BOM. Für die Zerlegung in Abschnitte und die erste Überschrift
+// eines Dokuments (Task 033).
+func Body(content string) string {
+	b := bytes.TrimPrefix([]byte(content), bom)
+	line, rest, eol := nextLine(b)
+	if string(line) != marker || !eol {
+		return string(b)
+	}
+	read := len(b) - len(rest)
+	for read <= MaxBytes {
+		line, after, eol := nextLine(rest)
+		if string(line) == marker {
+			return string(after)
+		}
+		if !eol {
+			break
+		}
+		read += len(rest) - len(after)
+		rest = after
+	}
+	return string(b)
+}
