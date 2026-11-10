@@ -5,8 +5,8 @@ description: Entwurf vom 2026-10-16, entschieden bis 2026-11-10 und gebaut in Ta
 
 # Indizierung von `docs/`
 
-**Stand: gebaut in Task 033, Etappen 1–7 am 2026-11-10; Release und Nachricht an k-playbook
-offen** (2026-10-16,
+**Stand: gebaut in Task 033, Etappen 1–7 am 2026-11-10, veröffentlicht in v0.4.0; Nachricht an
+k-playbook offen** (2026-10-16,
 `keph:/user/kamran/tasks/033-docs-index-und-suche.md`), nachgezogen am 2026-11-09 nach der
 Übergabe aus k-playbook (siehe „Entschieden am 2026-11-09“) und am 2026-11-10 bei der Prüfung des
 Tasks (siehe „Entschieden am 2026-11-10“). Was das Konzept betrifft, steht mit seinem Datum in
