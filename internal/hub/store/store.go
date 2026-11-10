@@ -167,7 +167,8 @@ type Store interface {
 
 	// PutDocument legt ein Dokument an oder ersetzt seinen Inhalt — der
 	// Admin-Upsert der CLI. Unveränderter Inhalt schreibt nichts und zählt
-	// keine Revision.
+	// keine Revision. Eine erzeugte Datei unter docs/ ist ErrGenerated, wie
+	// bei DeleteDocument (Task 033).
 	PutDocument(ctx context.Context, collection, name, content string) (PutResult, error)
 	// Document liest ein lebendes Dokument; eine Löschmarke gilt als nicht
 	// vorhanden.
@@ -180,7 +181,8 @@ type Store interface {
 	// Revision.
 	DeleteDocument(ctx context.Context, collection, name string) (Document, error)
 	// ImportDocuments legt an oder ersetzt wie PutDocument, alle Dokumente in
-	// einer Transaktion und unter einer Revision. Was fehlt, bleibt.
+	// einer Transaktion und unter einer Revision. Was fehlt, bleibt. Erzeugte
+	// Dateien unter docs/ übergeht es und nennt sie in Generated.
 	ImportDocuments(ctx context.Context, collection string, docs []DocumentInput) (ImportResult, error)
 
 	// Schreiben über einen Node (write.go): im Namen von auth.Account, mit
@@ -254,6 +256,7 @@ var queries = struct {
 	DocumentsUnderLive string
 	DocumentInsert     string
 	DocumentReplace    string
+	DocumentTakeOver   string
 	DocumentDelete     string
 	DocumentRename     string
 
@@ -361,6 +364,10 @@ var queries = struct {
 		VALUES ($1, $2, $3, $4, NULL, 0, $5, $6, $7, $8, $9)`,
 	DocumentReplace: `UPDATE documents SET content = $2, revision = $3, updated_at = $4, updated_by = $5
 		WHERE id = $1`,
+	// Wer eine Mahnung ersetzt, übernimmt sie (Task 033): Danach ist sie
+	// sein eigenes Dokument, created_by wird er.
+	DocumentTakeOver: `UPDATE documents SET content = $2, revision = $3, updated_at = $4, updated_by = $5,
+		created_by = $5 WHERE id = $1`,
 	// Die Löschmarke behält id, Collection und Name, verliert Inhalt und meta.
 	DocumentDelete: `UPDATE documents SET content = NULL, meta = NULL, deleted = 1,
 		revision = $2, updated_at = $3, updated_by = $4

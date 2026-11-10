@@ -83,6 +83,7 @@ var writeKinds = []struct {
 	{store.ErrNameTaken, contract.CodeNameTaken},
 	{store.ErrPathConflict, contract.CodePathConflict},
 	{store.ErrStaleRevision, contract.CodeStaleRevision},
+	{store.ErrGenerated, contract.CodeGeneratedFile},
 	{store.ErrNotFound, contract.CodeNotFound},
 }
 

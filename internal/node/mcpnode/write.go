@@ -198,6 +198,7 @@ type WriteError struct {
 }
 
 const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dokument mit dem Namen: name_taken. " +
+	"docs/README.md und jede index.md unter docs/ schreibt nur das System: generated_file. " +
 	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; bei einer .md frontmatter_error, wenn sich " +
 	"das Frontmatter nicht lesen lässt, und frontmatter_hints, wenn ein unquotierter Wert an einem Kommentar endet " +
 	"(gespeichert ist trotzdem); ein Fehler trägt error.code. request_id: " +
@@ -205,16 +206,19 @@ const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dok
 	"replayed, Name, ids und Revision, ohne Art; die Replica holt der angestoßene Abgleich nach."
 
 const writeDescription = "Ersetzt den Inhalt eines Dokuments, über den Hub. Mit base_revision nur, wenn das " +
-	"Dokument noch diese Revision hat, sonst stale_revision. Antwort (samt frontmatter_error und " +
+	"Dokument noch diese Revision hat, sonst stale_revision. Eine Mahnung (README.md unter docs/, vom System " +
+	"angelegt) ersetzt so jeder mit write. Antwort (samt frontmatter_error und " +
 	"frontmatter_hints) und request_id wie bei create."
 
 const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). base_revision wie bei write, nur für " +
-	"Dokumente. Ein Verzeichnis nur mit recursive: alle Dokumente darunter, alles oder nichts. Antwort wie create, " +
+	"Dokumente. Ein Verzeichnis nur mit recursive: alle Dokumente darunter, alles oder nichts, erzeugte Dateien " +
+	"unter docs/ eingeschlossen. Antwort wie create, " +
 	"mit deleted; bei einem Verzeichnis kind directory und count. request_id wie bei create."
 
 const renameDescription = "Benennt ein Dokument oder ein Verzeichnis um, über den Hub, in derselben Collection; die " +
 	"id bleibt, ein Verzeichnis alles oder nichts. Ist das Ziel belegt: name_taken, nichts wird überschrieben. " +
-	"base_revision wie bei write, nur für Dokumente. Antwort wie create unter dem neuen Namen; bei einem " +
+	"base_revision wie bei write, nur für Dokumente. Unter docs/ wandern index.md und Mahnungen nicht mit, der Hub " +
+	"löscht sie; rebuild_docs stellt sie her. Antwort wie create unter dem neuen Namen; bei einem " +
 	"Verzeichnis kind directory und count. request_id wie bei create."
 
 // writeOp ist ein Aufruf eines Werkzeugs, das schreibt: Werkzeug, Adresse,
@@ -471,7 +475,11 @@ func (n *Node) accept(ctx context.Context, h store.Hub, t target, op writeOp, re
 			IDs: append([]string{}, resp.IDs...)}
 	}
 	out := WriteOutput{Kind: KindDocument, Address: t.Address(), Name: name, Revision: resp.Revision}
-	doc, dir, err := answerShape(t.Collection, name, op.dir, resp.Rows)
+	removedUnder := ""
+	if op.rename {
+		removedUnder = op.name
+	}
+	doc, dir, err := answerShape(t.Collection, name, op.dir, removedUnder, resp.Rows)
 	if err == nil {
 		err = replica.WriteRows(context.WithoutCancel(ctx), n.nodes, h, resp.HubID, resp.Rows)
 	}
@@ -490,9 +498,15 @@ func (n *Node) accept(ctx context.Context, h store.Hub, t target, op writeOp, re
 		}
 	case dir:
 		// Alle Zeilen eines Vorgangs tragen dieselbe Revision, dieselbe Zeit
-		// und denselben Urheber.
+		// und denselben Urheber. Gelöscht ist das Verzeichnis, wenn jede
+		// Zeile eine Löschmarke ist — nach rename nur, wenn darunter allein
+		// erzeugte Dateien und Mahnungen lagen.
 		first := resp.Rows[0]
-		out.Kind, out.Count, out.Deleted = KindDirectory, len(resp.Rows), first.Deleted
+		deleted := true
+		for _, r := range resp.Rows {
+			deleted = deleted && r.Deleted
+		}
+		out.Kind, out.Count, out.Deleted = KindDirectory, len(resp.Rows), deleted
 		out.Updated = stamp(first.UpdatedAt, first.UpdatedBy)
 	}
 	return out
@@ -501,9 +515,13 @@ func (n *Node) accept(ctx context.Context, h store.Hub, t target, op writeOp, re
 // answerShape prüft die Zeilen einer Antwort: alle aus der Collection des
 // Ziels, und entweder genau eine unter name — ein Dokument, dann doc — oder,
 // wenn der Vorgang ein Verzeichnis nehmen kann (dirOK), mindestens eine und
-// alle unter name/ — ein Verzeichnis, dann dir. Sonst ein Fehler; ein
+// alle unter name/ — ein Verzeichnis, dann dir. Ist removedUnder gesetzt
+// (rename: der alte Name), zählen dazu Löschmarken unter removedUnder/: die
+// erzeugten Dateien und Mahnungen unter docs/, die der Hub beim Umbenennen
+// eines Verzeichnisses entfernt (Task 033). Sonst ein Fehler; ein
 // eindeutiges Dokument liefert es auch dann.
-func answerShape(collection, name string, dirOK bool, rows []contract.Row) (doc *contract.Row, dir bool, err error) {
+func answerShape(collection, name string, dirOK bool, removedUnder string, rows []contract.Row) (doc *contract.Row,
+	dir bool, err error) {
 	at, under := 0, 0
 	for i, r := range rows {
 		switch {
@@ -513,6 +531,8 @@ func answerShape(collection, name string, dirOK bool, rows []contract.Row) (doc 
 			at++
 			doc = &rows[i]
 		case dirOK && strings.HasPrefix(r.Name, name+"/"):
+			under++
+		case dirOK && removedUnder != "" && r.Deleted && strings.HasPrefix(r.Name, removedUnder+"/"):
 			under++
 		default:
 			err = fmt.Errorf("der Hub antwortet mit %s, erwartet %s", r.Name, name)

@@ -616,7 +616,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   `README.md` fehlt; sie trägt `generated: {by: kephalaion, at: …}` für Leser, bei einem der
   **fixed directories** auch `title` und `description` aus deren Liste. Jeder mit `write` ersetzt
   sie mit `write` (nicht `create`: der Name ist belegt), ohne `supersede`; wer `supersede` hat,
-  ebenso. Danach ist sie eine gewöhnliche `README.md`. Mit demselben Recht lässt sie sich
+  ebenso; wer sie ersetzt, übernimmt sie (`created_by`). Danach ist sie eine gewöhnliche `README.md`. Mit demselben Recht lässt sie sich
   löschen — der nächste Neubau legt sie wieder an, wenn die `README.md` weiter fehlt —, aber
   nicht einzeln umbenennen (**generated_file**): Unter einem neuen Namen wäre sie nicht mehr zu
   erkennen. Kein Treffer von **search**.

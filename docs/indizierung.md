@@ -436,8 +436,19 @@ mit einer alten `index.md` scheitern lassen; übernehmen hätte die Sperre umgan
   erkennen so, dass sie noch nicht ersetzt wurde.
 - **Ersetzen:** Jeder mit `write` ersetzt sie mit `write`, ohne `supersede` — obwohl sie `system`
   gehört (2026-11-10); `create` scheitert am belegten Namen. Danach ist sie eine gewöhnliche
-  `README.md` des Users, gleich welches Frontmatter darin steht. Nur die Mahnung gilt so; andere
-  Dokumente von `system` (etwa `defaults/` einer Collection mit Quelle) bleiben fremd.
+  `README.md` des Users, gleich welches Frontmatter darin steht: Wer sie ersetzt, übernimmt sie
+  (`created_by` wird er, auch beim Admin), damit er sie danach wie jedes eigene Dokument mit
+  `write` ändert. Nur die Mahnung gilt so; andere Dokumente von `system` (etwa `defaults/` einer
+  Collection mit Quelle) bleiben fremd. Wer `supersede` hat, ersetzt sie ebenso.
+- **Eine einzelne Mahnung löschen oder umbenennen** (entschieden in Task 033, Etappe 2, im Sinn
+  von Entscheidung 18): **Löschen** geht mit demselben Recht wie Ersetzen (`write` oder
+  `supersede`); der nächste Neubau legt sie wieder an, wenn die `README.md` weiter fehlt — so
+  bleibt Löschen harmlos, und niemand braucht ein Recht über das Ersetzen hinaus. **Umbenennen**
+  einer einzelnen Mahnung lehnt der Hub ab (`generated_file`), aus dem Grund von Entscheidung 17:
+  Unter einem neuen Namen trüge sie den User in `updated_by` und wäre nicht mehr als Mahnung zu
+  erkennen; ein Text „hier fehlt die `README.md`“ an anderer Stelle hätte auch keinen Sinn. Wer
+  sie loswerden will, ersetzt oder löscht sie. In einem Verzeichnisvorgang gilt Entscheidung 17:
+  `delete` mit `recursive` nimmt sie mit, `rename` entfernt sie.
 
 ## Zurückgestellt
 

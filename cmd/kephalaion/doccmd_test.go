@@ -120,3 +120,25 @@ func TestHubImport(t *testing.T) {
 	runT(t, "hub", "import", "team-x", src, "--prefix", "../x", c).want(t, 1, "--prefix")
 	runT(t, "hub", "import", "fehlt", src, "--prefix", "p", c).want(t, 1, "Collection fehlt gibt es nicht")
 }
+
+// Erzeugte Dateien unter docs/ (Task 033): put und rm lehnen sie ab, der
+// Import übergeht sie und nennt sie.
+func TestHubDocGenerated(t *testing.T) {
+	dir := isolate(t)
+	c := "--config=" + setup(t, dir)
+	runT(t, "hub", "collection", "add", "team-x", c).want(t, 0)
+	runIn(t, "x", "hub", "doc", "put", "team-x", "docs/index.md", c).want(t, 1, "erzeugte Datei", "rebuild-docs")
+	runT(t, "hub", "doc", "rm", "team-x", "docs/README.md", c).want(t, 1, "erzeugte Datei")
+	runIn(t, "x", "hub", "doc", "put", "team-x", "notizen/index.md", c).want(t, 0)
+
+	src := filepath.Join(dir, "quelle")
+	writeFile(t, filepath.Join(src, "index.md"), "alt")
+	writeFile(t, filepath.Join(src, "README.md"), "alt")
+	writeFile(t, filepath.Join(src, "sub", "index.md"), "alt")
+	writeFile(t, filepath.Join(src, "sub", "x.md"), "x")
+	runT(t, "hub", "import", "team-x", src, "--prefix", "docs", c).want(t, 0,
+		"übersprungen: docs/index.md (erzeugte Datei", "übersprungen: docs/sub/index.md (erzeugte Datei",
+		"übersprungen: docs/README.md (erzeugte Datei", "angelegt: docs/sub/x.md",
+		"1 angelegt, 0 ersetzt, 0 unverändert, 3 übersprungen")
+	runT(t, "hub", "doc", "get", "team-x", "docs/index.md", c).want(t, 1, "gibt es")
+}

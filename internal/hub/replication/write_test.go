@@ -224,6 +224,8 @@ func TestWriteCodes(t *testing.T) {
 			{"not_found write", write(f.writeReq(bob, "a", "fehlt.md", "y", nil)), contract.ErrNotFound, "fehlt.md"},
 			{"not_found delete", del(f.deleteReq(bob, "a", "fehlt.md", nil)), contract.ErrNotFound, ""},
 			{"forbidden create ohne write", create(f.createReq(leser, "a", "neu.md", "y")), contract.ErrForbidden, "write fehlt"},
+			{"generated_file index.md", create(f.createReq(bob, "a", "docs/x/index.md", "y")), contract.ErrGeneratedFile, "erzeugte Datei"},
+			{"generated_file docs/README.md", create(f.createReq(bob, "a", "docs/README.md", "y")), contract.ErrGeneratedFile, ""},
 			{"forbidden create mit supersede", create(f.createReq(acc["eve"], "a", "neu.md", "y")), contract.ErrForbidden, ""},
 			{"forbidden Fremdes", write(f.writeReq(bob, "a", "fremd.md", "y", nil)), contract.ErrForbidden, "gehört admin, supersede fehlt"},
 			{"forbidden Fremdes löschen", del(f.deleteReq(leser, "a", "eigen.md", nil)), contract.ErrForbidden, "gehört kleist"},

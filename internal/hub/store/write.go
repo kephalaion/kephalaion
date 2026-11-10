@@ -39,6 +39,15 @@ import (
 //     <pfad>/ auch ohne write und unabhängig vom Urheber. Sonst ErrForbidden
 //     mit dem Grund.
 //
+// Unter docs/ (Task 033, docs/vertrag.md, „Erzeugte Dateien unter docs/“):
+// Eine erzeugte Datei (contract.IsGenerated) lehnt jeder Einzelvorgang ab
+// (ErrGenerated, über MayWrite); eine Mahnung (contract.IsNotice) ersetzt
+// und löscht jeder mit write oder supersede (MayTakeOver), umbenennen lässt
+// sie sich einzeln nicht. delete mit recursive nimmt beide mit, rename eines
+// Verzeichnisses setzt auf sie eine Löschmarke, statt sie umzubenennen; ein
+// rename nach docs/ hinein, das eine erzeugte Datei brächte, ist
+// ErrGenerated.
+//
 // delete und rename nehmen auch ein Verzeichnis — alle lebenden Dokumente
 // darunter, als Ganzes: eine Revision, das Recht je Dokument (bei rename mit
 // altem und neuem Namen), alles oder nichts. Reihenfolge nach der Lesbarkeit: gibt es den Namen (ErrNotFound),
@@ -71,6 +80,11 @@ var (
 	// ErrStaleRevision: das Dokument hat nicht die Revision, auf der der
 	// Vorgang beruht.
 	ErrStaleRevision = errors.New("Revision veraltet")
+	// ErrGenerated: eine erzeugte Datei unter docs/ schreibt nur das System
+	// — ein Einzelvorgang darauf, ein rename nach docs/ hinein, das eine
+	// mitbrächte, oder ein rename einer einzelnen Mahnung (Task 033). Auch
+	// der Admin schreibt sie nicht (PutDocument, DeleteDocument).
+	ErrGenerated = errors.New("erzeugte Datei")
 )
 
 // invalidError ist ein ungültiger Name oder Inhalt: die Meldung der Prüfung,
@@ -236,10 +250,17 @@ func (w *docTx) mayChange(cur Document, rights contract.Rights, verb string) err
 }
 
 // mayWriteAs prüft das Recht an cur unter dem Namen name — bei rename der
-// neue —; own ist, ob der User des Accounts das Dokument angelegt hat.
+// neue —; own ist, ob der User des Accounts das Dokument angelegt hat. Eine
+// Mahnung unter ihrem eigenen Namen ersetzt jeder mit write oder supersede
+// (MayTakeOver).
 func (w *docTx) mayWriteAs(name string, cur Document, rights contract.Rights, verb string) error {
 	own := cur.CreatedBy == w.by
-	d := rights.MayWrite(name, own)
+	var d *contract.WriteDenial
+	if name == cur.Name && contract.IsNotice(cur.Name, cur.UpdatedBy) {
+		d = rights.MayTakeOver(name)
+	} else {
+		d = rights.MayWrite(name, own)
+	}
 	if d == nil {
 		return nil
 	}
@@ -251,17 +272,52 @@ func (w *docTx) mayWriteAs(name string, cur Document, rights contract.Rights, ve
 	if name != cur.Name {
 		what = cur.Name + " nach " + name
 	}
-	return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: %s", what, cur.Collection, verb, reason)}
+	return denial(d, fmt.Sprintf("Dokument %s in %s %s: %s", what, cur.Collection, verb, reason))
+}
+
+// denial ist der Fehler zu einer Ablehnung nach MayWrite: eine erzeugte
+// Datei ErrGenerated, alles andere ErrForbidden.
+func denial(d *contract.WriteDenial, msg string) error {
+	if d.Kind == contract.DenyGenerated {
+		return &kindError{ErrGenerated, msg}
+	}
+	return &kindError{ErrForbidden, msg}
 }
 
 // mayCreate prüft das Recht, name in collection anzulegen: Neues zählt wie
 // Eigenes (write), unter vendor/<name>/ der Scope, unter einem
-// Verzeichnis-Scope ohne write.
+// Verzeichnis-Scope ohne write; eine erzeugte Datei unter docs/ legt niemand
+// an (ErrGenerated).
 func mayCreate(collection, name string, rights contract.Rights) error {
 	if d := rights.MayWrite(name, true); d != nil {
-		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s anlegen: %v", name, collection, d)}
+		return denial(d, fmt.Sprintf("Dokument %s in %s anlegen: %v", name, collection, d))
 	}
 	return nil
+}
+
+// mayTakeAlong prüft das Recht an einem Dokument des Systems unter docs/
+// (contract.IsSystemDoc), das ein Verzeichnisvorgang mitnimmt: wie eine
+// Mahnung ersetzen (MayTakeOver) — write oder supersede, unter einem
+// Verzeichnis-Scope keines von beiden.
+func (w *docTx) mayTakeAlong(cur Document, rights contract.Rights, verb string) error {
+	if d := rights.MayTakeOver(cur.Name); d != nil {
+		return &kindError{ErrForbidden, fmt.Sprintf("Dokument %s in %s %s: %v", cur.Name, cur.Collection, verb, d)}
+	}
+	return nil
+}
+
+// splitSystemDocs teilt die Dokumente unter einem Verzeichnis in die
+// gewöhnlichen und die des Systems unter docs/ (erzeugte Dateien und
+// Mahnungen), je in ihrer Reihenfolge.
+func splitSystemDocs(docs []Document) (regular, system []Document) {
+	for _, d := range docs {
+		if contract.IsSystemDoc(d.Name, d.UpdatedBy) {
+			system = append(system, d)
+		} else {
+			regular = append(regular, d)
+		}
+	}
+	return regular, system
 }
 
 // checkBase prüft die Revision, auf der ein Vorgang beruht; nil heißt ohne
@@ -430,10 +486,22 @@ func (s *sqliteStore) DeleteDocumentAs(ctx context.Context, auth WriteAuth, coll
 				return WriteResult{}, err
 			}
 		}
-		if err := w.mayChangeAll(docs, rights, "löschen"); err != nil {
-			return WriteResult{}, err
-		}
-		if !dir {
+		if dir {
+			// Erzeugte Dateien und Mahnungen gehen mit (Task 033); die Sperre
+			// gilt für Einzelvorgänge.
+			regular, system := splitSystemDocs(docs)
+			if err := w.mayChangeAll(regular, rights, "löschen"); err != nil {
+				return WriteResult{}, err
+			}
+			for _, d := range system {
+				if err := w.mayTakeAlong(d, rights, "löschen"); err != nil {
+					return WriteResult{}, err
+				}
+			}
+		} else {
+			if err := w.mayChange(docs[0], rights, "löschen"); err != nil {
+				return WriteResult{}, err
+			}
 			if err := checkBase(docs[0], base); err != nil {
 				return WriteResult{}, err
 			}
@@ -454,9 +522,16 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 	key := newWriteKey(fingerprintInput{Op: "rename", Collection: collection, Name: name, NewName: newName,
 		BaseRevision: base})
 	return s.writeAs(ctx, auth, collection, key, func(w *docTx, rights contract.Rights) (WriteResult, error) {
-		docs, dir, err := w.source(ctx, collection, name)
+		all, dir, err := w.source(ctx, collection, name)
 		if err != nil {
 			return WriteResult{}, err
+		}
+		// Bei einem Verzeichnis wandern erzeugte Dateien und Mahnungen nicht
+		// mit (Task 033): Sie bekommen eine Löschmarke, der nächste Neubau
+		// stellt her, was unter docs/ fehlt.
+		docs, system := all, []Document(nil)
+		if dir {
+			docs, system = splitSystemDocs(all)
 		}
 		renamed := make([]string, len(docs))
 		for i, d := range docs {
@@ -469,6 +544,18 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 			if err := checkDirBase(collection, name, base); err != nil {
 				return WriteResult{}, err
 			}
+			for i, d := range docs {
+				if contract.IsGenerated(renamed[i]) {
+					return WriteResult{}, &kindError{ErrGenerated, fmt.Sprintf(
+						"Verzeichnis %s in %s nach %s umbenennen: %s würde zu %s, einer erzeugten Datei unter %s/; "+
+							"die schreibt nur das System — erst %s entfernen oder umbenennen",
+						name, collection, newName, d.Name, renamed[i], contract.DocsDir, d.Name)}
+				}
+			}
+		} else if contract.IsNotice(docs[0].Name, docs[0].UpdatedBy) {
+			return WriteResult{}, &kindError{ErrGenerated, fmt.Sprintf(
+				"Dokument %s in %s umbenennen: eine Mahnung des Systems wandert nicht unter einen neuen Namen; "+
+					"mit write ersetzen oder löschen", docs[0].Name, collection)}
 		}
 		// Das Recht am alten und am neuen Namen, je Dokument: hinein, heraus
 		// und innerhalb von vendor/ ohne Sonderfall.
@@ -477,6 +564,11 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 		}
 		for i, d := range docs {
 			if err := w.mayWriteAs(renamed[i], d, rights, "umbenennen"); err != nil {
+				return WriteResult{}, err
+			}
+		}
+		for _, d := range system {
+			if err := w.mayTakeAlong(d, rights, "mit dem Verzeichnis entfernen"); err != nil {
 				return WriteResult{}, err
 			}
 		}
@@ -493,7 +585,12 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 				return WriteResult{}, err
 			}
 		}
-		return w.results(ctx, w.rev.rev, ids(docs))
+		for _, d := range system {
+			if _, err := w.delete(ctx, d); err != nil {
+				return WriteResult{}, err
+			}
+		}
+		return w.results(ctx, w.rev.rev, append(ids(docs), ids(system)...))
 	})
 }
 

@@ -87,12 +87,23 @@ type PutResult struct {
 	Outcome  Outcome
 }
 
-// ImportResult ist das Ergebnis eines Imports: je Eingabe ein PutResult in
-// derselben Reihenfolge und die eine Revision des Vorgangs — 0, wenn sich
-// nichts geändert hat.
+// ImportResult ist das Ergebnis eines Imports: je übernommener Eingabe ein
+// PutResult in derselben Reihenfolge und die eine Revision des Vorgangs — 0,
+// wenn sich nichts geändert hat. Generated sind die Namen erzeugter Dateien
+// unter docs/ (contract.IsGenerated), die der Import übergangen hat, in der
+// Reihenfolge der Eingabe; der Neubau von docs/ stellt sie her.
 type ImportResult struct {
-	Revision int64
-	Results  []PutResult
+	Revision  int64
+	Results   []PutResult
+	Generated []string
+}
+
+// generatedByAdmin ist die Ablehnung einer erzeugten Datei für den Admin:
+// Auch er schreibt sie nicht (Task 033).
+func generatedByAdmin(collection, name, verb string) error {
+	return &kindError{ErrGenerated, fmt.Sprintf(
+		"Dokument %s in %s %s: erzeugte Datei unter %s/, die schreibt nur das System — neu bauen mit "+
+			"kephalaion hub collection rebuild-docs %s", name, collection, verb, contract.DocsDir, collection)}
 }
 
 // CheckContent prüft den Inhalt eines Dokuments: UTF-8-Text ohne NUL-Byte
@@ -266,13 +277,20 @@ func (w *docTx) create(ctx context.Context, collection string, d DocumentInput) 
 	return PutResult{Name: d.Name, ID: id, Revision: rev, Outcome: Created}, nil
 }
 
-// replace ersetzt den Inhalt eines lebenden Dokuments.
+// replace ersetzt den Inhalt eines lebenden Dokuments. Ersetzt jemand
+// anderes als das System eine Mahnung (contract.IsNotice), übernimmt er sie:
+// created_by wird er, danach ist sie eine gewöhnliche README.md, sein
+// eigenes Dokument (Task 033).
 func (w *docTx) replace(ctx context.Context, cur Document, content string) (PutResult, error) {
 	rev, err := w.rev.get(ctx)
 	if err != nil {
 		return PutResult{}, err
 	}
-	res, err := w.tx.ExecContext(ctx, q(queries.DocumentReplace), cur.ID, content, rev, w.now, w.by)
+	query := queries.DocumentReplace
+	if w.by != contract.SystemAuthor && contract.IsNotice(cur.Name, cur.UpdatedBy) {
+		query = queries.DocumentTakeOver
+	}
+	res, err := w.tx.ExecContext(ctx, q(query), cur.ID, content, rev, w.now, w.by)
 	if err := mustAffect(res, err, "Dokument "+cur.Name); err != nil {
 		return PutResult{}, err
 	}
@@ -362,6 +380,9 @@ func (s *sqliteStore) PutDocument(ctx context.Context, collection, name, content
 	if err := checkDocumentInput(in); err != nil {
 		return PutResult{}, err
 	}
+	if contract.IsGenerated(name) {
+		return PutResult{}, generatedByAdmin(collection, name, "schreiben")
+	}
 	var res PutResult
 	err := s.writeDocs(ctx, collection, func(w *docTx) error {
 		var err error
@@ -388,6 +409,10 @@ func (s *sqliteStore) ImportDocuments(ctx context.Context, collection string, do
 	out := ImportResult{Results: make([]PutResult, 0, len(docs))}
 	err := s.writeDocs(ctx, collection, func(w *docTx) error {
 		for _, d := range docs {
+			if contract.IsGenerated(d.Name) {
+				out.Generated = append(out.Generated, d.Name)
+				continue
+			}
 			res, err := w.put(ctx, collection, d)
 			if err != nil {
 				return err
@@ -406,6 +431,9 @@ func (s *sqliteStore) ImportDocuments(ctx context.Context, collection string, do
 func (s *sqliteStore) DeleteDocument(ctx context.Context, collection, name string) (Document, error) {
 	if err := ident.CheckDocName(name); err != nil {
 		return Document{}, err
+	}
+	if contract.IsGenerated(name) {
+		return Document{}, generatedByAdmin(collection, name, "löschen")
 	}
 	var out Document
 	err := s.writeDocs(ctx, collection, func(w *docTx) error {

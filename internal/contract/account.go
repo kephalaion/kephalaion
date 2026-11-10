@@ -195,6 +195,10 @@ const (
 	// DenyReserved: vendor selbst oder direkt in vendor/; dort schreibt
 	// niemand.
 	DenyReserved
+	// DenyGenerated: eine erzeugte Datei unter docs/ (IsGenerated); sie
+	// schreibt nur das System, über einen Node niemand (Code
+	// generated_file).
+	DenyGenerated
 )
 
 // WriteDenial sagt, warum ein Name mit diesen Rechten nicht geschrieben
@@ -217,6 +221,8 @@ func (d *WriteDenial) Error() string {
 		return "Scope " + VendorDir + "/" + d.Vendor + " fehlt"
 	case DenyReserved:
 		return "direkt in " + VendorDir + "/ schreibt niemand"
+	case DenyGenerated:
+		return "erzeugte Datei, schreibt nur das System (rebuild_docs)"
 	}
 	return "Recht fehlt"
 }
@@ -226,6 +232,9 @@ func (d *WriteDenial) Error() string {
 // (bei rename mit altem und neuem Namen), und für writable am Node:
 //
 //   - genau vendor oder direkt in vendor/: niemand;
+//   - eine erzeugte Datei unter docs/ (IsGenerated: docs/README.md, jede
+//     index.md darunter): niemand, auch nicht unter einem
+//     Verzeichnis-Scope (DenyGenerated);
 //   - unter vendor/<name>/: allein der Scope vendor/<name>; write ist dort
 //     weder nötig noch genügt es, own spielt keine Rolle;
 //   - unter <pfad>/ eines Verzeichnis-Scopes: erlaubt, ohne write und
@@ -239,6 +248,14 @@ func (d *WriteDenial) Error() string {
 // Regel. SYSTEM:-Namen kommen hier nicht an; sie lehnt ident.CheckDocName ab.
 // Der Rückgabewert ist nil, wenn das Schreiben erlaubt ist, sonst der Grund.
 func (r Rights) MayWrite(name string, own bool) *WriteDenial {
+	if IsGenerated(name) {
+		return &WriteDenial{Kind: DenyGenerated}
+	}
+	return r.mayWrite(name, own)
+}
+
+// mayWrite ist MayWrite ohne die Sperre der erzeugten Dateien.
+func (r Rights) mayWrite(name string, own bool) *WriteDenial {
 	vendor, reserved := VendorOf(name)
 	_, inDir := r.DirScopeOf(name)
 	switch {
@@ -263,10 +280,28 @@ func (r Rights) MayWrite(name string, own bool) *WriteDenial {
 	return &WriteDenial{Kind: DenySupersede}
 }
 
+// MayTakeOver ist das Recht an einem Dokument des Systems unter docs/
+// (IsSystemDoc): eine Mahnung ersetzen oder löschen, oder eine erzeugte
+// Datei oder Mahnung in einem Verzeichnisvorgang mitnehmen — delete mit
+// recursive, rename eines Verzeichnisses (Task 033). Es gilt wie für ein
+// eigenes Dokument und ebenso wie für ein fremdes: write genügt, supersede
+// auch, unter einem Verzeichnis-Scope keines von beiden. Die Sperre der
+// erzeugten Dateien gilt hier nicht; als Einzelvorgang lehnt sie MayWrite
+// ab. Der Grund einer Ablehnung ist der für ein eigenes Dokument (write
+// fehlt).
+func (r Rights) MayTakeOver(name string) *WriteDenial {
+	d := r.mayWrite(name, true)
+	if d != nil && r.mayWrite(name, false) == nil {
+		return nil
+	}
+	return d
+}
+
 // Writable sagt für ein Dokument, ob der Account es nach MayWrite anlegen
 // oder als Eigenes ändern dürfte — was read am Node als writable meldet:
-// unter vendor/<name>/ der Scope, direkt in vendor/ falsch, unter einem
-// Verzeichnis-Scope wahr, sonst write.
+// unter vendor/<name>/ der Scope, direkt in vendor/ falsch, eine erzeugte
+// Datei unter docs/ falsch, unter einem Verzeichnis-Scope wahr, sonst write.
+// Eine Mahnung ist danach mit write schreibbar, wie der Hub sie behandelt.
 func (r Rights) Writable(name string) bool { return r.MayWrite(name, true) == nil }
 
 // WritableUnder sagt für ein Verzeichnis (leer: die Wurzel der Collection),

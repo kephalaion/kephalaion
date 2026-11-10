@@ -49,3 +49,46 @@ func TestDocsNames(t *testing.T) {
 		t.Error("InDocs")
 	}
 }
+
+// Erzeugte Dateien schreibt über einen Node niemand, auch nicht mit einem
+// Verzeichnis-Scope; eine Mahnung und die Dokumente des Systems in einem
+// Verzeichnisvorgang nimmt mit, wer write oder supersede hat.
+func TestMayWriteGenerated(t *testing.T) {
+	all := Rights{Write: true, Supersede: true, Dirs: []string{"docs"}}
+	for _, name := range []string{"docs/README.md", "docs/index.md", "docs/a/index.md"} {
+		for _, own := range []bool{true, false} {
+			d := all.MayWrite(name, own)
+			if d == nil || d.Kind != DenyGenerated || d.Error() == "" {
+				t.Errorf("MayWrite(%q, %v) = %v", name, own, d)
+			}
+		}
+		if all.Writable(name) {
+			t.Errorf("Writable(%q)", name)
+		}
+	}
+	if !all.WritableUnder("docs") || !all.Writable("docs/a/README.md") {
+		t.Error("unter docs/ sonst schreibbar")
+	}
+	for _, c := range []struct {
+		r    Rights
+		name string
+		ok   bool
+	}{
+		{Rights{Write: true}, "docs/a/README.md", true},
+		{Rights{Supersede: true}, "docs/a/README.md", true},
+		{Rights{Dirs: []string{"docs/a"}}, "docs/a/README.md", true},
+		{Rights{}, "docs/a/README.md", false},
+		{Rights{Write: true}, "docs/a/index.md", true},
+		{Rights{Supersede: true}, "docs/index.md", true},
+		{Rights{}, "docs/index.md", false},
+		{Rights{Dirs: []string{"docs2"}}, "docs/index.md", false},
+	} {
+		d := c.r.MayTakeOver(c.name)
+		if (d == nil) != c.ok {
+			t.Errorf("%+v MayTakeOver(%q) = %v", c.r, c.name, d)
+		}
+		if d != nil && d.Kind != DenyWrite {
+			t.Errorf("%+v MayTakeOver(%q): Grund %v", c.r, c.name, d)
+		}
+	}
+}

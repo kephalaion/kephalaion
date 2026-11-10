@@ -432,8 +432,9 @@ gehören ihm:
   `system` geschrieben hat (`updated_by`) — erkannt an Name und Urheber, nicht am Frontmatter
   (`contract.IsNotice`). Sie ist keine erzeugte Datei in diesem Sinn: `write` und `delete` darauf
   erlaubt `write`, ohne `supersede` (wer `supersede` hat, ebenso; unter einem Verzeichnis-Scope
-  keines von beiden). Nach `write` ist sie eine gewöhnliche `README.md` des Users; ein `create`
-  des Namens ist `name_taken`, wie bei jedem lebenden Dokument. Eine gelöschte Mahnung legt der
+  keines von beiden). Wer sie mit `write` ersetzt, übernimmt sie: `created_by` und `updated_by`
+  werden sein User, danach ist sie eine gewöhnliche `README.md` von ihm (beim Admin mit `hub doc
+  put` ebenso). Ein `create` des Namens ist `name_taken`, wie bei jedem lebenden Dokument. Eine gelöschte Mahnung legt der
   nächste Neubau wieder an, wenn die `README.md` weiter fehlt. Ein `rename` einer einzelnen
   Mahnung ist `generated_file`: Unter einem neuen Namen trüge sie den User in `updated_by` und
   wäre nicht mehr als Mahnung zu erkennen.

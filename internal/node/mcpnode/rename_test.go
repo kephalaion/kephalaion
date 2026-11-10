@@ -196,26 +196,36 @@ func TestRenameRejected(t *testing.T) {
 // ein Verzeichnis nehmen kann, Zeilen nur darunter.
 func TestAnswerShape(t *testing.T) {
 	row := func(coll, name string) contract.Row { return contract.Row{ID: name, Collection: coll, Name: name} }
+	gone := func(name string) contract.Row { r := row("w", name); r.Deleted = true; return r }
 	cases := []struct {
-		what  string
-		dirOK bool
-		rows  []contract.Row
-		doc   string
-		dir   bool
-		err   string
+		what    string
+		dirOK   bool
+		removed string
+		rows    []contract.Row
+		doc     string
+		dir     bool
+		err     string
 	}{
-		{"Dokument", false, []contract.Row{row("w", "a")}, "a", false, ""},
-		{"Dokument, dir erlaubt", true, []contract.Row{row("w", "a")}, "a", false, ""},
-		{"Verzeichnis", true, []contract.Row{row("w", "a/x"), row("w", "a/y/z")}, "", true, ""},
-		{"Verzeichnis nicht erlaubt", false, []contract.Row{row("w", "a/x")}, "", false, "erwartet a"},
-		{"leer", true, nil, "", false, "0 Zeilen"},
-		{"zweimal", false, []contract.Row{row("w", "a"), row("w", "a")}, "", false, "2 Zeilen"},
-		{"Dokument und darunter", true, []contract.Row{row("w", "a"), row("w", "a/x")}, "a", false, "1 darunter"},
-		{"fremder Name", true, []contract.Row{row("w", "a/x"), row("w", "ab")}, "", false, "erwartet a"},
-		{"fremde Collection", true, []contract.Row{row("v", "a")}, "", false, "Collection"},
+		// rename eines Verzeichnisses unter docs/: Löschmarken der erzeugten
+		// Dateien und Mahnungen unter dem alten Namen gehören dazu (Task 033).
+		{"rename mit Löschmarken", true, "alt", []contract.Row{row("w", "a/x"), gone("alt/index.md")}, "", true, ""},
+		{"rename nur Löschmarken", true, "alt", []contract.Row{gone("alt/index.md"), gone("alt/README.md")}, "", true, ""},
+		{"rename lebend unter altem Namen", true, "alt", []contract.Row{row("w", "a/x"), row("w", "alt/y")}, "", false,
+			"erwartet a"},
+		{"Löschmarke unter altem Namen ohne rename", true, "", []contract.Row{row("w", "a/x"), gone("alt/index.md")}, "",
+			false, "erwartet a"},
+		{"Dokument", false, "", []contract.Row{row("w", "a")}, "a", false, ""},
+		{"Dokument, dir erlaubt", true, "", []contract.Row{row("w", "a")}, "a", false, ""},
+		{"Verzeichnis", true, "", []contract.Row{row("w", "a/x"), row("w", "a/y/z")}, "", true, ""},
+		{"Verzeichnis nicht erlaubt", false, "", []contract.Row{row("w", "a/x")}, "", false, "erwartet a"},
+		{"leer", true, "", nil, "", false, "0 Zeilen"},
+		{"zweimal", false, "", []contract.Row{row("w", "a"), row("w", "a")}, "", false, "2 Zeilen"},
+		{"Dokument und darunter", true, "", []contract.Row{row("w", "a"), row("w", "a/x")}, "a", false, "1 darunter"},
+		{"fremder Name", true, "", []contract.Row{row("w", "a/x"), row("w", "ab")}, "", false, "erwartet a"},
+		{"fremde Collection", true, "", []contract.Row{row("v", "a")}, "", false, "Collection"},
 	}
 	for _, c := range cases {
-		doc, dir, err := answerShape("w", "a", c.dirOK, c.rows)
+		doc, dir, err := answerShape("w", "a", c.dirOK, c.removed, c.rows)
 		gotDoc := ""
 		if doc != nil {
 			gotDoc = doc.Name
