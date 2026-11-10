@@ -541,16 +541,9 @@ ist Nacharbeit des Nutzers)
   Stelle, an der er entsteht (`hubViewer` in `serve.go`), bei (b) dazu den Listener — nicht
   Eingänge und Seite (`konzept.md`, „Die Weboberfläche am Hub“; `installation.md`, Option
   Weboberfläche, „Grenze lokaler Prozesse“).
-- **Text des nächsten Release: Hinweis zum Upgrade** (vorgemerkt in Task 029): `release.yml`
-  schreibt nur den festen Text und die erzeugten Notizen und veröffentlicht sofort. Nach dem
-  nächsten Release kommt mit `gh release edit` dieser Hinweis dazu — **nur nach Rückfrage beim
-  Nutzer**, denn das Release ist öffentlich: „Weboberfläche hinter einem Proxy: Diese Fassung
-  kennt Admins der Weboberfläche (Rolle `kephalaion.admin` im Header `X-User-Roles`). Vor dem
-  Upgrade muss der Proxy auch einen `X-User-Roles` des Browsers entfernen; die Caddy-Vorlage
-  aus der Zeit davor tut das nicht (`request_header -X-User*` und `-X_User*` statt der vier
-  einzelnen Zeilen, `copy_headers X-User X-User-Email X-User-Roles`). Sonst macht sich jeder,
-  der die Seite sehen darf, zum Admin. Anpassen und prüfen: `docs/installation.md`, „Upgrade
-  von der alten Vorlage“.“
+- **Hinweis zum Upgrade (Task 029):** am 2026-11-10 mit `gh release edit` in die Notizen von
+  v0.4.0 aufgenommen („Upgrade von einer Fassung vor v0.3.0“); in v0.3.0–v0.3.2 fehlt er.
+  `release.yml` schreibt ihn nicht von selbst.
 
 - **Nach Task 016 und 021:** Die Sperre von `push` bleibt (entschieden am 2026-09-30); weitere
   Ziele nur als einzeln freigegebene Verzeichnisse — gebaut in Task 021 (`konzept.md`,
