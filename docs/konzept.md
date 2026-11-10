@@ -1104,7 +1104,33 @@ Daraus folgen drei Dinge:
 neben ihm läuft und eine Replica hält wie jeder andere. Sonst gäbe es die Zerlegung in
 Abschnitte zweimal. Der Hub sucht nicht.
 
-### Deutsche Texte (vorgemerkt am 2026-09-30)
+**Indiziert wird nur `docs/`** — entschieden am 2026-10-16, ergänzt am 2026-11-09 und
+2026-11-10, Task 033; ausführlich in [`indizierung.md`](indizierung.md). Gegenstand ist das
+Verzeichnis `docs/` auf oberster Ebene einer Collection, nicht der übrige Inhalt. Eine KI hat
+drei Fragen und für jede einen Weg: „Was gibt es?“ über eine `index.md` je Verzeichnis nach
+Google OKF v0.2 (`read`), „Wo steht X?“ über `search` (FTS5 in der Replica, Treffer je
+Abschnitt), „Was ist neu?“ über `changes`. Das Wichtigste:
+
+- **Zwei Arten Index.** Die Navigation — `index.md` je Verzeichnis und `docs/README.md` als
+  Anleitung — schreibt der Hub beim Neubau (`rebuild_docs`, als `system`); den Volltext baut
+  jeder Node selbst, in derselben Transaktion, in der er Zeilen in seine Replica schreibt.
+- **Erzeugte Dateien** (`docs/README.md`, jede `index.md` unter `docs/`) schreibt nur das
+  System, auch der Admin nicht; Code `generated_file`. Fehlt einem Verzeichnis die `README.md`,
+  legt der Neubau eine **Mahnung** an, die jeder mit `write` ersetzt (2026-11-10).
+- **Feste Verzeichnisse** sind nur `docs/manual/` und `docs/generated/`; alles darunter gehört
+  den Nutzern.
+- **Kein automatischer Neubau** (zurückgestellt): Den Neubau stößt ein Account an — k-playbook,
+  nachdem es veröffentlicht hat —, über MCP für jeden Account mit Lesezugriff, am Hub als
+  Admin über die CLI (2026-11-10).
+- **Sprache:** Inhalte in `docs/` sind englisch, gesucht wird mit `porter unicode61`
+  (2026-11-09; siehe unten).
+
+### Deutsche Texte (vorgemerkt am 2026-09-30, entschieden am 2026-11-09)
+
+**Entschieden am 2026-11-09:** Inhalte in `docs/` sind englisch; übersetzt wird bei k-playbook,
+nicht in Kephalaion. Die Suche bleibt bei `porter unicode61`, ohne Sprache je Collection und
+ohne eigenen Stemmer ([`indizierung.md`](indizierung.md), „Entschieden am 2026-11-09“). Was
+folgt, ist die Abwägung von damals; die Wege sind nicht gegangen.
 
 FTS5 bringt nur einen englischen Stemmer mit (`porter`); `unicode61` zerlegt in Wörter und
 kann Diakritika entfernen (`remove_diacritics`), sonst nichts. Die meisten Dokumente sind
@@ -2307,8 +2333,8 @@ darauf ab.
 
 | Werkzeug | Zweck | Anmerkungen |
 |---|---|---|
-| `search` | Volltextsuche | Collections wählbar; getrennte Trefferlisten je Collection, Rang ab 1, kein Punktwert |
-| `read` | ein Dokument lesen | per Name oder `id`; wahlweise ein Abschnitt; mit `content: false` nur die Angaben dazu, siehe unten. Gebaut in Task 009, ohne Abschnitte |
+| `search` | Volltextsuche über `docs/` | Collections wählbar; getrennte Trefferlisten je Collection, Rang ab 1, kein Punktwert; Treffer je Abschnitt. Entschieden in Task 033, siehe unten |
+| `read` | ein Dokument lesen | per Name oder `id`; wahlweise ein Abschnitt (`section`, Task 033); mit `content: false` nur die Angaben dazu, siehe unten. Gebaut in Task 009 |
 | `list` | Inhalt eines Verzeichnisses | siehe unten. Gebaut in Task 009 |
 | `changes` | was sich seit einer Revision oder einem Zeitpunkt geändert hat | siehe unten; neu am 2026-09-26. Gebaut in Task 009 |
 | `whoami` | Version, Hubs, Anmeldung, eigener Account, lesbare Collections, Stand des Abgleichs | siehe unten; kein eigenes `status`. Gebaut wie unten (Task 008) |
@@ -2458,6 +2484,24 @@ bekommt, statt jede Datei zu lesen (`list` mit `recursive`, `mask: "SKILL.md"` u
   enden — siehe „Allgemein — schreiben“. Wer schreibt, erfährt es so sofort, nicht erst beim
   nächsten `list`.
 
+**`search` und `read` mit Abschnitt — entschieden am 2026-11-10 (Task 033).** Für „Wo steht
+X?“ ([`indizierung.md`](indizierung.md), „Suche über MCP“):
+
+- **`search`:** Eingabe `query` (einfache Wörter auf Englisch, Fragen gehen; keine
+  FTS5-Syntax — der Node maskiert Sonderzeichen und verbindet die Wörter mit `OR`, `bm25()`
+  ordnet), wahlweise `collection` (wie bei `list`; ohne alle lesbaren), `path` (Verzeichnis unter
+  `docs/`) und `limit` (Standard 10, höchstens 50). Antwort je Collection eine Liste `hits`, Rang
+  ab 1, kein Punktwert; je Treffer `rank`, `name`, `title`, `description`, `section` (`heading`,
+  `headings` als Pfad der Überschriften, `anchor`) und `excerpt`. Von einem Dokument erscheinen
+  höchstens drei Abschnitte. Ohne Treffer ein Hinweis auf `docs/index.md`. Gesucht wird nur in
+  `docs/`; keine Treffer sind `index.md`, `docs/README.md` und Mahnungen. Lesbarkeit wie `list`.
+- **`read` mit `section`:** der Anker eines Treffers; `read` liefert dann nur diesen Abschnitt,
+  aus derselben Zerlegung wie die Suche. Einen Anker, den es nicht gibt, beantwortet es mit
+  dem Code **`section_not_found`** neben der Meldung (`isError`, `structuredContent.error`) —
+  ein Fehler der Anfrage am Node, kein Vorgang und kein Code des Vertrags. Bis dahin lieferten
+  die lesenden Werkzeuge nur eine Meldung; `section_not_found` ist der erste Code eines
+  lesenden Werkzeugs.
+
 **`whoami` — festgelegt am 2026-09-26.** Ein Werkzeug für „wer bin ich“ und „wie steht der
 Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:
 
@@ -2544,6 +2588,7 @@ Erweiterung ist ein Client wie jeder andere ([`vscode.md`](vscode.md)).
 | `delete` | löschen | Löschmarke; Eigenes mit `write`, Fremdes mit `supersede`; ein Verzeichnis mit `recursive`. Gebaut in Task 014 |
 | `replace_directory` | ein ganzes Verzeichnis ersetzen | verworfen am 2026-09-28: `kephalaion node dir push` aus Einzelvorgängen (Task 016), siehe „Einen Ordner abgleichen“ |
 | `fetch_release` | den Hub das neueste Release nach `defaults/` holen lassen | nur Collections mit Quelle; jeder am Hub angemeldete Account; liest keine URLs (der Name ist deshalb nicht `fetch`); Vorgang `fetch` des Vertrags, nie wiederholt, bei unklarem Ausgang erneut anstoßbar. Gebaut in Task 031, siehe „Öffentliche Collections und Collections mit Quelle“ |
+| `rebuild_docs` | den Hub `docs/` einer Collection neu bauen lassen | `docs/README.md`, feste Verzeichnisse, Mahnungen, jede `index.md`; nur wo `docs/` existiert; jeder Account mit Lesezugriff, nicht in einer Collection mit Quelle; Vorgang `rebuild_docs` des Vertrags, nie wiederholt, bei unklarem Ausgang erneut anstoßbar. Task 033, siehe „Indizierung“ |
 
 **Festgelegt am 2026-09-26 für `create`, `write`, `delete` und `rename`, umgesetzt in Task 014
 (2026-09-27)** — `rename` ist dafür aus Stufe 3 in Stufe 2 vorgezogen, weil Umbenennen und

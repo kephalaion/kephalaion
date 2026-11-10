@@ -1,14 +1,16 @@
 ---
 title: Kephalaion — Indizierung von docs/
-description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert das Verzeichnis docs/ einer Collection für den Zugriff der KI über MCP, Volltext mit FTS5 im Node und Navigation über eine index.md je Verzeichnis nach Google OKF v0.2, dazu eine erzeugte README.md als Anleitung; was entschieden ist, was OKF festlegt und offen lässt, offene Fragen.
+description: Entwurf vom 2026-10-16, entschieden bis 2026-11-10 (Task 033) — Kephalaion indiziert das Verzeichnis docs/ einer Collection für den Zugriff der KI über MCP, Volltext mit FTS5 im Node und Navigation über eine index.md je Verzeichnis nach Google OKF v0.2, dazu eine erzeugte README.md als Anleitung, Mahnungen und Schreibschutz; was entschieden ist, was OKF festlegt und offen lässt, was zurückgestellt ist.
 ---
 
 # Indizierung von `docs/`
 
-**Stand: entschieden bis auf Einzelheiten, Task 033 angelegt** (2026-10-16,
+**Stand: entschieden, Task 033 in Arbeit** (2026-10-16,
 `keph:/user/kamran/tasks/033-docs-index-und-suche.md`), nachgezogen am 2026-11-09 nach der
-Übergabe aus k-playbook (siehe „Entschieden am 2026-11-09“); gebaut ist nichts. Was das Konzept betrifft, wandert mit seinem Datum nach
-[`konzept.md`](konzept.md) („Indizierung“). Begriffe nach [`begriffe.md`](begriffe.md).
+Übergabe aus k-playbook (siehe „Entschieden am 2026-11-09“) und am 2026-11-10 bei der Prüfung des
+Tasks (siehe „Entschieden am 2026-11-10“). Was das Konzept betrifft, steht mit seinem Datum in
+[`konzept.md`](konzept.md) („Indizierung“), der Vorgang `rebuild_docs` und der Code
+`generated_file` in [`vertrag.md`](vertrag.md). Begriffe nach [`begriffe.md`](begriffe.md).
 
 ## Das Wichtigste
 
@@ -20,25 +22,27 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
   (`index.md` je Verzeichnis).
 - **An Google OKF v0.2 halten, wo es sinnvoll ist.** Was wir übernehmen und wo wir abweichen,
   ist zu besprechen.
-- **`index.md` je Verzeichnis ist der Index**, erzeugt vom System (Autor `system`), schreibgeschützt,
+- **`index.md` je Verzeichnis ist der Index**, erzeugt vom System (Urheber `system`), schreibgeschützt,
   bei jedem Neubau einfach überschrieben.
 - **`docs/README.md` ist die Anleitung**, ebenfalls erzeugt und schreibgeschützt: wie `docs/`
   funktioniert, welche Indizes es gibt, dass `index.md` der Index ist und dass hier nichts von
   Hand geschrieben wird.
-- **Erzeugte Dateien schreibt niemand außer dem System**, auch der Admin nicht.
+- **Erzeugte Dateien schreibt niemand außer dem System**, auch der Admin nicht: `docs/README.md`
+  und jede `index.md` unter `docs/`. Eine Ablehnung trägt den Code `generated_file`.
 - **In jedem Unterverzeichnis eine beschreibbare `README.md`** mit der Beschreibung des
-  Verzeichnisses; k-playbook schreibt sie aus Vorlagen. Fehlt sie, legt das System eine an, die
-  das Fehlen anmahnt.
+  Verzeichnisses; k-playbook schreibt sie aus Vorlagen. Fehlt sie, legt das System eine
+  **Mahnung** an, die das Fehlen anmahnt; jeder mit `write` ersetzt sie mit `write`.
 - **Inhalte in `docs/` sind englisch**, gesucht wird mit `porter`. Übersetzen ist Sache von
   k-playbook, nicht von Kephalaion.
 - **Ein Kopf für alle Dokumente** (`title`, `description`, `generated`, `hints`, `questions`,
   `sources`, `verified`); `questions` zählen in der Suche hoch. `type`, `tags`, `status` entfallen.
 - **Eine feste Struktur unter `docs/`** legt Kephalaion fest und legt fehlende Verzeichnisse
-  selbst an; die Liste ist noch zu klären.
+  selbst an: vorerst `docs/manual/` und `docs/generated/`, aus einer Liste im Binary.
 - **Finden über `search`**, Treffer je Abschnitt mit Name, Anker, Titel, Beschreibung und Auszug —
   das ist das zentrale Ergebnis, siehe „Suche über MCP“.
-- **Ein Befehl stößt den Neubau an**, in der CLI und als MCP-Werkzeug; vorerst darf das jeder.
-  Der automatische Neubau bei jeder Änderung ist zurückgestellt.
+- **Ein Befehl stößt den Neubau an:** `rebuild_docs`, als MCP-Werkzeug für jeden Account mit
+  Lesezugriff, als CLI am Hub für den Admin (`kephalaion hub collection rebuild-docs`); nur wo
+  `docs/` schon existiert. Der automatische Neubau bei jeder Änderung ist zurückgestellt.
 - **`/k-docs-index` entfällt** in k-playbook samt Stichwort-Index A–Z und „Frage → Datei“.
 
 ## Entschieden am 2026-10-16
@@ -59,7 +63,8 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
 - **Neubau per Befehl**, CLI und MCP, vorerst für jeden Account. Wann das System von selbst neu
   baut, ist zurückgestellt; bis dahin genügt der Befehl. Er nimmt die Collection als Argument
   und gilt **nur für `docs/`** — ein Neubau von `docs/`; andere Neubauten kommen später als
-  eigene.
+  eigene. *Am 2026-11-10 präzisiert: MCP für jeden Account mit Lesezugriff,
+  CLI nur am Hub für den Admin, nur wo `docs/` existiert — siehe unten.*
 - **`search` kommt mit**, nicht in einem eigenen Schritt danach. Aufbau der `index.md` und Namen
   der Felder von `search` werden vorher festgelegt.
 - **`/k-docs-index` fällt weg.** k-playbook schreibt keinen Index mehr in die Collection.
@@ -95,7 +100,8 @@ Nutzer am selben Tag.
   wird später übersetzt (Nutzer, 2026-11-10); das Spiegeln ist bei k-playbook zurückgestellt.
 - **Ein Kopf für alle Dokumente unter `docs/`:** `title` (Pflicht), `description` (Pflicht, ein
   Satz), `generated: {by, at, stats?}` (nur erzeugte), `hints`, `questions`,
-  `sources: [{resource, item?, version?}]`, `verified`; unter `docs/sources/` zusätzlich `mirror`.
+  `sources: [{resource, item?, version?}]`, `verified`; unter `docs/generated/sources/` zusätzlich
+  `mirror`.
   `type`, `tags` und `status` entfallen, damit auch der Filter `type`/`tags` in `search`.
 - **Suchfelder und Gewichte:** Titel, Überschriften und `questions` hoch; `description` und
   `hints` mittel; der Text normal. `questions` sind Fragen, die genau dieses Dokument beantwortet;
@@ -112,6 +118,40 @@ Nutzer am selben Tag.
   bei „Was ist neu?“ gleich Titel, Beschreibung und Fragen der geänderten Dokumente.
 - **FTS5 ist im Treiber:** `modernc.org/sqlite` mit SQLite 3.53.4; `porter unicode61`,
   `unicode61` und `trigram` getestet.
+
+## Entschieden am 2026-11-10
+
+Bei der Prüfung von Task 033 (`/k-task-refine`) mit dem Nutzer; im Task Entscheidungen 16–22.
+
+- **`read` mit Abschnitt (16):** `read` bekommt `section` (Anker) in Task 033, aus derselben
+  Zerlegung wie die Suche. Ein Anker, den es nicht gibt: Fehler `section_not_found` — ein Fehler
+  der Anfrage, als Code neben der Meldung, kein interner Fehler.
+- **Verzeichnisvorgänge (17):** `delete` mit `recursive` nimmt erzeugte Dateien mit; die Sperre
+  gilt für Einzelvorgänge. Für jedes `rename` eines Verzeichnisses gilt dieselbe Regel: Erzeugte
+  Dateien und Mahnungen darunter wandern nie unter einen neuen Namen mit — der Hub entfernt sie
+  im selben Vorgang, ob das Verzeichnis aus `docs/` hinaus oder innerhalb von `docs/` umzieht
+  (`docs/a/` → `docs/b/`), und der nächste Neubau stellt her, was unter `docs/` fehlt; bis dahin
+  hat das verschobene Verzeichnis keine `index.md`. Grund: `rename` setzt `updated_by` auf den
+  User, eine mitgenommene Mahnung wäre nicht mehr zu erkennen. Abgelehnt, mit klarer Meldung,
+  wird nur ein `rename` von außerhalb nach `docs/` hinein, das eine `index.md` mitbringt oder eine
+  `README.md`, die dabei zu `docs/README.md` würde.
+- **Mahnung (18):** eine `README.md` unterhalb von `docs/` (nicht `docs/README.md`), die zuletzt
+  `system` geschrieben hat. Jeder mit `write` darf sie ersetzen. Erkannt wird sie an Name und
+  Urheber `system`, nicht am Frontmatter; das Frontmatter `generated` trägt sie trotzdem, für
+  Leser. „Erzeugte Dateien“ im gesperrten Sinn sind nur `docs/README.md` und jede `index.md`
+  unter `docs/`; die Mahnung wird eigens benannt.
+- **Neubau (19)** nur, wo `docs/` auf oberster Ebene schon existiert; sonst „nichts zu tun“.
+  Anstoßen darf ihn jeder Account mit Lesezugriff.
+- **Namen (20):** Vorgang und MCP-Werkzeug `rebuild_docs`; CLI nur am Hub, für den Admin:
+  `kephalaion hub collection rebuild-docs <collection>` (neben `hub collection fetch`). Accounts
+  stoßen ihn über MCP an, wie `fetch_release`.
+- **Felder von `search` (21):** Eingabe `query`, `collection`, `path`, `limit` (Standard 10,
+  höchstens 50); Antwort je Collection eine Liste `hits` mit `rank`, `name`, `title`,
+  `description`, `section` (`heading`, `headings` als Pfad, `anchor`), `excerpt`; ohne Treffer ein
+  Hinweis auf `docs/index.md`. Von einem Dokument erscheinen in einer Antwort höchstens drei
+  Abschnitte; die Felder des Dokuments (Titel, `description`, `questions`, `hints`) stehen an
+  jedem Abschnitt.
+- **Anfrage aus einer Frage (22):** Der Node verbindet die Wörter mit `OR`, `bm25()` ordnet.
 
 ## Struktur unter `docs/`
 
@@ -130,12 +170,14 @@ docs/
 ```
 
 Zurückgestellt aus dem Layout-Entwurf von k-playbook vom 2026-10-09: `extracted/`, `findings/`,
-`pitfalls/`. `queue/` und `user/<name>/` sind keine Doku und bleiben außerhalb. Zu klären:
+`pitfalls/`. `queue/` und `user/<name>/` sind keine Doku und bleiben außerhalb.
 
-- wo die Liste steht — naheliegend wie die Liste der Quellen als YAML im Binary
-  (`internal/hub/source/sources.yaml`), mit Beschreibung je Verzeichnis, aus der die Mahnung und
-  `docs/README.md` ihren Text nehmen;
-- was Kephalaion später selbst ergänzt und wo es liegt.
+**Die Liste** steht wie die Liste der Quellen als YAML im Binary
+(`internal/hub/docsindex/layout.yaml`, `go:embed`; Task 033, Etappe 3): je festem Verzeichnis
+`title` und `description` (englisch). Die Mahnung eines festen Verzeichnisses trägt beides, und
+der Index zeigt so auch vor der ersten `README.md` eine Beschreibung. Die festen Verzeichnisse
+bleiben, auch wenn nichts darin liegt; legt jemand eine `README.md` hinein, gilt deren
+Beschreibung. Was Kephalaion später selbst ergänzt, kommt in dieselbe Liste.
 
 ## Aufbau der `index.md` (entschieden am 2026-10-16)
 
@@ -165,8 +207,12 @@ So knapp wie möglich und ausreichend genau. Beispiel `docs/generated/index.md`:
 - **Reihenfolge nach Name** in jedem Abschnitt — stabil, nummerierte Namen bleiben in ihrer Folge.
 - **Titel:** Frontmatter `title`, sonst die erste `#`-Überschrift, sonst der Dateiname. Bei einem
   Verzeichnis aus dem Frontmatter seiner `README.md`, sonst der Name des Verzeichnisses.
-- **Beschreibung:** Frontmatter `description`; fehlt sie oder liegt beim Verzeichnis noch die
-  Mahnung, steht `*no description*`. Kein Ersatz aus dem ersten Satz.
+- **Beschreibung:** Frontmatter `description`, bei einem Verzeichnis die seiner `README.md` —
+  auch einer Mahnung: Die eines festen Verzeichnisses trägt die Beschreibung aus der Liste, jede
+  andere keine. Fehlt sie, steht `*no description*`. Kein Ersatz aus dem ersten Satz.
+- **Welche Verzeichnisse:** Ein Verzeichnis zählt nur über Dokumente, die nicht erzeugt sind —
+  keine `index.md`, keine Mahnung; die festen Verzeichnisse zählen immer. Ein Verzeichnis, das
+  nur noch erzeugte Dateien und Mahnungen trägt, verliert sie beim nächsten Neubau.
 - **Keine Einträge** für `index.md` und `README.md` des Verzeichnisses selbst; die Beschreibung des
   Verzeichnisses steht im Eintrag darüber, die README findet `search`.
 - **Andere Dateien als `.md`** erscheinen unter `Documents` mit dem Dateinamen, ohne Beschreibung.
@@ -201,8 +247,9 @@ auf Überschriften, gezielt Zeilen lesen — über MCP: `index.md`, `search`, `r
 
 ### Wie die Anfrage aussieht
 
-- **Einfache englische Wörter**, keine FTS5-Syntax; Fragen gehen. Ein Wort, das nicht vorkommt
-  (etwa „how“, „the“), lässt die Anfrage nicht scheitern.
+- **Einfache englische Wörter**, keine FTS5-Syntax; Fragen gehen. Der Node maskiert die Wörter
+  und verbindet sie mit `OR`; `bm25()` ordnet (2026-11-10). Ein Wort, das nicht vorkommt (etwa
+  „how“, „the“), lässt die Anfrage nicht scheitern.
 - **Filter wahlweise:** `path` unter `docs/` und die Collection(s) wie bei den anderen
   Werkzeugen. Kein Filter `type`/`tags` (entfallen am 2026-11-09).
 - **Die Beschreibung des Werkzeugs** sagt selbst, wie man anfragt: einfache Wörter auf Englisch,
@@ -213,7 +260,9 @@ auf Überschriften, gezielt Zeilen lesen — über MCP: `index.md`, `search`, `r
   Treffer.
 
 Vorbild: `k_playbook_knowledge_search` liefert heute je Treffer `path`, `heading`, `excerpt`,
-`rank`, `anchor` (k-playbook, `docs/mcp.md`).
+`rank`, `anchor` (k-playbook, `docs/mcp.md`). Die Felder von `search` sind entschieden
+(„Entschieden am 2026-11-10“, 21): `rank`, `name`, `title`, `description`, `section` mit
+`heading`, `headings` und `anchor`, `excerpt`; höchstens drei Abschnitte je Dokument.
 
 ### Der Index: FTS5 im Node (entschieden am 2026-10-16)
 
@@ -338,8 +387,9 @@ Die Übergabe nannte zwei Punkte als Vorgabe, die so nicht in `SPEC.md` stehen: 
 
 OKF kennt keine `README.md`; für OKF wäre sie ein Concept und bräuchte `type`. Wir nehmen sie
 bewusst hinzu: `docs/README.md` als Anleitung, weil ein Mensch wie eine KI zuerst dort
-nachsieht, darunter je Verzeichnis als dessen Beschreibung. Ob sie `type` trägt (etwa
-`type: guide` oben, `type: directory` darunter), damit ein OKF-Leser nicht stolpert, ist offen.
+nachsieht, darunter je Verzeichnis als dessen Beschreibung. Einen `type` trägt sie nicht: Der
+Kopf vom 2026-11-09 kennt `type` nicht mehr (siehe „Abweichung: kein `type`“); die Frage, ob
+`README.md` für OKF-Leser einen trägt, ist damit erledigt.
 
 ## Abweichung: kein `type`
 
@@ -364,50 +414,41 @@ Zwei Sperren, an zwei Stellen:
 Für die erzeugten Dateien unter `docs/` heißt das: Die Sperre über den Node ist ein weiterer Fall
 in `MayWrite` (eine Funktion wie `VendorOf`, die `docs/README.md` und `docs/**/index.md`
 erkennt); für den Admin kommt eine Prüfung in `writeDocs` dazu, wie bei der Quelle. „So wie
-`vendor/`“ allein reichte nicht, weil der Admin dort schreiben darf. Offen: ein Import, der eine
-solche Datei enthält — ablehnen, übergehen oder als Wiederherstellung übernehmen.
+`vendor/`“ allein reichte nicht, weil der Admin dort schreiben darf. **Ein Import** (`hub
+import`), der eine solche Datei enthält, übergeht sie und nennt sie in seiner Ausgabe; der Neubau
+stellt sie her (entschieden in Task 033, Etappe 2). Ablehnen hätte jeden Import eines Verzeichnisses
+mit einer alten `index.md` scheitern lassen; übernehmen hätte die Sperre umgangen.
 
 ## Unterverzeichnisse und ihre `README.md`
 
 - **Beschreibung im Frontmatter:** `description` (ein Satz, wie OKF), dazu wahlweise `title`. Der
   Text darunter erklärt das Verzeichnis ausführlicher.
 - **Wer sie schreibt (2026-11-09):** k-playbook, aus Vorlagen (`defaults/docs/<pfad>/README.md`),
-  mit `title` und `description`, ohne `generated` — so unterscheidet sie sich von der Mahnung.
-  Die Mahnung bleibt für Verzeichnisse, in die niemand eine `README.md` schreibt.
+  mit `title` und `description`, ohne `generated`. Die Mahnung bleibt für Verzeichnisse, in die
+  niemand eine `README.md` schreibt.
 - **Volltext:** Eine von Hand geschriebene `README.md` ist eine gewöhnliche Beschreibung und kommt
   in den Volltextindex. Nicht hinein kommen `index.md`, `docs/README.md` und die Mahnung — sie
   verdrängten im Ranking die Dokumente, auf die sie zeigen (Erfahrung aus k-playbook).
-- **Die Mahnung** trägt OKF-gemäß `generated: {by: kephalaion, at: …}` im Frontmatter; daran
-  erkennen Index, Suche und Mensch, dass sie noch nicht ersetzt wurde. Wer sie ersetzt, nimmt das
-  Feld heraus.
-- **Urheber der Mahnung:** Legt sie das System an (`system`), ist sie für jeden Account fremd, und
-  sie zu ersetzen bräuchte `supersede`. Zu klären: ob Dokumente von `system` mit `write` wie
-  eigene gelten, oder nur die Mahnung.
+- **Die Mahnung** trägt OKF-gemäß `generated: {by: kephalaion, at: …}` im Frontmatter — für
+  Leser. **Erkannt** wird sie an Name und Urheber (2026-11-10): eine `README.md` unterhalb von
+  `docs/` (nicht `docs/README.md`), die zuletzt `system` geschrieben hat (`updated_by`). Das
+  Frontmatter ließe sich fälschen; den Urheber setzt allein der Hub. Index, Suche und Mensch
+  erkennen so, dass sie noch nicht ersetzt wurde.
+- **Ersetzen:** Jeder mit `write` ersetzt sie mit `write`, ohne `supersede` — obwohl sie `system`
+  gehört (2026-11-10); `create` scheitert am belegten Namen. Danach ist sie eine gewöhnliche
+  `README.md` des Users, gleich welches Frontmatter darin steht. Nur die Mahnung gilt so; andere
+  Dokumente von `system` (etwa `defaults/` einer Collection mit Quelle) bleiben fremd.
 
-## Offene Fragen
+## Zurückgestellt
 
-Bevor ein Task entsteht:
-
-- **Mahnung ersetzen:** Sie gehört `system`, also bräuchte ein Mensch `supersede`. Vorschlag: eine
-  Mahnung (erkennbar an `generated`) darf jeder mit `write` überschreiben.
-- **Neubau-Befehl:** Name und Vorgang im Vertrag ([`vertrag.md`](vertrag.md)); was er alles
-  tut — vorgeschlagen: fehlende Verzeichnisse und Mahnungen anlegen, `docs/README.md` aus der
-  Vorlage, jede `index.md`.
-- **Welche Collections:** jede mit `docs/` auf oberster Ebene, oder nur gekennzeichnete. Und ob
-  der Befehl `docs/` in einer Collection anlegt, die noch keines hat.
-- **`search` im Einzelnen:** Name der Felder, Standard und Höchstwert von `limit`, ob Treffer
-  eines Dokuments zusammengefasst werden; Gewichte erst nach Messung.
-
-Kleiner, kann im Task entschieden werden:
-
-- **Import erzeugter Dateien:** ablehnen, übergehen oder als Wiederherstellung übernehmen.
-- **`type` in `README.md`** für OKF-Leser.
-- **Struktur:** wo die Liste steht.
-
-Zurückgestellt:
+Die offenen Fragen sind entschieden (2026-11-09 und 2026-11-10, siehe oben; im Task 033 die
+Entscheidungen 1–22). Was bleibt, ist bewusst zurückgestellt:
 
 - **Automatischer Neubau:** wann und wer — im Schreibvorgang des Hubs, danach, oder nie von
-  selbst.
+  selbst. Bis dahin stößt k-playbook `rebuild_docs` an, nachdem es veröffentlicht hat.
 - **`log.md`:** Vorschlag, keine. „Was ist neu“ beantwortet `changes` genauer; eine `log.md` je
   Verzeichnis wäre eine gröbere Fassung davon und änderte sich bei jedem Schreibvorgang mit.
 - **Bleve, semantische Suche.** (Deutsch in der Suche entfällt: Die Inhalte sind englisch.)
+- **Größe einer `index.md`** (Todo #22): Kephalaion prüft sie vorerst nicht.
+- **Gewichte der Suchfelder** im Einzelnen: vorerst nach Entscheidung 12, nachzustellen nach
+  Messung.

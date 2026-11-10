@@ -16,6 +16,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/ident"
 )
 
@@ -24,9 +25,10 @@ import (
 const DefaultsDir = "defaults"
 
 // Author ist der Urheber der Dokumente, die fetch schreibt
-// (created_by/updated_by). Kein User kann so heißen: Die Namensregel
-// verbietet den Präfix system.
-const Author = "system"
+// (created_by/updated_by): contract.SystemAuthor, derselbe wie beim Neubau
+// von docs/. Kein User kann so heißen: Die Namensregel verbietet den Präfix
+// system.
+const Author = contract.SystemAuthor
 
 // MaxBytesLimit ist die höchste Obergrenze, die ein Eintrag der Liste nennen
 // darf: Der Hub hält Archiv und Inhalt im Speicher.

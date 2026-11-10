@@ -355,7 +355,7 @@ func TestCodes(t *testing.T) {
 		seen[c] = true
 	}
 	for _, c := range []Code{CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict, CodeStaleRevision,
-		CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable} {
+		CodeGeneratedFile, CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable} {
 		if !seen[c] {
 			t.Errorf("Code %s fehlt in Codes", c)
 		}

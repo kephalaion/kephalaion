@@ -362,6 +362,51 @@ type FetchResponse struct {
 	Deleted int `json:"deleted"`
 }
 
+// RebuildDocsRequest lässt den Hub docs/ einer Collection neu bauen
+// (Task 033): docs/README.md, die festen Verzeichnisse, Mahnungen und jede
+// index.md. Ein Schreibvorgang: nie wiederholt; idempotent, ein zweiter Lauf
+// antwortet RebuildCurrent.
+type RebuildDocsRequest struct {
+	// Version ist die Fassung des Nodes; über HTTP im Pfad.
+	Version int `json:"-"`
+	// Auth ist die Anmeldung des Nodes, des Trägers; über HTTP in Headern.
+	Auth NodeAuth `json:"-"`
+	// Account ist der Account, der den Neubau anstößt; ein Recht über read
+	// hinaus braucht er nicht. Geschrieben wird als SystemAuthor.
+	Account    AccountAuth `json:"account"`
+	Collection string      `json:"collection"`
+}
+
+// Die Werte von RebuildDocsResponse.Status.
+const (
+	// RebuildRebuilt: docs/ ist neu gebaut; mindestens ein Dokument hat sich
+	// geändert.
+	RebuildRebuilt = "rebuilt"
+	// RebuildCurrent: docs/ war schon aktuell; nichts geändert.
+	RebuildCurrent = "current"
+	// RebuildNoDocs: die Collection hat kein docs/ auf oberster Ebene;
+	// nichts geändert, docs/ wird nicht angelegt.
+	RebuildNoDocs = "no_docs"
+)
+
+// RebuildDocsResponse ist die Antwort von rebuild_docs. Zeilen trägt sie
+// nicht; der Node gleicht danach ab.
+type RebuildDocsResponse struct {
+	HubID      string `json:"hub_id"`
+	Version    int    `json:"version"`
+	Collection string `json:"collection"`
+	// Status ist RebuildRebuilt, RebuildCurrent oder RebuildNoDocs.
+	Status string `json:"status"`
+	// Revision ist die Revision des Vorgangs; 0, wenn sich nichts geändert
+	// hat.
+	Revision int64 `json:"revision"`
+	// Created, Updated und Deleted zählen die angelegten, ersetzten und
+	// gelöschten Dokumente unter docs/.
+	Created int `json:"created"`
+	Updated int `json:"updated"`
+	Deleted int `json:"deleted"`
+}
+
 // Since ist ein Paar der Anfrage: alles aus Collection mit einer Revision
 // größer als Since.
 type Since struct {
@@ -486,6 +531,11 @@ const (
 	// CodeStaleRevision: das Dokument hat nicht die Revision, auf der der
 	// Vorgang beruht; die Meldung nennt die aktuelle.
 	CodeStaleRevision Code = "stale_revision"
+	// CodeGeneratedFile: eine erzeugte Datei unter docs/ (IsGenerated)
+	// schreibt nur das System — ein Einzelvorgang darauf, ein rename eines
+	// Verzeichnisses nach docs/ hinein, das eine mitbrächte, oder ein rename
+	// einer einzelnen Mahnung (Task 033). Die Meldung nennt das Dokument.
+	CodeGeneratedFile Code = "generated_file"
 
 	// Codes von fetch; alle endgültig, der Hub hat nichts geändert.
 
@@ -506,7 +556,7 @@ const (
 // Codes sind alle Fehlercodes des Vertrags.
 var Codes = []Code{CodeUnauthenticated, CodeInvalid, CodeUnsupportedVersion, CodeAccountUnauthenticated,
 	CodeNoSharedCollection, CodeNotReadable, CodeForbidden, CodeNotFound, CodeNameTaken, CodePathConflict,
-	CodeStaleRevision, CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable}
+	CodeStaleRevision, CodeGeneratedFile, CodeNoSource, CodeSourceMissing, CodeSourceInvalid, CodeSourceUnreachable}
 
 // Error ist ein Fehler des Vertrags: ein Code und eine Meldung. errors.Is
 // vergleicht nur den Code, so dass jeder *Error mit gleichem Code die
@@ -539,6 +589,7 @@ var (
 	ErrNameTaken     = &Error{Code: CodeNameTaken, Message: "Name vergeben"}
 	ErrPathConflict  = &Error{Code: CodePathConflict, Message: "Name wäre zugleich Datei und Verzeichnis"}
 	ErrStaleRevision = &Error{Code: CodeStaleRevision, Message: "Revision veraltet"}
+	ErrGeneratedFile = &Error{Code: CodeGeneratedFile, Message: "erzeugte Datei: schreibt nur das System"}
 
 	ErrNoSource          = &Error{Code: CodeNoSource, Message: "die Collection hat keine Quelle"}
 	ErrSourceMissing     = &Error{Code: CodeSourceMissing, Message: "an der Quelle nicht vorhanden"}

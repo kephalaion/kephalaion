@@ -545,9 +545,10 @@ Ausführlich: [`konzept.md`](konzept.md).
   Zeitpunkt merkt sich der Hub in `collections` (`fetched_tag`, `fetched_at`; nicht im Export),
   `hub collection show` zeigt sie. Nicht ausführbar übernommen: Modus-Bits und leere
   Verzeichnisse gehen nicht mit, Dokumente kennen beides nicht.
-- **system** (Urheber) — `created_by`/`updated_by` der Dokumente, die **fetch** schreibt. Kein
-  User kann so heißen (Namensregel: kein Präfix `system`). In `actions` steht trotzdem, wer
-  angestoßen hat: der Account bzw. `admin`, dazu der Node als Träger.
+- **system** (Urheber) — `created_by`/`updated_by` der Dokumente, die **fetch** und
+  **rebuild_docs** schreiben (`contract.SystemAuthor`). Kein User kann so heißen (Namensregel:
+  kein Präfix `system`). In `actions` steht trotzdem, wer angestoßen hat: der Account bzw.
+  `admin`, dazu der Node als Träger.
 - **dir push** / **dir pull** — `kephalaion node dir push|pull`: gleicht
   einen lokalen Ordner mit einem Verzeichnis einer Collection ab, als Client des Nodes über
   MCP, mit Account und Token des Aufrufers. Vergleich über den Inhalt, Einzelvorgänge,
@@ -584,19 +585,83 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **README.md** — das Dokument, das ein Verzeichnis oder eine Collection beschreibt:
   `<verzeichnis>/README.md` bzw. `README.md` auf oberster Ebene, genau so geschrieben. Sein
   Frontmatter liefern `list` und `read` als Frontmatter des Verzeichnisses bzw. der Collection;
-  sonst ist es ein gewöhnliches Dokument.
+  sonst ist es ein gewöhnliches Dokument. Ausnahmen unter **docs/**: `docs/README.md` ist eine
+  **generated file**, eine `README.md` darunter kann eine **notice** sein.
+- **docs/** — das Verzeichnis `docs/` auf oberster Ebene einer Collection, der zentrale Ort für
+  Doku ([`indizierung.md`](indizierung.md), Task 033). Nur hier indiziert Kephalaion: je
+  Verzeichnis eine **index.md**, `docs/README.md` als Anleitung und der Volltext für **search**.
+  Inhalte sind englisch. Vorgegeben sind nur die **fixed directories**; alles darunter gehört den
+  Nutzern. Ein `docs` tiefer in der Collection (`a/docs/`) ist ein gewöhnliches Verzeichnis.
+- **fixed directories** (feste Verzeichnisse) — `docs/manual/` (von Hand geschrieben) und
+  `docs/generated/` (von Werkzeugen erzeugt), nur diese erste Ebene. Sie stehen mit Titel und
+  Beschreibung in einer YAML-Datei im Binary (`internal/hub/docsindex/layout.yaml`, `go:embed`,
+  wie die **source list**); der **rebuild_docs** legt sie an — mit einer **notice**, solange
+  ihnen eine `README.md` fehlt — und sie bleiben, auch leer.
+- **index.md** — der Index eines Verzeichnisses unter **docs/**, nach Google OKF v0.2: eine Ebene,
+  `# Directories`, dann `# Documents`, je Eintrag `* [Titel](x.md) - Beschreibung` mit relativem
+  Link; nur `docs/index.md` trägt Frontmatter (`okf_version: "0.2"`). Jede `index.md` unter
+  `docs/` ist eine **generated file**, auch eine, die es vor Task 033 schon gab; außerhalb von
+  `docs/` ist der Name frei. Aufbau: [`indizierung.md`](indizierung.md), „Aufbau der `index.md`“.
+- **generated file** (erzeugte Datei) — `docs/README.md` und jede **index.md** unter **docs/**,
+  erkannt allein am Namen (`contract.IsGenerated`). Nur das System schreibt sie, beim
+  **rebuild_docs**: Über einen Node lehnt der Hub jeden Einzelvorgang darauf ab (`create`,
+  `write`, `delete`, `rename` mit altem oder neuem Namen; Code **generated_file**), ebenso für
+  den Admin (`hub doc put|rm`); `hub import` übergeht sie und nennt sie. `delete` mit
+  `recursive` und `rename` eines Verzeichnisses nehmen sie mit, siehe dort. `writable` ist für
+  sie nie wahr. Kein Treffer von **search**. Die **notice** ist keine erzeugte Datei in diesem
+  Sinn.
+- **notice** (Mahnung) — eine `README.md` unterhalb von **docs/** (nicht `docs/README.md`), die
+  zuletzt **system** geschrieben hat (`updated_by`); erkannt an Name und Urheber, nicht am
+  Frontmatter (`contract.IsNotice`). Der **rebuild_docs** legt sie an, wo einem Verzeichnis die
+  `README.md` fehlt; sie trägt `generated: {by: kephalaion, at: …}` für Leser, bei einem der
+  **fixed directories** auch `title` und `description` aus deren Liste. Jeder mit `write` ersetzt
+  sie mit `write` (nicht `create`: der Name ist belegt), ohne `supersede`; wer `supersede` hat,
+  ebenso. Danach ist sie eine gewöhnliche `README.md`. Mit demselben Recht lässt sie sich
+  löschen — der nächste Neubau legt sie wieder an, wenn die `README.md` weiter fehlt —, aber
+  nicht einzeln umbenennen (**generated_file**): Unter einem neuen Namen wäre sie nicht mehr zu
+  erkennen. Kein Treffer von **search**.
+- **rebuild_docs** (Neubau von docs/) — Vorgang des Vertrags und Werkzeug des Nodes (Task 033),
+  am Hub als Admin `kephalaion hub collection rebuild-docs <collection>`: baut **docs/** einer
+  Collection neu — `docs/README.md` aus der Vorlage im Binary, die **fixed directories**, eine
+  **notice**, wo eine `README.md` fehlt, und jede **index.md** —, in einer Transaktion unter
+  einer Revision, Urheber **system**; nur Geändertes wird geschrieben, eine verwaiste `index.md`
+  oder Mahnung gelöscht. Nur, wo `docs/` schon existiert; sonst nichts zu tun. Anstoßen darf
+  jeder Account, der die Collection lesen darf; eine Collection mit Quelle nicht. Kein
+  automatischer Neubau: Bis zum nächsten Aufruf veraltet `index.md`, und nach einem `rename`
+  eines Verzeichnisses fehlt sie dort.
+- **section** (Abschnitt) — Teil eines Dokuments unter **docs/** für **search** und `read` mit
+  `section`: eine Markdown-Überschrift samt Text bis zur nächsten Überschrift, außerhalb von
+  Codeblöcken; Text vor der ersten Überschrift ist ein eigener Abschnitt. Er trägt die
+  Überschrift, den Pfad der Überschriften darüber (`headings`) und einen **anchor**. Die
+  Zerlegung hat eine Fassung; ändert sie sich, baut der Node seinen Suchindex neu.
+- **anchor** (Anker) — Kennung eines **section** in seinem Dokument, eindeutig je Dokument,
+  gebildet aus der Überschrift wie bei GitHub (klein, Leerzeichen zu `-`, Satzzeichen weg, bei
+  Doppel `-1`, `-2`). Ein **hit** nennt ihn, `read` nimmt ihn als `section`; einen, den es nicht
+  gibt, beantwortet `read` mit `section_not_found`.
+- **hit** (Treffer) — ein Ergebnis von **search**: ein **section** mit `rank` (ab 1 je
+  Collection, kein Punktwert), `name`, `title` und `description` des Dokuments, `section`
+  (`heading`, `headings`, `anchor`) und `excerpt`. Von einem Dokument höchstens drei je Antwort.
+- **search** — Werkzeug des Nodes (Task 033): Volltextsuche über **docs/** der lesbaren
+  Collections, aus der Replica mit FTS5 (`porter unicode61`). Eingabe `query` (einfache Wörter auf
+  Englisch, Fragen gehen; der Node verbindet die Wörter mit `OR`), wahlweise `collection`, `path`
+  und `limit` (Standard 10, höchstens 50); Antwort je Collection eine Liste `hits`, ohne Treffer
+  ein Hinweis auf `docs/index.md`. Keine Treffer sind **index.md**, `docs/README.md` und
+  **notice**.
 - **list** — Werkzeug des Nodes: Inhalt eines Verzeichnisses aus der Replica, ohne Löschmarken
   und `SYSTEM:`-Namen; ohne `collection` die lesbaren Collections. Sortiert nach `name`,
   `created` oder `updated`, geblättert mit `limit` und `cursor`, gefiltert mit `mask`.
 - **read** — Werkzeug des Nodes: ein Dokument aus der Replica, per Name oder `id`; Art
   `document`, `directory` oder `none` (kein Fehler). Mit `content: false` nur die Angaben —
-  so beantwortet die Erweiterung für VS Code `stat`. Löschmarken sind `none`.
+  so beantwortet die Erweiterung für VS Code `stat`. Löschmarken sind `none`. Mit `section` (einem
+  **anchor**) nur dieser **section** eines Dokuments unter **docs/** (Task 033); einen Anker, den es
+  nicht gibt, beantwortet es mit dem Code `section_not_found` — ein Fehler der Anfrage am Node, kein
+  Code des Vertrags.
 - **writable** (schreibbar) — Angabe von `read`: Der Account dürfte das Dokument anlegen oder
   als Eigenes ändern, nach der Regel des Hubs (`contract.Rights.Writable`): `write` in der
   Collection, unter `vendor/<name>/` der Scope `vendor/<name>`, direkt in `vendor/` nie, unter
-  einem Verzeichnis-Scope immer; bei einem Verzeichnis, ob darunter etwas angelegt werden
-  dürfte. Ob er ein fremdes Dokument ändern darf (`supersede`), sagt sie nicht; das entscheidet
-  der Hub beim Schreiben.
+  einem Verzeichnis-Scope immer, eine **generated file** nie; bei einem Verzeichnis, ob darunter
+  etwas angelegt werden dürfte. Ob er ein fremdes Dokument ändern darf (`supersede`), sagt sie
+  nicht; das entscheidet der Hub beim Schreiben. Eine **notice** ist mit `write` schreibbar.
 - **changes** — Werkzeug des Nodes: je Dokument, das sich seit dem `cursor` (oder seit einem
   Zeitpunkt, `since`) geändert hat, einmal der aktuelle Stand, Löschmarken eingeschlossen, ohne
   alten Namen. Ohne beides nur der `cursor` für „ab jetzt“. Dazu **reset** — Hubs, deren
@@ -620,7 +685,13 @@ Ausführlich: [`konzept.md`](konzept.md).
   einem Verzeichnis-Scope keines von beiden — und die Vorbedingung. Die Zeilen der Antwort
   schreibt der Node in die Replica, bevor er antwortet, und stößt den Abgleich an. Nie
   von selbst wiederholt; mit **request_id** darf der Aufrufer wiederholen. `hub doc put|rm` und
-  `hub import` sind Vorgänge des Admins am Hub, keine davon.
+  `hub import` sind Vorgänge des Admins am Hub, keine davon. Unter **docs/** (Task 033): Eine
+  **generated file** lehnt jeder Einzelvorgang ab (**generated_file**); `delete` mit
+  `recursive` nimmt erzeugte Dateien und Mahnungen mit, und jedes `rename` eines Verzeichnisses
+  — aus `docs/` hinaus wie innerhalb — entfernt sie im selben Vorgang, statt sie unter den neuen
+  Namen mitzunehmen (der nächste **rebuild_docs** stellt her, was fehlt); ein `rename` von
+  außerhalb nach `docs/` hinein, das eine `index.md` mitbrächte oder eine `README.md`, die zu
+  `docs/README.md` würde, ist **generated_file**. Eine **notice** ersetzt jeder mit `write`.
 - **base_revision** — Die Revision, auf der ein `write`, `delete` oder `rename` beruht,
   wahlweise, mindestens 1. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`),
   geprüft vor dem Vergleich des Inhalts. Nur für Dokumente; bei einem Verzeichnis ist sie
@@ -654,7 +725,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   `internal` (ein Fehler des Nodes selbst, etwa `node.db` oder eine Replica nicht lesbar —
   nichts abgeschickt). Für **fetch** dazu `no_source` (Collection ohne Quelle),
   `source_missing` (an der Quelle nicht vorhanden), `source_invalid` (Archiv nicht übernehmbar)
-  und `source_unreachable` (Quelle nicht erreichbar), alle mit einem Status unter 500. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
+  und `source_unreachable` (Quelle nicht erreichbar), alle mit einem Status unter 500. Unter
+  **docs/** dazu **generated_file** (Task 033, 403): eine **generated file** schreibt nur das
+  System, oder eine **notice** soll einzeln umbenannt werden. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
   `unauthenticated` und `unsupported_version` reicht er durch. Die Werkzeuge melden einen
   Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
   `message`; Clients entscheiden nach dem Code, nicht nach der Meldung. `frontmatter_error` und

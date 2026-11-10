@@ -10,8 +10,9 @@ dasselbe; die Tests des Vertrags laufen gegen beide.
 Die Vorgänge: `whoami` (wer bin ich, gilt dieser Account und wem gehört er), `rotate` (Token
 eines Accounts ersetzen), `node_rotate` (das Token des Nodes selbst ersetzen), `sync` (Abgleich), die Schreibvorgänge `create`, `write`, `delete`
 und `rename` (ein Dokument anlegen, ersetzen, löschen, umbenennen — `delete` und `rename` auch
-ein Verzeichnis als Ganzes —, im Namen eines Accounts) und `fetch` (der Hub holt das neueste
-Release der Quelle einer Collection nach `defaults/`, angestoßen von einem Account). Begriffe:
+ein Verzeichnis als Ganzes —, im Namen eines Accounts), `fetch` (der Hub holt das neueste
+Release der Quelle einer Collection nach `defaults/`, angestoßen von einem Account) und
+`rebuild_docs` (der Hub baut `docs/` einer Collection neu, angestoßen von einem Account). Begriffe:
 [`begriffe.md`](begriffe.md); Hintergrund: [`konzept.md`](konzept.md), „Abgleich“,
 „Authentifizierung“ und „Transport, Token und Fehlschläge“.
 
@@ -49,6 +50,15 @@ Hub vor Task 034 kennt ihn nicht und antwortet wie auf jeden unbekannten Vorgang
 er nichts, das Token des Nodes gilt weiter. Ein Node meldet dann, dass erst der Hub zu
 aktualisieren ist (`node setup`, `node hub rotate`), und benutzt das nicht rotierte Token für
 keinen weiteren Schritt. Auch hier: erst den Hub aktualisieren, dann die Nodes.
+
+Mit Task 033 kamen, ebenfalls ohne neue Fassung, der Vorgang `rebuild_docs` (siehe dort) und der
+Code `generated_file` für die erzeugten Dateien unter `docs/` hinzu (siehe „Erzeugte Dateien unter
+`docs/`“). Ein Hub vor Task 033 kennt `rebuild_docs` nicht und antwortet wie auf jeden unbekannten
+Vorgang; er sperrt auch keine erzeugte Datei — dort schreibt dann jeder mit dem Recht, und der
+nächste Neubau an einem neuen Hub überschreibt es. Ein Node vor Task 033 kennt den Code
+`generated_file` nicht: Über HTTP hält er die Antwort für keine des Vertrags und meldet einen
+unklaren Ausgang (`outcome_unknown`; über `local` sind Node und Hub dasselbe Binary). Geschrieben
+hat der Hub nichts; der Abgleich zeigt es. Darum auch hier: erst den Hub, dann die Nodes.
 
 ## Anmeldung
 
@@ -391,7 +401,10 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
      unabhängig vom Urheber; sonst gilt dort dasselbe wie überall. Bei einem
      Verzeichnis gilt das je Dokument darunter, bei `rename` mit altem **und** neuem Namen; ein
      einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`, die Meldung
-     nennt den Grund („gehört admin, supersede fehlt“, „Scope vendor/k-playbook fehlt“).
+     nennt den Grund („gehört admin, supersede fehlt“, „Scope vendor/k-playbook fehlt“). Eine
+     erzeugte Datei unter `docs/` schreibt niemand, unabhängig von allen Rechten: `generated_file`;
+     eine Mahnung ersetzt jeder mit `write`, und Verzeichnisvorgänge behandeln beide eigens
+     (siehe „Erzeugte Dateien unter `docs/`“).
    - **Name und Vorbedingung** je Vorgang, siehe unten. `base_revision` weicht von der Revision
      des lebenden Dokuments ab: `stale_revision`, die Meldung nennt die aktuelle. Die Revision
      ist global und steigt nur, Gleichheit genügt. Ohne `base_revision` gilt keine
@@ -403,6 +416,47 @@ eine Zeile: `account` = der Account, `carrier` = der Node, `action` = `create`, 
 Verzeichnis je Dokument darunter eine, alle unter derselben Revision. Fehlversuche stehen nicht
 in `actions`, nur im Log des Hubs (ohne Token, ohne Inhalt); eine Wiederholung mit Schlüssel
 ebenso wenig — sie hat nichts geschrieben.
+
+### Erzeugte Dateien unter `docs/`
+
+Unter `docs/` auf oberster Ebene einer Collection schreibt der Hub selbst, beim Neubau
+(`rebuild_docs`, Urheber `system`, [`indizierung.md`](indizierung.md)). Zwei Arten von Dokumenten
+gehören ihm:
+
+- **Erzeugte Dateien** sind `docs/README.md` und jede `index.md` unter `docs/`
+  (`docs/index.md`, `docs/a/b/index.md`), erkannt allein am Namen (`contract.IsGenerated`). Jeder
+  **Einzelvorgang** darauf ist `generated_file`, gleich mit welchen Rechten: `create` und `write`
+  des Namens, `delete` des Dokuments, `rename` mit dem Namen als altem oder neuem Namen. Geprüft
+  wird das an der Stelle des Rechts (`contract.Rights.MayWrite`).
+- **Eine Mahnung** ist eine `README.md` unterhalb von `docs/` (nicht `docs/README.md`), die zuletzt
+  `system` geschrieben hat (`updated_by`) — erkannt an Name und Urheber, nicht am Frontmatter
+  (`contract.IsNotice`). Sie ist keine erzeugte Datei in diesem Sinn: `write` und `delete` darauf
+  erlaubt `write`, ohne `supersede` (wer `supersede` hat, ebenso; unter einem Verzeichnis-Scope
+  keines von beiden). Nach `write` ist sie eine gewöhnliche `README.md` des Users; ein `create`
+  des Namens ist `name_taken`, wie bei jedem lebenden Dokument. Eine gelöschte Mahnung legt der
+  nächste Neubau wieder an, wenn die `README.md` weiter fehlt. Ein `rename` einer einzelnen
+  Mahnung ist `generated_file`: Unter einem neuen Namen trüge sie den User in `updated_by` und
+  wäre nicht mehr als Mahnung zu erkennen.
+
+**Verzeichnisvorgänge** nehmen beide mit, statt an ihnen zu scheitern. Das Recht an einer
+erzeugten Datei oder Mahnung darunter ist dabei dasselbe wie das Recht, eine Mahnung zu ersetzen
+(`write` oder `supersede`, unter einem Verzeichnis-Scope keines von beiden;
+`contract.Rights.MayTakeOver`):
+
+- `delete` mit `recursive` löscht sie mit den übrigen Dokumenten.
+- Jedes `rename` eines Verzeichnisses — aus `docs/` hinaus (`docs/a` → `alt/a`) wie innerhalb von
+  `docs/` (`docs/a` → `docs/b`) — nimmt sie **nicht** unter den neuen Namen mit: Der Hub setzt
+  im selben Vorgang eine Löschmarke auf jede erzeugte Datei und jede Mahnung darunter und benennt
+  nur die übrigen Dokumente um. Bis zum nächsten Neubau hat das verschobene Verzeichnis keine
+  `index.md`; der Neubau stellt her, was unter `docs/` fehlt.
+- Ein `rename` eines Verzeichnisses von außerhalb nach `docs/` hinein (`notizen` → `docs/notizen`,
+  auch `entwurf` → `docs`) ist `generated_file`, wenn darunter ein Dokument läge, das dabei zu
+  einer erzeugten Datei würde: eine `index.md` in beliebiger Tiefe, oder eine `README.md` direkt
+  im Verzeichnis, die zu `docs/README.md` würde. Die Meldung nennt das erste solche Dokument.
+  Sonst geht es wie jedes `rename`.
+
+Die Sperre gilt über einen Node und für den Admin: `hub doc put|rm` lehnt eine erzeugte Datei ab;
+`hub import` übergeht sie und nennt sie in seiner Ausgabe — der Neubau stellt sie her.
 
 ### create
 
@@ -430,7 +484,8 @@ Revision, alles oder nichts. `base_revision` gibt es für ein Verzeichnis nicht 
 `not_found`.
 
 Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis `recursive` und
-`base_revision` (`invalid`); das Recht; bei einem Dokument `base_revision`.
+`base_revision` (`invalid`); das Recht — eine erzeugte Datei als Dokument `generated_file`, unter
+einem Verzeichnis nach „Erzeugte Dateien unter `docs/`“ —; bei einem Dokument `base_revision`.
 
 ### rename
 
@@ -440,7 +495,8 @@ ebenso Inhalt, `meta` und `created_by`; der Name ist neu, dazu Revision, `update
 
 Ist `name` ein **Verzeichnis**, bekommen alle lebenden Dokumente darunter den neuen Präfix
 (`name/a/b.md` → `new_name/a/b.md`), unter einer Revision, alles oder nichts; jeder neue Name
-muss den Pfadregeln folgen (sonst `invalid`, etwa zu lang). `base_revision` gibt es für ein
+muss den Pfadregeln folgen (sonst `invalid`, etwa zu lang). Erzeugte Dateien und Mahnungen
+darunter bekommen stattdessen eine Löschmarke (siehe „Erzeugte Dateien unter `docs/`“). `base_revision` gibt es für ein
 Verzeichnis nicht (`invalid`). Weder Dokument noch Verzeichnis: `not_found`. Über Collections
 oder Hubs hinweg geht `rename` nicht.
 
@@ -455,7 +511,9 @@ belegt sie es selbst:
   Verzeichnis auf ein Dokument, oder ein Dokument über `new_name`: `path_conflict`.
 
 Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis die neuen Namen und
-`base_revision` (`invalid`); das Recht; bei einem Dokument `base_revision`; zuletzt das Ziel.
+`base_revision` (`invalid`); das Recht — mit `generated_file` für eine erzeugte Datei als altem
+oder neuem Namen, eine einzelne Mahnung und ein Verzeichnis, das nach `docs/` hinein eine erzeugte
+Datei brächte —; bei einem Dokument `base_revision`; zuletzt das Ziel.
 
 ### Antwort
 
@@ -464,13 +522,14 @@ Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis die neuen Na
 | Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
 | Fassung | `version` | 1 |
 | Revision | `revision` | die Revision des Vorgangs; bei `write` mit unverändertem Inhalt die bestehende; bei `replayed` die des ursprünglichen Vorgangs |
-| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke, bei `rename` die Zeile unter dem neuen Namen; bei einem Verzeichnis alle Dokumente darunter, nach Name. Bei `replayed` leer |
+| Zeilen | `rows` | die geschriebenen Zeilen in der Form von `sync` — das Dokument, bei `delete` die Löschmarke, bei `rename` die Zeile unter dem neuen Namen; bei einem Verzeichnis alle Dokumente darunter, nach Name; bei `rename` eines Verzeichnisses danach die Löschmarken der erzeugten Dateien und Mahnungen, die der Hub entfernt hat, unter ihrem alten Namen, nach Name. Bei `replayed` leer |
 | Wiederholung | `replayed` | nur bei einer Wiederholung mit Schlüssel, dann wahr: Der Vorgang war schon ausgeführt, geschrieben ist diesmal nichts. Sonst fehlt das Feld |
 | ids | `ids` | nur bei `replayed`: die ids der Dokumente, die der ursprüngliche Vorgang geschrieben hat, in der Reihenfolge seiner Zeilen |
 
 Ob ein Vorgang ein Dokument oder ein Verzeichnis traf, zeigen die Zeilen: ein Dokument ist genau
 eine Zeile unter `name` (bei `rename` unter `new_name`), ein Verzeichnis sind Zeilen, die alle
-darunter liegen. Nach `rename` ersetzt der Node die Zeilen per `id` — der alte Name ist damit
+darunter liegen — bei `rename` dazu Löschmarken unter dem alten `name`; bestand das Verzeichnis
+nur aus erzeugten Dateien und Mahnungen, sind es nur diese. Nach `rename` ersetzt der Node die Zeilen per `id` — der alte Name ist damit
 aus seiner Replica verschwunden. Eine Wiederholung (`replayed`) hat keine Zeilen und sagt nichts
 über die Art; der Aufrufer sieht nach dem Abgleich nach.
 
@@ -572,15 +631,80 @@ nur einer (Schritt 7).
 **Zeitgrenze.** Lesen des Tags, Laden und Entpacken dürfen zusammen höchstens 20 s dauern,
 unter den 30 s, die der Client auf die Antwort wartet; danach `source_unreachable`.
 
+## rebuild_docs
+
+Der Hub baut `docs/` einer Collection neu (Task 033, [`indizierung.md`](indizierung.md)),
+angestoßen von einem Account über einen Node: `docs/README.md` aus der Vorlage im Binary, die
+festen Verzeichnisse `docs/manual/` und `docs/generated/`, eine Mahnung in jedem Verzeichnis ohne
+`README.md`, je Verzeichnis eine `index.md`. Den Inhalt schreibt der Hub als `system`, nicht im
+Namen des Accounts. Dieselbe Arbeit tut der Admin am Hub mit `kephalaion hub collection
+rebuild-docs <collection>` (ohne Node, `account` = `admin` in `actions`).
+
+| Feld | JSON | Bedeutung |
+|---|---|---|
+| Fassung, Node, Token | — (Pfad, Header) | wie bei `sync`; der Node ist der Träger |
+| Account | `account` | `{"account": <name>, "token": <token>}`, wie bei `whoami` |
+| Collection | `collection` | die Collection am Hub |
+
+Der Hub prüft in dieser Reihenfolge:
+
+1. **Fassung** (`unsupported_version`).
+2. **Anmeldung des Nodes** (`unauthenticated`). Die Collection gehört nicht zur Form: Eine
+   ungültige gibt es nicht, das ist `not_readable`.
+3. **Account** gegen `accounts` wie bei `whoami` — unbekannt, falsches Token, gesperrt:
+   `account_unauthenticated`.
+4. **Lesbarkeit** wie bei `fetch` (`not_readable`): Die Collection gibt es, der Node darf sie
+   abgleichen, und der Account hat eine Zeile in ihr oder sie ist öffentlich. Ein Recht über
+   `read` hinaus braucht es nicht.
+5. **Quelle:** In einer Collection mit Quelle schreibt allein `fetch`: `forbidden`, die Meldung
+   sagt es.
+6. **Neubau** in einer Transaktion: Ihre erste Anweisung sperrt die Zeile der Collection in
+   `collections` (wie `fetch`). Gibt es kein lebendes Dokument unter `docs/`, ist nichts zu tun:
+   Antwort `no_docs`, `docs/` wird nicht angelegt. Sonst bildet der Hub aus den lebenden
+   Dokumenten unter `docs/` den Soll-Zustand und vergleicht ihn mit dem Ist: Er legt an, was
+   fehlt, ersetzt, was abweicht, löscht eine verwaiste `index.md` oder Mahnung (ihr Verzeichnis
+   hat außer erzeugten Dateien und Mahnungen nichts mehr und ist kein festes) — alles unter
+   einer Revision; Gleiches bleibt unberührt. Hat sich nichts geändert: `current`.
+   `created_by`/`updated_by` ist `system`; `actions` bekommt je Dokument eine Zeile (`account`
+   = der Account, `carrier` = der Node) und, wenn sich etwas geändert hat, eine Zeile
+   `collection.rebuild_docs` für den ganzen Vorgang.
+
+Eine `README.md` von Hand ersetzt der Neubau nie; er legt eine Mahnung nur an, wo keine
+`README.md` liegt. Zählt ein Verzeichnis nur noch über erzeugte Dateien und Mahnungen, gilt es
+als leer.
+
+Antwort:
+
+| Feld | JSON | Bedeutung |
+|---|---|---|
+| Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
+| Fassung | `version` | 1 |
+| Collection | `collection` | die Collection |
+| Ergebnis | `status` | `rebuilt` (neu gebaut), `current` (schon aktuell, nichts zu tun) oder `no_docs` (kein `docs/` auf oberster Ebene, nichts zu tun) |
+| Revision | `revision` | die Revision des Vorgangs; 0 bei `current` und `no_docs` |
+| Zahlen | `created`, `updated`, `deleted` | wie viele Dokumente angelegt, ersetzt und gelöscht wurden |
+
+Zeilen trägt die Antwort nicht, wie bei `fetch`; der Node stößt danach den Abgleich an.
+
+**Ein Schreibvorgang, nie wiederholt.** Ein Transport schickt `rebuild_docs` genau einmal (siehe
+„Ausgang und Wiederholung“). Bei unklarem Ausgang darf der **Aufrufer** erneut anstoßen: Der
+Vorgang ist idempotent — hat der erste gebaut, antwortet der zweite `current`. Zwei gleichzeitige
+Läufe schreiben nacheinander, durch die Sperre der Collection; der zweite sieht den Stand des
+ersten.
+
+**Kein automatischer Neubau.** Ein Schreibvorgang unter `docs/` baut nicht neu; bis zum nächsten
+`rebuild_docs` zeigt `index.md` den alten Stand, und nach einem `rename` eines Verzeichnisses
+fehlt sie dort.
+
 ## Ausgang und Wiederholung
 
 `whoami` und `sync` ändern nichts; ein Transport darf sie wiederholen (über HTTP siehe
-„Wiederholung“). `rotate`, `node_rotate`, die Schreibvorgänge und `fetch` schickt ein Transport
+„Wiederholung“). `rotate`, `node_rotate`, die Schreibvorgänge, `fetch` und `rebuild_docs` schickt ein Transport
 **genau einmal**, nie ein zweites Mal — ebenso wenig der Node oder die Erweiterung für VS Code:
 Nach `rotate` und `node_rotate` gilt das alte Token nicht mehr, und ein zweiter Schreibversuch ohne Schlüssel ergäbe
 `name_taken`, `not_found` oder einen Konflikt mit sich selbst. Wiederholen darf allein der
 **Aufrufer**: einen Schreibvorgang mit `request_id` (siehe „Wiederholung mit Schlüssel“), `fetch`
-immer. Ihr Ausgang ist einer von vier:
+und `rebuild_docs` immer. Ihr Ausgang ist einer von vier:
 
 - **Erfolg** — die Antwort.
 - **Abgelehnt** — ein Fehler des Vertrags (ein Code unten), endgültig. Der Hub hat nichts
@@ -597,9 +721,9 @@ immer. Ihr Ausgang ist einer von vier:
   `node_rotate` prüft der Node mit `whoami` und seinem neuen Token; nach einem
   Schreibvorgang stößt der Node den Abgleich an, und der Aufrufer sieht nach — oder schickt,
   wenn er einen `request_id` mitgab, denselben Aufruf mit demselben Schlüssel noch einmal und
-  bekommt Gewissheit: Erfolg, `replayed` oder eine Ablehnung; nach `fetch`
-  stößt der Node den Abgleich an, und der Aufrufer darf `fetch` erneut anstoßen (siehe
-  „fetch“).
+  bekommt Gewissheit: Erfolg, `replayed` oder eine Ablehnung; nach `fetch` und `rebuild_docs`
+  stößt der Node den Abgleich an, und der Aufrufer darf den Vorgang erneut anstoßen (siehe
+  „fetch“ und „rebuild_docs“).
 
 In Go: ein `*contract.Error` ist abgelehnt, `contract.ErrOutcomeUnknown` unklar,
 `contract.ErrUnknownOperation` der unbekannte Vorgang; jeder andere Fehler heißt nicht
@@ -617,8 +741,9 @@ nichts geändert.
 | `unauthenticated` | 401 | nicht angemeldet: Node unbekannt, Token falsch oder Node gesperrt — dieselbe Meldung für alle drei; bei `node_rotate` auch, wenn das Token inzwischen ersetzt ist |
 | `account_unauthenticated` | 403 | der Node ist angemeldet, der Account nicht: unbekannt, Token falsch oder gesperrt (`rotate`, Schreibvorgänge) |
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
-| `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr und sie ist nicht öffentlich — dieselbe Meldung für alle drei (Schreibvorgänge, `fetch`) |
-| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand, in einer Collection mit Quelle ebenso; ohne Zeile in einer öffentlichen Collection hat er keines. Die Meldung nennt den Grund |
+| `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr und sie ist nicht öffentlich — dieselbe Meldung für alle drei (Schreibvorgänge, `fetch`, `rebuild_docs`) |
+| `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand, in einer Collection mit Quelle ebenso (auch `rebuild_docs`); ohne Zeile in einer öffentlichen Collection hat er keines. Die Meldung nennt den Grund |
+| `generated_file` | 403 | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md` darunter) schreibt nur das System: `create`, `write`, `delete` und `rename` darauf als Einzelvorgang, ein `rename` eines Verzeichnisses nach `docs/` hinein, das eine erzeugte Datei mitbrächte, und ein `rename` einer einzelnen Mahnung. Die Meldung nennt das Dokument |
 | `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |
@@ -633,8 +758,8 @@ nichts geändert.
 Alle Codes haben einen Status unter 500: Ein 5xx hieße für den Client „Ausgang unklar“.
 
 Fehler des Transports oder der Datenbank sind keine Fehler des Vertrags. Nach `whoami` und
-`sync` versucht der Node es später wieder; `rotate`, `node_rotate`, die Schreibvorgänge und
-`fetch` wiederholen weder Transport noch Node von selbst,
+`sync` versucht der Node es später wieder; `rotate`, `node_rotate`, die Schreibvorgänge,
+`fetch` und `rebuild_docs` wiederholen weder Transport noch Node von selbst,
 ihr Ausgang ist dann unklar (siehe „Ausgang und Wiederholung“). Über HTTP antwortet der Hub mit
 500 und dem Code `internal`, der kein Code des Vertrags ist — hat der Node die Anfrage
 abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
@@ -642,7 +767,7 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 ## HTTP
 
 - **Pfad:** `POST /v<Fassung>/<Vorgang>`, also `/v1/whoami`, `/v1/rotate`, `/v1/node_rotate`,
-  `/v1/sync`, `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`, `/v1/fetch` — relativ zur Adresse des
+  `/v1/sync`, `/v1/create`, `/v1/write`, `/v1/delete`, `/v1/rename`, `/v1/fetch`, `/v1/rebuild_docs` — relativ zur Adresse des
   Hub-Eintrags: Ihr Pfad ist ein Präfix, der Client schickt `<adresse>/v1/<vorgang>`. Die
   Adresse eines `kephalaion serve` endet auf `/hub` (`http://localhost:7434/hub`; hinter einem
   Reverse-Proxy etwa `https://host/kephalaion/hub`, der Proxy nimmt seinen Anteil weg, Caddy:
@@ -667,14 +792,14 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   `{"code": …, "message": …}`. Der Client unterscheidet Fehler am Code im Body, nicht am
   Status: 404 ist `not_found`, `unsupported_version` oder mit `invalid` ein unbekannter
   Vorgang. Diesen meldet er als `contract.ErrUnknownOperation`, nicht als `invalid`.
-- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate`, `node_rotate`, `sync` und `fetch`
-  darf höchstens 1 MiB groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
+- **Grenzen:** Der Body einer Anfrage an `whoami`, `rotate`, `node_rotate`, `sync`, `fetch` und
+  `rebuild_docs` darf höchstens 1 MiB groß sein, der eines Schreibvorgangs 7 MiB (`httpapi.MaxWriteBodyBytes`); sonst 413. Die
   größere Grenze trägt jedes Dokument, das der Hub annimmt (1 MiB), auch wenn JSON jedes Byte
   als `\u00XX` schreibt (sechs Byte je Byte), dazu 1 MiB für alles andere. Einen zu großen
   Inhalt lehnt der Hub selbst ab (`invalid`). Antworten sind nicht begrenzt — eine Seite des
   Abgleichs kann eine große Revision ganz tragen. Der Server liest Kopf und Body innerhalb von
   10 s bzw. 60 s und darf eine Antwort bis zu 10 Minuten lang schreiben. Der Client wartet auf
-  `whoami`, `rotate`, `node_rotate`, die Schreibvorgänge und `fetch` 30 s, auf eine Seite von
+  `whoami`, `rotate`, `node_rotate`, die Schreibvorgänge, `fetch` und `rebuild_docs` 30 s, auf eine Seite von
   `sync` 10 Minuten. Ein Reverse-Proxy vor dem Hub darf eine Antwort nicht früher abbrechen (Caddy setzt
   für `reverse_proxy` von sich aus keine Frist).
 - **TLS (Transport `https`):** Der Client prüft das Zertifikat des Hubs gegen die System-Roots
@@ -686,11 +811,11 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
 - **Wiederholung:** `whoami` und `sync` wiederholt der Client bei Fehlern des Transports und
   bei 5xx bis zu dreimal, mit wachsendem Abstand (0,5 s, 1 s, 2 s) — nicht bei einem
   Zertifikatsfehler, der bliebe bei jedem Versuch. `rotate`, `node_rotate`, die
-  Schreibvorgänge und `fetch` nie.
+  Schreibvorgänge, `fetch` und `rebuild_docs` nie.
 - **Weiterleitungen:** Der Client folgt keiner Weiterleitung. Eine 3xx-Antwort ist ein Fehler,
-  ohne Wiederholung; bei `rotate`, `node_rotate`, den Schreibvorgängen und `fetch` ein eindeutiger — der Hub
+  ohne Wiederholung; bei `rotate`, `node_rotate`, den Schreibvorgängen, `fetch` und `rebuild_docs` ein eindeutiger — der Hub
   hat nicht ausgeführt, und Body und Token gehen an kein anderes Ziel.
-- **Unklarer Ausgang bei `rotate`, `node_rotate`, den Schreibvorgängen und `fetch`:** Kam die Verbindung nicht
+- **Unklarer Ausgang bei `rotate`, `node_rotate`, den Schreibvorgängen, `fetch` und `rebuild_docs`:** Kam die Verbindung nicht
   zustande, scheiterte der TLS-Handshake (Zertifikatsfehler; die Gegenseite spricht kein TLS) oder
   antwortet der Hub mit einer Weiterleitung, ist nichts geschehen; ebenso bei einem Code des
   Vertrags, bei 404 mit `invalid` (unbekannter Vorgang) und bei 404 ohne Vertragsform (ein

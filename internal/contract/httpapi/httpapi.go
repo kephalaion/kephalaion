@@ -89,7 +89,8 @@ func Status(c contract.Code) int {
 	switch c {
 	case contract.CodeUnauthenticated:
 		return http.StatusUnauthorized
-	case contract.CodeAccountUnauthenticated, contract.CodeForbidden, contract.CodeNotReadable:
+	case contract.CodeAccountUnauthenticated, contract.CodeForbidden, contract.CodeNotReadable,
+		contract.CodeGeneratedFile:
 		return http.StatusForbidden
 	case contract.CodeUnsupportedVersion, contract.CodeNotFound:
 		return http.StatusNotFound
