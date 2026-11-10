@@ -601,10 +601,9 @@ das die neue einführt.
 
 | Fassung | eingeführt | getragen |
 |---|---|---|
-| 1 | Task 037, erste Version nach v0.3.2 (die genaue Nummer kommt beim Release dazu) | ja |
+| 1 | Task 037, v0.4.0 | ja |
 
-**Mindestversion für Clients:** die erste Version nach v0.3.2, die Format 1 liefert — die genaue
-Nummer wird beim Release hier nachgetragen. Ein älteres Binary kennt `node client` nicht und
+**Mindestversion für Clients:** v0.4.0, die erste Version mit Format 1. Ein älteres Binary kennt `node client` nicht und
 endet mit Exit 2 („Unbekanntes Kommando“).
 
 **Orte des Binarys für Clients**, verbindlich, in dieser Reihenfolge: zuerst `PATH`, dann
