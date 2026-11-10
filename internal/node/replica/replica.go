@@ -21,11 +21,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/oklog/ulid/v2"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/ident"
+	"github.com/kephalaion/kephalaion/internal/sections"
 	"github.com/kephalaion/kephalaion/internal/sqlitedb"
 )
 
@@ -36,8 +38,9 @@ const Role = "replica"
 // SchemaVersion ist die Schemafassung der Replica. Passt sie nicht, verwirft
 // der Abgleich die Replica und legt sie neu an; sie ist abgeleitet. Fassung 4
 // bringt die generation in db_info, Fassung 5 die Merkmale public und
-// subscribed in sync_state (Task 031).
-const SchemaVersion = 5
+// subscribed in sync_state (Task 031), Fassung 6 den Volltextindex über
+// docs/ (sections, sections_fts; Task 033, index.go).
+const SchemaVersion = 6
 
 // KeyHubID ist der Schlüssel der hub_id in db_info. Sie ist maßgeblich; die
 // Spalte hubs.hub_id in node.db ist nur Kopie.
@@ -105,7 +108,7 @@ CREATE TABLE sync_state (
   public      INTEGER NOT NULL DEFAULT 0,
   subscribed  INTEGER NOT NULL DEFAULT 0
 );
-`
+` + indexSchema
 
 // documentColumns sind die Spalten von documents in der Reihenfolge, die
 // scanDocument erwartet.
@@ -223,7 +226,7 @@ func Create(ctx context.Context, path, hubID, entryID string) (*Replica, error) 
 		return nil, err
 	}
 	err = sqlitedb.CreateSchema(ctx, db, schema, Role, SchemaVersion, map[string]string{KeyHubID: hubID, KeyEntryID: entryID,
-		KeyGeneration: ulid.Make().String()})
+		KeyGeneration: ulid.Make().String(), KeySectionsVersion: strconv.Itoa(sections.Version)})
 	if cerr := db.Close(); err == nil {
 		err = cerr
 	}
@@ -479,7 +482,11 @@ type dropped struct {
 
 // apply wendet eine Seite in einer Transaktion an: Collections entfernen,
 // Zeilen per id einfügen oder ersetzen, Stände fortschreiben — nie zurück.
-// Mit known nur Zeilen aus Collections, die einen Stand haben.
+// Mit known nur Zeilen aus Collections, die einen Stand haben. Den
+// Volltextindex über docs/ zieht es in derselben Transaktion nach (index.go):
+// je Zeile, die der Upsert tatsächlich schreibt — eine ältere Revision
+// übergeht er, und dann bleibt auch ihr Index —, beim Entfernen einer
+// Collection mit ihr; passt die Fassung der Zerlegung nicht, zuerst ganz neu.
 //
 // Zuerst prüft sie, dass die Seite noch passt: Die Replica gehört noch zum
 // selben Eintrag und Hub (checkOwner), und keine Collection steht unter dem
@@ -490,6 +497,9 @@ func (r *Replica) apply(ctx context.Context, p page) (map[string]dropped, error)
 	out := map[string]dropped{}
 	err := r.inTx(ctx, func(tx *sql.Tx) error {
 		if err := r.checkOwner(ctx, tx); err != nil {
+			return err
+		}
+		if err := ensureIndex(ctx, tx); err != nil {
 			return err
 		}
 		for c, since := range p.advance {
@@ -531,9 +541,21 @@ func (r *Replica) apply(ctx context.Context, p page) (map[string]dropped, error)
 			if row.Deleted {
 				deleted = 1
 			}
-			if _, err := tx.ExecContext(ctx, qDocUpsert, row.ID, row.Collection, row.Name, row.Content, row.Meta,
-				deleted, row.Revision, row.CreatedAt, row.CreatedBy, row.UpdatedAt, row.UpdatedBy); err != nil {
+			res, err := tx.ExecContext(ctx, qDocUpsert, row.ID, row.Collection, row.Name, row.Content, row.Meta,
+				deleted, row.Revision, row.CreatedAt, row.CreatedBy, row.UpdatedAt, row.UpdatedBy)
+			if err != nil {
 				return fmt.Errorf("Dokument %s in %s schreiben: %w", row.Name, row.Collection, err)
+			}
+			// Hat der Upsert die Zeile übergangen (eine ältere Revision als
+			// gespeichert), bleibt auch der Index, wie er ist.
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				if err := reindexRow(ctx, tx, row); err != nil {
+					return err
+				}
 			}
 		}
 		for c, since := range p.advance {
@@ -558,6 +580,9 @@ func flag(v bool) int {
 }
 
 func dropCollection(ctx context.Context, tx *sql.Tx, collection string) (dropped, error) {
+	if err := dropIndexOf(ctx, tx, collection); err != nil {
+		return dropped{}, err
+	}
 	res, err := tx.ExecContext(ctx, qDocsDeleteOf, collection)
 	if err != nil {
 		return dropped{}, fmt.Errorf("Collection %s entfernen: %w", collection, err)
@@ -588,6 +613,9 @@ func (r *Replica) reset(ctx context.Context, hubID string) error {
 			if _, err := tx.ExecContext(ctx, del); err != nil {
 				return err
 			}
+		}
+		if err := dropIndex(ctx, tx); err != nil {
+			return err
 		}
 		if err := sqlitedb.SetInfo(ctx, tx, KeyGeneration, gen); err != nil {
 			return err

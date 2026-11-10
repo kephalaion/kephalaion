@@ -279,6 +279,16 @@ Abgleich die Zeilen schreibt — er passt immer zur Revision, ohne zweiten Speic
 - **Sprache:** Englisch, `porter unicode61` (entschieden am 2026-11-09). Die Inhalte sind
   englisch; eine zweite Sprache in der Suche ist nicht vorgesehen.
 - **Treiber:** `modernc.org/sqlite` (`go.mod`), FTS5 enthalten (geprüft am 2026-11-09).
+- **Gebaut (Task 033, Etappe 5):** Paket `internal/sections` (Zerlegung an ATX-Überschriften
+  außerhalb von Codeblöcken, Anker wie GitHub, eindeutig je Dokument; Fassung
+  `sections.Version`), in der Replica (Schemafassung 6) die Tabelle `sections` (Dokument-`id`,
+  Collection, Name, Reihenfolge, Anker, Überschrift, Pfad der Überschriften, Titel, Beschreibung)
+  und die FTS5-Tabelle `sections_fts` (Titel, Überschriften, `questions`, `description`, `hints`,
+  Text) mit derselben `rowid`. Nachgezogen in `Replica.apply`, je Zeile, die der Upsert
+  tatsächlich schreibt; beim Entfernen einer Collection und bei `reset` mit. Indiziert werden
+  nur **Markdown-Dokumente** (`.md`) unter `docs/` — die Zerlegung gilt Markdown; ein Bild oder
+  eine YAML-Datei brächte nur Rauschen. Die Fassung der Zerlegung steht in `db_info`
+  (`sections_version`); weicht sie ab, baut der nächste Schreibvorgang der Replica den Index neu.
 
 Verworfen oder zurückgestellt:
 
