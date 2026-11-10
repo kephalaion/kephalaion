@@ -2443,6 +2443,10 @@ Aufruf ist ein Fehler der Anfrage. Festlegungen:
 - **Grenze von `path` in `changes`:** Wer ein Dokument aus dem Verzeichnis heraus umbenennt,
   erscheint dort nicht mehr — `changes` kennt keinen alten Namen. Lückenlos über Umbenennungen
   hinweg ist nur `changes` ohne `path`.
+- **`frontmatter` in `changes`** (Task 033, 2026-11-10): derselbe Parameter wie bei `list`; mit
+  ihm trägt jedes geänderte lebende `.md`-Dokument `frontmatter` bzw. `frontmatter_error`
+  (Löschmarken und andere Dateien keines). Er gehört nicht zum Cursor. So sieht die KI bei „Was
+  ist neu?“ gleich Titel, Beschreibung und Fragen, ohne jedes Dokument zu lesen.
 
 **Frontmatter in `list` und `read` — entschieden am 2026-09-27, gebaut in Task 015.**
 Damit die KI eine Übersicht — etwa alle Skills mit ihrer Beschreibung — in einem Aufruf
@@ -2500,7 +2504,16 @@ X?“ ([`indizierung.md`](indizierung.md), „Suche über MCP“):
   dem Code **`section_not_found`** neben der Meldung (`isError`, `structuredContent.error`) —
   ein Fehler der Anfrage am Node, kein Vorgang und kein Code des Vertrags. Bis dahin lieferten
   die lesenden Werkzeuge nur eine Meldung; `section_not_found` ist der erste Code eines
-  lesenden Werkzeugs.
+  lesenden Werkzeugs. `section` braucht den Inhalt (nicht mit `content: false`) und gilt nur für
+  ein Dokument; die Antwort trägt dazu `section` mit `heading`, `headings` und `anchor`.
+- **Gebaut in Task 033 (Etappe 6):** `search` und `read` mit `section` am Node
+  (`internal/node/mcpnode/search.go`, `read.go`), die Abfrage in der Replica
+  (`replica.Search`, Gewichte in `bm25()`: Titel, Überschriften und `questions` 8, `description`
+  und `hints` 3, Text 1 — nach Messung nachzustellen), der Auszug aus `snippet()` über den Text
+  des Abschnitts. `limit` gilt je Collection. **Keine Kommandozeile** (geprüft): `node whoami`
+  ist eine Auskunft über Node und Accounts ohne Token; für Inhalte gibt es am Node keine CLI —
+  `list`, `read` und `changes` gehen nur über MCP —, und eine Suche ohne Account hätte keine
+  Rechte, nach denen sie Collections wählt.
 
 **`whoami` — festgelegt am 2026-09-26.** Ein Werkzeug für „wer bin ich“ und „wie steht der
 Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:

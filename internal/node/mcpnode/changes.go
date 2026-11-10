@@ -21,6 +21,9 @@ type ChangesInput struct {
 	Cursor     string `json:"cursor,omitempty" jsonschema:"cursor der letzten Antwort: lückenlos weiter"`
 	Since      string `json:"since,omitempty" jsonschema:"statt cursor ein Zeitpunkt (RFC 3339), Zeit des Hubs beim Schreiben; nicht lückenlos"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"höchstens so viele Dokumente, Standard 100, höchstens 1000"`
+	// Frontmatter wie bei list: je geändertem .md-Dokument sein
+	// Frontmatter (Task 033). Gehört nicht zum Cursor.
+	Frontmatter bool `json:"frontmatter,omitempty" jsonschema:"auch das Frontmatter jedes geänderten .md-Dokuments als JSON-Objekt, wie bei list"`
 }
 
 // ChangesOutput ist die Antwort von changes.
@@ -54,11 +57,16 @@ type Change struct {
 	Revision int64  `json:"revision"`
 	Deleted  bool   `json:"deleted"`
 	Updated  Stamp  `json:"updated"`
+	// Frontmatter und FrontmatterError nur mit dem Parameter frontmatter,
+	// nur bei einem lebenden .md-Dokument (frontmatter.go).
+	Frontmatter      any    `json:"frontmatter,omitempty"`
+	FrontmatterError string `json:"frontmatter_error,omitempty"`
 }
 
 const changesDescription = "Meldet geänderte Dokumente aus der Replica, je Dokument einmal der aktuelle Stand " +
 	"(auch gelöscht). Ohne cursor und since nur der cursor für ab jetzt; mit dem cursor der letzten Antwort " +
-	"lückenlos weiter. reset: Hub neu mit list lesen; dropped: Collection nicht mehr lesbar."
+	"lückenlos weiter. reset: Hub neu mit list lesen; dropped: Collection nicht mehr lesbar. Mit frontmatter je " +
+	"geändertem .md-Dokument sein Frontmatter als JSON-Objekt, wie bei list."
 
 // changesCursor ist der Cursor von changes: je Hub die generation seiner
 // Replica und je Collection der Stand, bis zu dem der Aufrufer alles hat.
@@ -369,8 +377,14 @@ func (run *changesRun) read(ctx context.Context, rep *replica.Replica, hub strin
 	}
 	addr := ident.Address(hub, w.coll)
 	for _, e := range rows {
-		run.out.Changes = append(run.out.Changes, Change{Address: addr, Name: e.Name, ID: e.ID, Revision: e.Revision,
-			Deleted: e.Deleted, Updated: *stamp(e.UpdatedAt, e.UpdatedBy)})
+		c := Change{Address: addr, Name: e.Name, ID: e.ID, Revision: e.Revision, Deleted: e.Deleted,
+			Updated: *stamp(e.UpdatedAt, e.UpdatedBy)}
+		if run.in.Frontmatter && !e.Deleted {
+			if c.Frontmatter, c.FrontmatterError, err = documentFrontmatter(ctx, rep, e.Name, e.ID, nil); err != nil {
+				return w.start, err
+			}
+		}
+		run.out.Changes = append(run.out.Changes, c)
 	}
 	return end, nil
 }

@@ -307,11 +307,10 @@ Verworfen oder zurückgestellt:
 Gebaut in Task 009 ([`konzept.md`](konzept.md), „Allgemein — lesen“): seit einem Cursor oder
 Zeitpunkt (`since`), wahlweise `collection` und `path` als Präfix; je geändertem Dokument einmal
 Name, `id`, Revision, gelöscht ja/nein, geändert (wann, von wem); aus der Replica, ohne Netz.
-„Was ist neu in `docs/` seit gestern“ geht damit heute schon in einem Aufruf. Es fehlt für die
-KI nur, was `list` und `read` schon können: der Parameter **`frontmatter`**
-(`internal/node/mcpnode/changes.go` kennt ihn nicht) — ohne ihn sieht sie nur Namen und muss
-jedes Dokument lesen, um zu wissen, worum es geht. Bekannte Grenze: Wer ein Dokument aus `path`
-heraus umbenennt, erscheint dort nicht mehr.
+„Was ist neu in `docs/` seit gestern“ geht damit in einem Aufruf. Was für die KI fehlte, kam mit
+Task 033: der Parameter **`frontmatter`** wie bei `list` — je geändertem `.md`-Dokument sein
+Frontmatter, so dass die KI Titel, Beschreibung und Fragen sieht, ohne jedes Dokument zu lesen.
+Bekannte Grenze: Wer ein Dokument aus `path` heraus umbenennt, erscheint dort nicht mehr.
 
 ## Herkunft
 

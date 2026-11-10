@@ -2,12 +2,16 @@ package mcpnode
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
+	"github.com/kephalaion/kephalaion/internal/reqlog"
+	"github.com/kephalaion/kephalaion/internal/sections"
 )
 
 // ReadInput sind die Argumente von read.
@@ -17,6 +21,7 @@ type ReadInput struct {
 	ID          string `json:"id,omitempty" jsonschema:"id des Dokuments statt name; collection dann entbehrlich bei nur einem Hub"`
 	Content     *bool  `json:"content,omitempty" jsonschema:"Inhalt mitliefern, Standard ja; false nur die Angaben"`
 	Frontmatter bool   `json:"frontmatter,omitempty" jsonschema:"auch das Frontmatter als JSON-Objekt: bei einem .md-Dokument seines, bei einem Verzeichnis oder der Wurzel der Collection das der README.md"`
+	Section     string `json:"section,omitempty" jsonschema:"Anker eines Abschnitts (section.anchor eines Treffers von search): content ist dann nur dieser Abschnitt; nur bei einem Dokument"`
 }
 
 // ReadOutput ist die Antwort von read: kind document, directory oder none —
@@ -53,19 +58,41 @@ type ReadOutput struct {
 	// (Standard ja). Ein Zeiger, damit ein leeres Dokument ("") von „kein
 	// Inhalt geliefert“ unterscheidbar bleibt: mit content: false, bei einem
 	// Verzeichnis und bei none fehlt das Feld.
-	Content *string `json:"content,omitempty" jsonschema:"Inhalt des Dokuments als Text, einschließlich Frontmatter; ein leeres Dokument hat \"\"; fehlt mit content: false, bei einem Verzeichnis und bei none"`
+	Content *string `json:"content,omitempty" jsonschema:"Inhalt des Dokuments als Text, einschließlich Frontmatter; ein leeres Dokument hat \"\"; fehlt mit content: false, bei einem Verzeichnis und bei none; mit section nur der Abschnitt"`
+	// Section ist mit dem Parameter section der gelesene Abschnitt:
+	// Überschrift, Pfad der Überschriften und Anker (Task 033).
+	Section *HitSection `json:"section,omitempty"`
+	// Error ist der Fehler, nur mit isError und nur bei section_not_found;
+	// andere Fehler von read tragen nur die Meldung.
+	Error *WriteError `json:"error,omitempty"`
 }
+
+// CodeSectionNotFound ist der Code von read, wenn es den Anker im Dokument
+// nicht gibt (Task 033, Entscheidung 16): ein Fehler der Anfrage, als Code
+// neben der Meldung, kein Code des Vertrags.
+const CodeSectionNotFound = "section_not_found"
 
 const readDescription = "Liest ein Dokument aus der Replica, per collection und name oder per id; der Inhalt " +
 	"steht im Feld content der Antwort. kind: document, directory oder none. Mit content: false ohne das Feld " +
 	"content, nur Name, id, Revision, angelegt, geändert, Größe und writable (write in der Collection; unter " +
 	"vendor/<name>/ der Scope vendor/<name>; unter einem Verzeichnis-Scope dir <pfad>/ immer). " +
 	"Mit frontmatter das Frontmatter (.md, bei einem Verzeichnis das seiner README.md) als JSON-Objekt; content " +
-	"bleibt der volle Text."
+	"bleibt der volle Text. Mit section (dem Anker eines Treffers von search) ist content nur dieser Abschnitt — " +
+	"die Überschrift samt Text bis zur nächsten Überschrift —, dazu section mit heading, headings und anchor; " +
+	"einen Anker, den es nicht gibt, beantwortet read mit error.code section_not_found."
 
 func (n *Node) read(ctx context.Context, req *mcp.CallToolRequest, in ReadInput) (*mcp.CallToolResult, ReadOutput, error) {
 	out, err := n.doRead(ctx, req, in)
 	if err != nil {
+		var te *toolError
+		if errors.As(err, &te) && te.code == CodeSectionNotFound {
+			// Ein Fehler der Anfrage mit Code (Entscheidung 16): isError und
+			// error in der Struktur, wie bei den Werkzeugen, die schreiben.
+			reqlog.Note(ctx, "code", te.code)
+			fail := ReadOutput{Kind: out.Kind, Address: out.Address, Name: out.Name, ID: out.ID,
+				Error: &WriteError{Code: te.code, Message: te.msg}}
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: te.msg}}}, fail, nil
+		}
 		return nil, ReadOutput{}, toolFailure(ctx, err)
 	}
 	return nil, out, nil
@@ -75,6 +102,9 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 	withContent := in.Content == nil || *in.Content
 	if in.ID != "" && in.Name != "" {
 		return ReadOutput{}, &toolError{msg: "name oder id, nicht beides"}
+	}
+	if in.Section != "" && !withContent {
+		return ReadOutput{}, &toolError{msg: "section liefert einen Abschnitt als content; nicht mit content: false"}
 	}
 	if in.ID == "" && in.Collection == "" {
 		return ReadOutput{}, &toolError{msg: "collection fehlt; ohne collection nur mit id"}
@@ -92,18 +122,51 @@ func (n *Node) doRead(ctx context.Context, req *mcp.CallToolRequest, in ReadInpu
 		return ReadOutput{}, err
 	}
 	defer a.Close()
-	if in.ID != "" {
-		out, err := readByID(ctx, a, t, in.ID, withContent, in.Frontmatter)
-		return out, a.wrap(ctx, err)
-	}
-	if t.Collection == "" {
+	var out ReadOutput
+	switch {
+	case in.ID != "":
+		out, err = readByID(ctx, a, t, in.ID, withContent, in.Frontmatter)
+	case t.Collection == "":
 		if in.Name != "" {
 			return ReadOutput{}, &toolError{msg: "name nur zusammen mit einer Collection, nicht mit der Wurzel eines Hubs"}
 		}
-		return ReadOutput{Kind: KindDirectory, Address: t.Address()}, nil
+		out = ReadOutput{Kind: KindDirectory, Address: t.Address()}
+	default:
+		out, err = readByName(ctx, a, t, in.Name, withContent, in.Frontmatter)
 	}
-	out, err := readByName(ctx, a, t, in.Name, withContent, in.Frontmatter)
-	return out, a.wrap(ctx, err)
+	if err != nil {
+		return ReadOutput{}, a.wrap(ctx, err)
+	}
+	if in.Section != "" {
+		return readSection(out, in.Section)
+	}
+	return out, nil
+}
+
+// readSection schneidet aus dem gelesenen Dokument den Abschnitt mit dem
+// Anker anchor heraus, aus derselben Zerlegung wie der Volltextindex
+// (sections.Find). none bleibt none; ein Verzeichnis hat keine Abschnitte.
+// Einen Anker, den es im Dokument nicht gibt, meldet es mit
+// CodeSectionNotFound — out trägt dann Art, Adresse, Name und id.
+func readSection(out ReadOutput, anchor string) (ReadOutput, error) {
+	switch out.Kind {
+	case KindNone:
+		return out, nil
+	case KindDirectory:
+		return ReadOutput{}, &toolError{msg: fmt.Sprintf("section nur bei einem Dokument; %s ist ein Verzeichnis", out.Name)}
+	}
+	s, ok := sections.Find(*out.Content, anchor)
+	if !ok {
+		return out, &toolError{msg: fmt.Sprintf("Abschnitt %q gibt es in %s nicht; Anker liefert search (section.anchor)",
+			anchor, out.Name), code: CodeSectionNotFound}
+	}
+	headings := s.Headings
+	if headings == nil {
+		headings = []string{}
+	}
+	out.Content = &s.Content
+	out.Section = &HitSection{Heading: s.Heading, Headings: headings, Anchor: s.Anchor}
+	return out, nil
 }
 
 // readByName liest einen Namen einer lesbaren Collection: Dokument,

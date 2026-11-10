@@ -133,6 +133,7 @@ func (n *Node) server(version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "list", Description: listDescription}, n.list)
 	mcp.AddTool(srv, &mcp.Tool{Name: "read", Description: readDescription}, n.read)
 	mcp.AddTool(srv, &mcp.Tool{Name: "changes", Description: changesDescription}, n.changes)
+	mcp.AddTool(srv, &mcp.Tool{Name: "search", Description: searchDescription}, n.search)
 	mcp.AddTool(srv, &mcp.Tool{Name: "create", Description: createDescription}, n.create)
 	mcp.AddTool(srv, &mcp.Tool{Name: "write", Description: writeDescription}, n.replace)
 	mcp.AddTool(srv, &mcp.Tool{Name: "delete", Description: deleteDescription}, n.remove)
