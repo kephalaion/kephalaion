@@ -38,15 +38,15 @@ func testdata(t *testing.T, name string) string {
 	return string(b)
 }
 
-// goldenEntry ist der Eintrag der Golden-Tests: zwei Hubs, ein Pfad mit
-// Leerzeichen.
+// goldenEntry ist der Eintrag der Golden-Tests: zwei Hubs, beide
+// ausdrücklich gewählt — nur so steht --account im Helfer (Task 037).
 func goldenEntry() entry {
 	tokens := "/home/anna/.config/kephalaion/tokens"
 	return entry{
 		Target: Target{URL: "http://127.0.0.1:7433/mcp", Binary: "/home/anna/.local/bin/kephalaion", TokensDir: tokens},
 		logins: []Login{
-			{Hub: "eigen", Account: "kp", File: TokenFile(tokens, "eigen", "kp")},
-			{Hub: "vm", Account: "alice", File: TokenFile(tokens, "vm", "alice")},
+			{Hub: "eigen", Account: "kp", File: TokenFile(tokens, "eigen", "kp"), How: ByOverride},
+			{Hub: "vm", Account: "alice", File: TokenFile(tokens, "vm", "alice"), How: ByOverride},
 		},
 	}
 }

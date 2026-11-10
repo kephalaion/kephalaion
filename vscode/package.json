@@ -42,7 +42,7 @@
           "default": {},
           "additionalProperties": { "type": "string" },
           "scope": "machine-overridable",
-          "markdownDescription": "Account je Hub, etwa `{\"home\": \"kamran-desktop\"}` — nur nötig, wenn unter `~/.config/kephalaion/tokens/<hub>/` mehrere Token-Dateien liegen. Gesetzt über „Kephalaion: Account wählen“; gilt für diesen Rechner und wird nicht synchronisiert."
+          "markdownDescription": "Account je Hub als Überschreibung, etwa `{\"home\": \"kamran-desktop\"}` — sie geht vor dem Standard-Account des Hubs (`kephalaion node account default`, gilt für alle Clients dieses Rechners) und der einzigen Token-Datei unter `~/.config/kephalaion/tokens/<hub>/`. Nennt sie einen Account ohne Token-Datei, bleibt der Hub ohne Account (kein Rückfall). Gesetzt über „Kephalaion: Account wählen“; gilt für diesen Rechner und wird nicht synchronisiert."
         },
         "kephalaion.mcpServer.enabled": {
           "type": "boolean",

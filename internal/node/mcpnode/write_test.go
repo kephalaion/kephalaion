@@ -413,3 +413,104 @@ func TestWriteWithoutLink(t *testing.T) {
 		t.Errorf("ohne HubLink: %+v, %+v, %v", res, out, err)
 	}
 }
+
+// create und write einer .md prüfen das Frontmatter des Inhalts im Aufruf
+// (Task 036): Lässt es sich nicht lesen, trägt die Antwort frontmatter_error
+// mit dem Grund wie bei read; endet ein unquotierter Wert an einem
+// Kommentar, frontmatter_hints. Es bleibt ein Erfolg mit Revision, auch bei
+// replayed. Ohne Frontmatter, mit sauberem, bei .txt und bei delete und
+// rename fehlen beide Felder.
+func TestWriteFrontmatter(t *testing.T) {
+	e := newDocEnv(t)
+	const broken = "---\ntitle: a (x): b\n---\nText\n"
+	const commented = "---\nid: 1\ntitle: a (Todo #1)\n---\nText\n"
+	wantHints := []string{"Zeile 3, title: ‚#1)‘ ist ein YAML-Kommentar, nicht Teil des Werts; gehört er dazu, " +
+		"den Wert in doppelte Anführungszeichen setzen"}
+	// fieldsOf ruft ein Werkzeug, das erfolgreich sein muss, und liefert die
+	// Antwort samt ihrem rohen JSON.
+	fieldsOf := func(t *testing.T, tool string, in any) (WriteOutput, string) {
+		t.Helper()
+		var out WriteOutput
+		res, errText := e.call(t, e.anna(), tool, in, &out)
+		if errText != "" {
+			t.Fatalf("%s: %s", tool, errText)
+		}
+		return out, rawOf(res)
+	}
+
+	out, _ := fieldsOf(t, "create", CreateInput{Collection: "keph:wissen", Name: "kaputt.md", Content: broken})
+	if out.Revision == 0 || out.ID == "" || !strings.Contains(out.FrontmatterError, "YAML ungültig") ||
+		out.FrontmatterHints != nil {
+		t.Fatalf("create kaputt: %+v", out)
+	}
+	doc, _, _ := e.read(t, e.anna(), ReadInput{Collection: "keph:wissen", Name: "kaputt.md", Frontmatter: true})
+	if doc.FrontmatterError != out.FrontmatterError || contentOf(doc) != broken {
+		t.Errorf("Grund wie bei read: %q, write %q", doc.FrontmatterError, out.FrontmatterError)
+	}
+	w, _ := fieldsOf(t, "write", WriteInput{Collection: "keph:wissen", Name: "kaputt.md", Content: broken + "mehr\n",
+		BaseRevision: base(out.Revision)})
+	if w.Revision <= out.Revision || w.FrontmatterError != out.FrontmatterError || w.FrontmatterHints != nil {
+		t.Errorf("write kaputt: %+v", w)
+	}
+
+	for _, tool := range []string{"create", "write"} {
+		var in any = CreateInput{Collection: "keph:wissen", Name: "todo.md", Content: commented}
+		if tool == "write" {
+			in = WriteInput{Collection: "keph:wissen", Name: "todo.md", Content: commented + "mehr\n"}
+		}
+		h, _ := fieldsOf(t, tool, in)
+		if h.Revision == 0 || h.FrontmatterError != "" || !reflect.DeepEqual(h.FrontmatterHints, wantHints) {
+			t.Errorf("%s mit Kommentar: %+v", tool, h)
+		}
+	}
+
+	// Ohne Hinweis: keines der beiden Felder in der Antwort.
+	for _, c := range []struct{ tool, name, content string }{
+		{"create", "ohne.md", "# Titel # mit Raute\n"},
+		{"create", "sauber.md", "---\ntitle: \"a (Todo #1)\"\n# Kommentarzeile\nn: 1\n---\nText # Raute\n"},
+		{"create", "data.txt", commented},
+		{"create", "leer.md", ""},
+		{"write", "data.txt", broken},
+	} {
+		var in any = CreateInput{Collection: "keph:wissen", Name: c.name, Content: c.content}
+		if c.tool == "write" {
+			in = WriteInput{Collection: "keph:wissen", Name: c.name, Content: c.content}
+		}
+		out, raw := fieldsOf(t, c.tool, in)
+		if out.Revision == 0 || strings.Contains(raw, "frontmatter") {
+			t.Errorf("%s %s: %s", c.tool, c.name, raw)
+		}
+	}
+	for _, c := range []struct {
+		tool string
+		in   any
+	}{
+		{"rename", RenameInput{Collection: "keph:wissen", Name: "todo.md", NewName: "todo2.md"}},
+		{"delete", DeleteInput{Collection: "keph:wissen", Name: "kaputt.md"}},
+	} {
+		if out, raw := fieldsOf(t, c.tool, c.in); out.Revision == 0 || strings.Contains(raw, "frontmatter") {
+			t.Errorf("%s: %s", c.tool, raw)
+		}
+	}
+
+	// replayed: Der Inhalt steht im Aufruf, die Felder kommen wieder.
+	f := e.hubs["keph"]
+	for _, c := range []struct{ name, content string }{{"neu-kaputt.md", broken}, {"neu-todo.md", commented}} {
+		in := CreateInput{Collection: "keph:wissen", Name: c.name, Content: c.content, RequestID: "fm-" + c.name}
+		f.failWith(errLost, true)
+		wantCode(t, "unklar", e.callWrite(t, e.anna(), "create", in), CodeOutcomeUnknown, "request_id")
+		f.failWith(nil, false)
+		again, _ := fieldsOf(t, "create", in)
+		if !again.Replayed || again.Revision == 0 {
+			t.Fatalf("Wiederholung %s: %+v", c.name, again)
+		}
+		if c.content == broken && (!strings.Contains(again.FrontmatterError, "YAML ungültig") ||
+			again.FrontmatterHints != nil) {
+			t.Errorf("Wiederholung kaputt: %+v", again)
+		}
+		if c.content == commented && (again.FrontmatterError != "" ||
+			!reflect.DeepEqual(again.FrontmatterHints, wantHints)) {
+			t.Errorf("Wiederholung mit Kommentar: %+v", again)
+		}
+	}
+}

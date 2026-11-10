@@ -150,6 +150,7 @@ func (c *opencodeClient) read(_ context.Context) (found, error) {
 	var entryMap map[string]any
 	if json.Unmarshal(raw, &entryMap) == nil {
 		of.entry = entryMap
+		f.url, _ = entryMap["url"].(string)
 	}
 	f.choice = Choice{}
 	headers, _ := of.entry["headers"].(map[string]any)

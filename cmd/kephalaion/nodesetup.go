@@ -621,7 +621,7 @@ func (s *setupNode) overviewAssistants(ctx context.Context, w io.Writer) {
 		fmt.Fprintf(w, "Assistenten:    %v\n", err)
 		return
 	}
-	statuses, _, err := newAssistantManager().Status(ctx, target, nil)
+	statuses, _, _, err := newAssistantManager().Status(ctx, target, nil)
 	if err != nil {
 		fmt.Fprintf(w, "Assistenten:    %v\n", err)
 		return

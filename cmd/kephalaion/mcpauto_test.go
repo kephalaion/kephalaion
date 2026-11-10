@@ -51,15 +51,13 @@ func TestNodeMCPAddAuto(t *testing.T) {
 	}
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen", "opencode: eingetragen", "codex: fehlt")
 
-	// Einträge nur bei einem Teil: nur diese.
+	// Einträge nur bei einem Teil: nur diese. Den neuen Hub nimmt der Helfer
+	// von Claude Code ohne Änderung des Eintrags auf (keine ausdrückliche
+	// Wahl, Task 037).
 	e.mcp(t, "remove", "--assistant", "opencode").want(t, 0)
 	e.put(t, "eigen", "kp.token", dummyTokenC+"\n")
-	r = e.mcp(t, "add", "--auto")
-	r.want(t, 0, "claude: eingetragen, ersetzt den Eintrag (anderer Helfer): http://127.0.0.1:7500/mcp, eigen=kp, vm=alice")
-	if strings.Contains(r.out, "opencode") || strings.Contains(r.out, "codex") {
-		t.Errorf("add --auto trägt neu ein:\n%s", r.out)
-	}
-	e.mcp(t, "status").want(t, 0, "claude: eingetragen", "opencode: fehlt", "codex: fehlt")
+	silent(e.mcp(t, "add", "--auto"))
+	e.mcp(t, "status").want(t, 0, "claude: eingetragen (eigen=kp, vm=alice)", "opencode: fehlt", "codex: fehlt")
 
 	// add von Hand ohne --assistant trägt wieder überall ein.
 	e.mcp(t, "add").want(t, 0, "claude: unverändert", "opencode: eingetragen", "codex: eingetragen")
@@ -123,7 +121,8 @@ func TestAccountRotateRegistersAssistants(t *testing.T) {
 	if strings.Contains(r.out+r.errOut, readFileToken(t, alice)) {
 		t.Fatal("Token in der Ausgabe")
 	}
-	if !strings.Contains(helper(), "--account eigen=alice") {
+	// Ohne ausdrückliche Wahl kein --account im Helfer (Task 037).
+	if strings.Contains(helper(), "--account") {
 		t.Errorf("Helfer: %s", helper())
 	}
 
@@ -142,10 +141,12 @@ func TestAccountRotateRegistersAssistants(t *testing.T) {
 		return httpapi.NewClient(address, rootCAs)
 	})
 	r = e.run(t, "node", "account", "rotate", "fern", "bob", "--token-file", bob)
-	r.want(t, 0, "Token ersetzt", "claude: eingetragen, ersetzt den Eintrag (anderer Helfer): "+mcpURL+", eigen=alice, fern=bob")
+	r.want(t, 0, "Token ersetzt")
 	if strings.Contains(r.out, "opencode") || strings.Contains(r.out, "codex") {
 		t.Errorf("rotate trägt neu ein:\n%s", r.out)
 	}
+	e.run(t, "node", "mcp", "status").want(t, 0, "claude: eingetragen (eigen=alice, fern=bob)", "opencode: fehlt",
+		"codex: fehlt")
 
 	// check nach einem unklaren rotate: Ersetzt es die Datei, folgt der
 	// Anstoß. Nach remove bei allen trägt er wieder überall ein.

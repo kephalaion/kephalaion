@@ -2,6 +2,8 @@ package frontmatter
 
 import (
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -147,6 +149,50 @@ func TestParseLimit(t *testing.T) {
 	}
 	if fm, ok, err = Parse([]byte(exact + "Text\n")); !ok || err != nil || fm["title"] != "x" {
 		t.Errorf("genau an der Grenze: ok %v, %v, %v", ok, err, fm)
+	}
+}
+
+// Hints: je Plain-Wert eines Mappings mit Kommentar auf derselben Zeile ein
+// Satz mit Dateizeile (das öffnende --- ist Zeile 1), Schlüssel und
+// Kommentar; sonst nichts.
+func TestHints(t *testing.T) {
+	hint := func(line int, key, comment string) string {
+		return fmt.Sprintf("Zeile %d, %s: ‚%s‘ ist ein YAML-Kommentar, nicht Teil des Werts; gehört er dazu, "+
+			"den Wert in doppelte Anführungszeichen setzen", line, key, comment)
+	}
+	cases := []struct {
+		name string
+		head string
+		want []string
+	}{
+		{name: "Kommentar am Plain-Wert", head: "---\nid: 7\ntitle: a (Todo #1)\n---\nText # kein Frontmatter\n",
+			want: []string{hint(3, "title", "#1)")}},
+		{name: "BOM", head: "\xef\xbb\xbf---\ntitle: a (Todo #1)\n---\n", want: []string{hint(2, "title", "#1)")}},
+		{name: "CRLF", head: "---\r\ntitle: x # y\r\n---\r\n", want: []string{hint(2, "title", "# y")}},
+		{name: "gewollter Kommentar", head: "---\nn: 3 # später\n---\n", want: []string{hint(2, "n", "# später")}},
+		{name: "verschachtelt und in Liste",
+			head: "---\nobj:\n  k: v # e\nlist:\n  - a # f\n  - x: y # g\n---\n",
+			want: []string{hint(3, "k", "# e"), hint(6, "x", "# g")}},
+		{name: "mehrere", head: "---\na: 1 # x\nb: 2\nc: drei # z\n---\n",
+			want: []string{hint(2, "a", "# x"), hint(4, "c", "# z")}},
+		{name: "doppelt quotiert", head: "---\ntitle: \"a (Todo #1)\" # k\n---\n"},
+		{name: "einfach quotiert", head: "---\ntitle: 'a' # k\n---\n"},
+		{name: "Kommentarzeile", head: "---\n# Kommentar\ntitle: a\n# noch einer\n---\n"},
+		{name: "ohne Kommentar", head: "---\ntitle: a#b\n---\n"},
+		{name: "Kommentar ohne Wert", head: "---\na: # nur\nb: 1\n---\n"},
+		{name: "ohne Frontmatter", head: "title: a # b\n"},
+		{name: "nicht geschlossen", head: "---\ntitle: a # b\n"},
+		{name: "ungültiges YAML", head: "---\ntitle: a # b\nx: a (x): b\n---\n"},
+		{name: "oben kein Objekt", head: "---\n- a # b\n---\n"},
+		{name: "Schlüssel kein Text", head: "---\na: 1 # b\n2: x\n---\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Hints([]byte(c.head))
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("\n got %q\nwant %q", got, c.want)
+			}
+		})
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/frontmatter"
 	"github.com/kephalaion/kephalaion/internal/ident"
 	"github.com/kephalaion/kephalaion/internal/node/replica"
 	"github.com/kephalaion/kephalaion/internal/node/store"
@@ -26,6 +27,12 @@ import (
 // schicken: Hatte der Hub geschrieben, antwortet er replayed — dann schreibt
 // der Node nichts in die Replica, stößt den Abgleich an und antwortet mit
 // replayed, Name, ids und Revision, ohne Art.
+//
+// create und write einer .md (Task 036) prüfen den Inhalt des Aufrufs auf
+// sein Frontmatter, wie list und read es lesen: Lässt es sich nicht lesen,
+// trägt die Antwort frontmatter_error mit dem Grund, endet ein unquotierter
+// Wert an einem Kommentar, frontmatter_hints. Das ist ein Hinweis, kein
+// Fehler: Der Erfolg bleibt Erfolg, auch bei replayed.
 //
 // Jeder Fehler trägt neben der Meldung einen Code: das Ergebnis hat isError,
 // der Text ist die Meldung, und die Struktur trägt error.code und
@@ -135,7 +142,8 @@ type RenameInput struct {
 // Antwort trägt Name, Revision, Count und Updated. Bei einem Fehler (isError)
 // tragen nur Address, Name — der des Aufrufs, bei rename der alte — und
 // Error etwas. Eine Wiederholung mit request_id (Replayed) trägt Address,
-// Name, Revision und IDs, ohne Art: Der Hub schickt dann keine Zeilen.
+// Name, Revision und IDs, ohne Art: Der Hub schickt dann keine Zeilen. Die
+// Felder zum Frontmatter trägt sie wie ein erster Erfolg.
 type WriteOutput struct {
 	// Kind ist document oder directory; fehlt bei einem Fehler und bei
 	// Replayed.
@@ -169,6 +177,15 @@ type WriteOutput struct {
 	// IDs sind nur bei Replayed die ids der Dokumente, die der ursprüngliche
 	// Vorgang geschrieben hat.
 	IDs []string `json:"ids,omitempty"`
+	// FrontmatterError ist nur bei create und write einer .md der Grund,
+	// warum sich das Frontmatter des geschriebenen Inhalts nicht lesen lässt
+	// — derselbe wie bei list und read. Ein Hinweis, kein Fehler: gespeichert
+	// ist.
+	FrontmatterError string `json:"frontmatter_error,omitempty"`
+	// FrontmatterHints sind nur bei create und write einer .md Hinweise für
+	// Menschen auf unquotierte Werte im Frontmatter, die an einem Kommentar
+	// enden, je mit Zeile und Schlüssel (frontmatter.Hints).
+	FrontmatterHints []string `json:"frontmatter_hints,omitempty"`
 	// Error ist der Fehler, nur mit isError.
 	Error *WriteError `json:"error,omitempty"`
 }
@@ -181,12 +198,15 @@ type WriteError struct {
 }
 
 const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dokument mit dem Namen: name_taken. " +
-	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; ein Fehler trägt error.code. request_id: " +
+	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; bei einer .md frontmatter_error, wenn sich " +
+	"das Frontmatter nicht lesen lässt, und frontmatter_hints, wenn ein unquotierter Wert an einem Kommentar endet " +
+	"(gespeichert ist trotzdem); ein Fehler trägt error.code. request_id: " +
 	requestIDSchema + "; derselbe Schlüssel mit anderen Angaben ist invalid. Die Antwort einer Wiederholung trägt " +
 	"replayed, Name, ids und Revision, ohne Art; die Replica holt der angestoßene Abgleich nach."
 
 const writeDescription = "Ersetzt den Inhalt eines Dokuments, über den Hub. Mit base_revision nur, wenn das " +
-	"Dokument noch diese Revision hat, sonst stale_revision. Antwort und request_id wie bei create."
+	"Dokument noch diese Revision hat, sonst stale_revision. Antwort (samt frontmatter_error und " +
+	"frontmatter_hints) und request_id wie bei create."
 
 const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). base_revision wie bei write, nur für " +
 	"Dokumente. Ein Verzeichnis nur mit recursive: alle Dokumente darunter, alles oder nichts. Antwort wie create, " +
@@ -201,7 +221,8 @@ const renameDescription = "Benennt ein Dokument oder ein Verzeichnis um, über d
 // Name und der Vorgang am Hub. newName ist bei rename der neue Name; um ihn
 // geht dann die Antwort. dir sagt, dass der Vorgang auch ein Verzeichnis
 // nehmen kann (delete, rename). requestID ist der Schlüssel des Aufrufs,
-// leer ohne.
+// leer ohne. content ist der Inhalt des Aufrufs, nur bei create und write;
+// an ihm prüft der Node das Frontmatter.
 type writeOp struct {
 	tool       string
 	collection string
@@ -210,6 +231,7 @@ type writeOp struct {
 	newName    string
 	dir        bool
 	requestID  string
+	content    *string
 	call       func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 		collection string) (contract.WriteResponse, error)
 }
@@ -224,6 +246,7 @@ func (op writeOp) result() string {
 
 func (n *Node) create(ctx context.Context, req *mcp.CallToolRequest, in CreateInput) (*mcp.CallToolResult, WriteOutput, error) {
 	return n.write(ctx, req, writeOp{tool: "create", collection: in.Collection, name: in.Name, requestID: in.RequestID,
+		content: &in.Content,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Create(ctx, contract.CreateRequest{Version: contract.Version, Auth: node, Account: account,
@@ -233,6 +256,7 @@ func (n *Node) create(ctx context.Context, req *mcp.CallToolRequest, in CreateIn
 
 func (n *Node) replace(ctx context.Context, req *mcp.CallToolRequest, in WriteInput) (*mcp.CallToolResult, WriteOutput, error) {
 	return n.write(ctx, req, writeOp{tool: "write", collection: in.Collection, name: in.Name, requestID: in.RequestID,
+		content: &in.Content,
 		call: func(ctx context.Context, hub contract.Hub, node contract.NodeAuth, account contract.AccountAuth,
 			coll string) (contract.WriteResponse, error) {
 			return hub.Write(ctx, contract.WriteRequest{Version: contract.Version, Auth: node, Account: account,
@@ -342,14 +366,38 @@ func (n *Node) doWrite(ctx context.Context, req *mcp.CallToolRequest, op writeOp
 		return unreachableHub(t.Hub)
 	}
 	defer done()
+	fmErr, fmHints := op.frontmatterNotes()
 	resp, err := op.call(ctx, hub, contract.NodeAuth{Node: h.NodeName, Token: h.Token},
 		contract.AccountAuth{Account: l.Account, Token: headerToken(req, t.Hub)}, t.Collection)
 	if err != nil {
 		return n.hubFailure(ctx, h, t, err)
 	}
 	*out = n.accept(ctx, h, t, op, resp)
+	// Nach accept, in beiden Zweigen (frisch und replayed): Die Prüfung
+	// gilt dem Inhalt des Aufrufs, nicht der Replica.
+	out.FrontmatterError, out.FrontmatterHints = fmErr, fmHints
 	n.kick(h)
 	return nil
+}
+
+// frontmatterNotes prüft bei create und write einer .md das Frontmatter des
+// Inhalts: der Grund, wenn es sich nicht lesen lässt (wie bei list und
+// read), sonst die Hinweise auf Werte, die an einem Kommentar enden. Ohne
+// Inhalt, bei einem anderen Namen und ohne Frontmatter beides leer.
+func (op writeOp) frontmatterNotes() (errText string, hints []string) {
+	if op.content == nil || !frontmatter.IsMarkdown(op.name) {
+		return "", nil
+	}
+	// Mehr als den Anfang sieht der Parser ohnehin nicht an.
+	content := *op.content
+	if len(content) > frontmatter.MaxBytes {
+		content = content[:frontmatter.MaxBytes]
+	}
+	head := []byte(content)
+	if _, errText = frontmatterFields(head); errText != "" {
+		return errText, nil
+	}
+	return "", frontmatter.Hints(head)
 }
 
 // headerToken ist das Token aus dem Header-Paar eines Hubs. Bei gültiger

@@ -25,10 +25,3 @@ remediation:
   # Aus dem Modus abgeleitet; Commands lesen sie direkt.
   pr_required: false
   direct_fixes: true
-
-tools:
-  gh:
-    # Soll die GitHub CLI genutzt werden? unknown, enabled oder disabled.
-    # Ob gh auf diesem Rechner liegt, steht bewusst nicht hier: das ist ein
-    # Host-Befund und gehört in die Kontextausgabe.
-    status: enabled

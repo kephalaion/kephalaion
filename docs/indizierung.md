@@ -6,7 +6,8 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
 # Indizierung von `docs/`
 
 **Stand: entschieden bis auf Einzelheiten, Task 033 angelegt** (2026-10-16,
-`k-playbook-local/tasks/033-docs-index-und-suche.md`); gebaut ist nichts. Was das Konzept betrifft, wandert mit seinem Datum nach
+`keph:/user/kamran/tasks/033-docs-index-und-suche.md`), nachgezogen am 2026-11-09 nach der
+Übergabe aus k-playbook (siehe „Entschieden am 2026-11-09“); gebaut ist nichts. Was das Konzept betrifft, wandert mit seinem Datum nach
 [`konzept.md`](konzept.md) („Indizierung“). Begriffe nach [`begriffe.md`](begriffe.md).
 
 ## Das Wichtigste
@@ -26,7 +27,12 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
   Hand geschrieben wird.
 - **Erzeugte Dateien schreibt niemand außer dem System**, auch der Admin nicht.
 - **In jedem Unterverzeichnis eine beschreibbare `README.md`** mit der Beschreibung des
-  Verzeichnisses. Fehlt sie, legt das System eine an, die das Fehlen anmahnt.
+  Verzeichnisses; k-playbook schreibt sie aus Vorlagen. Fehlt sie, legt das System eine an, die
+  das Fehlen anmahnt.
+- **Inhalte in `docs/` sind englisch**, gesucht wird mit `porter`. Übersetzen ist Sache von
+  k-playbook, nicht von Kephalaion.
+- **Ein Kopf für alle Dokumente** (`title`, `description`, `generated`, `hints`, `questions`,
+  `sources`, `verified`); `questions` zählen in der Suche hoch. `type`, `tags`, `status` entfallen.
 - **Eine feste Struktur unter `docs/`** legt Kephalaion fest und legt fehlende Verzeichnisse
   selbst an; die Liste ist noch zu klären.
 - **Finden über `search`**, Treffer je Abschnitt mit Name, Anker, Titel, Beschreibung und Auszug —
@@ -48,7 +54,8 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
   erzeugten Dateien nichts von Hand geschrieben wird. Kephalaion schreibt sie selbst aus einer
   Vorlage im Binary — für alle Installationen gleich.
 - **Sprache: Englisch als Standard**, nicht fest. Was „Sprache“ alles umfasst (erzeugte Texte,
-  Zerlegung für die Suche) und wo sie abweichend eingestellt wird, ist offen.
+  Zerlegung für die Suche) und wo sie abweichend eingestellt wird, ist offen. *Am 2026-11-09
+  entschieden: Englisch, ohne Einstellung — siehe unten.*
 - **Neubau per Befehl**, CLI und MCP, vorerst für jeden Account. Wann das System von selbst neu
   baut, ist zurückgestellt; bis dahin genügt der Befehl. Er nimmt die Collection als Argument
   und gilt **nur für `docs/`** — ein Neubau von `docs/`; andere Neubauten kommen später als
@@ -72,6 +79,39 @@ description: Grundidee vom 2026-10-16, in Besprechung — Kephalaion indiziert d
 - **Drei Fragen, drei Wege:** Übersicht über `index.md`, Finden über `search` mit einem
   maschinellen, schnellen Index, Neues über `changes` — siehe „Suche über MCP“.
 - **Schreibweise wie OKF:** `index.md` klein.
+
+## Entschieden am 2026-11-09
+
+Übergabe aus k-playbook (Sitzung k-playbook-6f; dort Workbench `vm:k-playbook-dev` →
+`user/kamran/workbench/004-docs-struktur.md`, Entscheidungen 26, 30, 33–35) und Gespräch mit dem
+Nutzer am selben Tag.
+
+- **Sprache.** Inhalte in `docs/` einer Collection sind englisch. Das stellt k-playbook sicher
+  (Erzeuger und Handdoku englisch; der Spiegel bleibt eine reine Kopie, übersetzt werden die
+  Quellen selbst, entschieden dort am 2026-11-10); Kephalaion übersetzt nicht. Die Suche
+  bleibt bei `porter unicode61`, ohne Sprache je Collection und ohne eigenen Stemmer. Die
+  Beschreibung von `search` sagt, dass auf Englisch angefragt wird. Kephalaion geht davon aus,
+  dass `docs/` englisch ist; was es nicht ist, wird schlechter gefunden. Die Doku dieses Repos
+  wird später übersetzt (Nutzer, 2026-11-10); das Spiegeln ist bei k-playbook zurückgestellt.
+- **Ein Kopf für alle Dokumente unter `docs/`:** `title` (Pflicht), `description` (Pflicht, ein
+  Satz), `generated: {by, at, stats?}` (nur erzeugte), `hints`, `questions`,
+  `sources: [{resource, item?, version?}]`, `verified`; unter `docs/sources/` zusätzlich `mirror`.
+  `type`, `tags` und `status` entfallen, damit auch der Filter `type`/`tags` in `search`.
+- **Suchfelder und Gewichte:** Titel, Überschriften und `questions` hoch; `description` und
+  `hints` mittel; der Text normal. `questions` sind Fragen, die genau dieses Dokument beantwortet;
+  eine Fragen-Tabelle im Briefing von k-playbook gibt es nicht, die Suche ist der einzige Weg, auf
+  dem sie wirken. `mirror`, `generated.stats`, `sources` und `verified` sind keine Suchfelder.
+- **`index.md` ist kein Suchtreffer** (bestätigt).
+- **Spiegel:** Quellen außerhalb von `docs/` spiegelt k-playbook nach
+  `docs/generated/sources/<mirror>/`. Für Kephalaion ist das gewöhnliches `docs/`, indiziert wie
+  alles andere, samt `index.md` je Verzeichnis; nichts Eigenes für externe Quellen.
+- **`README.md` unterhalb von `docs/`** schreibt k-playbook aus Vorlagen, mit `title` und
+  `description`, ohne `generated`. `docs/README.md` ganz oben bleibt Kephalaions. Die Mahnung
+  braucht es nur dort, wo niemand schreibt.
+- **`changes` bekommt `frontmatter`** (Nutzer, 2026-11-10), wie `list` und `read`: Die KI sieht
+  bei „Was ist neu?“ gleich Titel, Beschreibung und Fragen der geänderten Dokumente.
+- **FTS5 ist im Treiber:** `modernc.org/sqlite` mit SQLite 3.53.4; `porter unicode61`,
+  `unicode61` und `trigram` getestet.
 
 ## Struktur unter `docs/`
 
@@ -161,9 +201,12 @@ auf Überschriften, gezielt Zeilen lesen — über MCP: `index.md`, `search`, `r
 
 ### Wie die Anfrage aussieht
 
-- **Einfache Wörter**, keine FTS5-Syntax; gebeugte deutsche Wörter sollen trotzdem treffen.
-- **Filter wahlweise:** `path` unter `docs/`, `type` und `tags` aus dem Frontmatter, die
-  Collection(s) wie bei den anderen Werkzeugen.
+- **Einfache englische Wörter**, keine FTS5-Syntax; Fragen gehen. Ein Wort, das nicht vorkommt
+  (etwa „how“, „the“), lässt die Anfrage nicht scheitern.
+- **Filter wahlweise:** `path` unter `docs/` und die Collection(s) wie bei den anderen
+  Werkzeugen. Kein Filter `type`/`tags` (entfallen am 2026-11-09).
+- **Die Beschreibung des Werkzeugs** sagt selbst, wie man anfragt: einfache Wörter auf Englisch,
+  Fragen gehen, Treffer je Abschnitt, `name` und Anker an `read`.
 - **Keine Treffer** sind `index.md`, `docs/README.md` und die Mahnung — sie verdrängten im
   Ranking die Dokumente, auf die sie zeigen.
 - **Ohne Treffer** ein klares „nichts gefunden“ mit dem Hinweis auf `docs/index.md`, statt dünner
@@ -180,12 +223,13 @@ Abgleich die Zeilen schreibt — er passt immer zur Revision, ohne zweiten Speic
 
 - **Zerlegung an den Überschriften:** Ein Abschnitt ist eine Überschrift samt Text bis zur
   nächsten. Indiziert wird der ganze Text, nicht nur die Überschriften.
-- **Felder je Abschnitt**, gewichtet in `bm25()`: Titel des Dokuments und Überschriften darüber
-  hoch, `description` und `tags` mittel, der Text normal. Der Auszug kommt aus `snippet()`.
+- **Felder je Abschnitt**, gewichtet in `bm25()`: Titel des Dokuments, Überschriften darüber und
+  `questions` hoch, `description` und `hints` mittel, der Text normal. Der Auszug kommt aus
+  `snippet()`. Die Gewichte im Einzelnen nach Messung.
 - **Fassung der Zerlegung** in der Replica; ändert sie sich, baut der Node neu.
-- **Sprache:** Englisch als Standard — FTS5 bringt dafür `porter` mit. Deutsch (Stemmen in Go,
-  zweite Spalte) erst, wenn die Messung es verlangt.
-- **Treiber:** `modernc.org/sqlite` (`go.mod`); dass FTS5 darin enthalten ist, ist noch zu prüfen.
+- **Sprache:** Englisch, `porter unicode61` (entschieden am 2026-11-09). Die Inhalte sind
+  englisch; eine zweite Sprache in der Suche ist nicht vorgesehen.
+- **Treiber:** `modernc.org/sqlite` (`go.mod`), FTS5 enthalten (geprüft am 2026-11-09).
 
 Verworfen oder zurückgestellt:
 
@@ -235,7 +279,7 @@ heraus umbenennt, erscheint dort nicht mehr.
 | Volltext mit Ranking | BM25 in k-playbook | FTS5 im Node, beim Abgleich | Kephalaion, Stufe 1 |
 | Navigation (was liegt wo) | eine `README.md` über alles aus `/k-docs-index` | `index.md` je Verzeichnis (OKF) | Kephalaion |
 | Stichwort A–Z, Frage → Datei | Teil der `README.md` | entfällt | — |
-| Facetten `type`, `tags`, `status` | im Frontmatter, ungenutzt | `list` mit `frontmatter` liefert sie schon | Kephalaion |
+| Facetten `type`, `tags`, `status` | im Frontmatter, ungenutzt | entfallen (2026-11-09) | — |
 | Semantisch | nicht gebaut | Stufe 5, zurückgestellt | Kephalaion |
 
 ## Was OKF festlegt
@@ -297,6 +341,12 @@ bewusst hinzu: `docs/README.md` als Anleitung, weil ein Mensch wie eine KI zuers
 nachsieht, darunter je Verzeichnis als dessen Beschreibung. Ob sie `type` trägt (etwa
 `type: guide` oben, `type: directory` darunter), damit ein OKF-Leser nicht stolpert, ist offen.
 
+## Abweichung: kein `type`
+
+OKF verlangt `type` in jedem Concept (§4.1). Der Kopf vom 2026-11-09 kennt `type` nicht mehr;
+die Dokumente unter `docs/` sind damit keine strengen OKF-Concepts. Wir nehmen das hin, weil
+weder Index noch Suche `type` brauchen.
+
 ## Schreibschutz — was es schon gibt
 
 Zwei Sperren, an zwei Stellen:
@@ -321,6 +371,9 @@ solche Datei enthält — ablehnen, übergehen oder als Wiederherstellung übern
 
 - **Beschreibung im Frontmatter:** `description` (ein Satz, wie OKF), dazu wahlweise `title`. Der
   Text darunter erklärt das Verzeichnis ausführlicher.
+- **Wer sie schreibt (2026-11-09):** k-playbook, aus Vorlagen (`defaults/docs/<pfad>/README.md`),
+  mit `title` und `description`, ohne `generated` — so unterscheidet sie sich von der Mahnung.
+  Die Mahnung bleibt für Verzeichnisse, in die niemand eine `README.md` schreibt.
 - **Volltext:** Eine von Hand geschriebene `README.md` ist eine gewöhnliche Beschreibung und kommt
   in den Volltextindex. Nicht hinein kommen `index.md`, `docs/README.md` und die Mahnung — sie
   verdrängten im Ranking die Dokumente, auf die sie zeigen (Erfahrung aus k-playbook).
@@ -344,12 +397,9 @@ Bevor ein Task entsteht:
   der Befehl `docs/` in einer Collection anlegt, die noch keines hat.
 - **`search` im Einzelnen:** Name der Felder, Standard und Höchstwert von `limit`, ob Treffer
   eines Dokuments zusammengefasst werden; Gewichte erst nach Messung.
-- **`frontmatter` für `changes`:** ob es mitkommt.
 
 Kleiner, kann im Task entschieden werden:
 
-- **Sprache:** wofür sie gilt — Vorlage von `docs/README.md`, Mahnung, Überschriften der
-  `index.md`, Zerlegung der Suche — und wo eine andere als Englisch eingestellt wird.
 - **Import erzeugter Dateien:** ablehnen, übergehen oder als Wiederherstellung übernehmen.
 - **`type` in `README.md`** für OKF-Leser.
 - **Struktur:** wo die Liste steht.
@@ -360,4 +410,4 @@ Zurückgestellt:
   selbst.
 - **`log.md`:** Vorschlag, keine. „Was ist neu“ beantwortet `changes` genauer; eine `log.md` je
   Verzeichnis wäre eine gröbere Fassung davon und änderte sich bei jedem Schreibvorgang mit.
-- **Deutsch in der Suche, Bleve, semantische Suche.**
+- **Bleve, semantische Suche.** (Deutsch in der Suche entfällt: Die Inhalte sind englisch.)

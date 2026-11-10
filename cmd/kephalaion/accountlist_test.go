@@ -84,7 +84,9 @@ func TestNodeAccountList(t *testing.T) {
 	r := e.list(t, e.c)
 	r.want(t, 0, "Node: "+e.nodeURL, "HUB", "ZUSTAND")
 	for _, c := range []struct{ hub, account, kind, want string }{
-		{"eigen", "ok1", "token", "gültig ok1 team-x"},
+		// ok1 ist der erste Account an eigen: setup hat ihn zum Standard
+		// gemacht (Task 037).
+		{"eigen", "ok1", "token", "gültig ok1 team-x ja"},
 		{"eigen", "ok1", "pending", "ungültig – –"},
 		{"eigen", "alt", "token", "ungültig – –"},
 		{"eigen", "p", "pending", "ungültig – –"},
@@ -119,6 +121,9 @@ func TestNodeAccountList(t *testing.T) {
 		if f.Collections == nil {
 			t.Errorf("%s/%s: collections null", f.Hub, f.Account)
 		}
+		if f.Default != (f.Hub == "eigen" && f.Account == "ok1" && f.Kind == kindToken) {
+			t.Errorf("--json %s/%s .%s: default %v", f.Hub, f.Account, f.Kind, f.Default)
+		}
 	}
 	want := map[string]tokenState{"eigen/ok1.token": stateValid, "eigen/ok1.pending": stateInvalid,
 		"eigen/alt.token": stateInvalid, "eigen/p.pending": stateInvalid, "eigen/kaputt.token": stateUnreadable,
@@ -138,7 +143,7 @@ func TestNodeAccountList(t *testing.T) {
 	r = e.list(t, "--node", proxy.URL+"/kephalaion", "--ca-file", caPath)
 	r.want(t, 0, "Über einen Proxy unterscheidet der Node")
 	for _, c := range []struct{ hub, account, kind, want string }{
-		{"eigen", "ok1", "token", "gültig ok1 team-x"},
+		{"eigen", "ok1", "token", "gültig ok1 team-x ja"},
 		{"eigen", "alt", "token", "ungültig oder unbekannt – –"},
 		{"nirgends", "x", "token", "ungültig oder unbekannt – –"},
 	} {
@@ -154,7 +159,7 @@ func TestNodeAccountList(t *testing.T) {
 	before, _ = e.checks()
 	r = e.list(t, "--node", "http://"+closedPort(t))
 	r.want(t, 1, "nicht erreichbar")
-	if got := rowState(r.out, "eigen", "ok1", "token"); got != "nicht geprüft – –" {
+	if got := rowState(r.out, "eigen", "ok1", "token"); got != "nicht geprüft – – ja" {
 		t.Errorf("Node nicht erreichbar: %q\n%s", got, r.out)
 	}
 	if after, _ := e.checks(); after != before {

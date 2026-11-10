@@ -336,9 +336,25 @@ func TestNodeDirCredentials(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tokens, "bob.token"), []byte(e.tokens["bob"]+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	push().want(t, 1, "mehrere Token-Dateien", "bob, kp", "--account wählt")
+	push().want(t, 1, "Wahl fehlt", "mehrere Token-Dateien", "bob, kp", "--account wählt",
+		"kephalaion node account default eigen <account>")
 	push("--account", "kp").want(t, 0, "+ vendor/x/a.md")
 	push("--account", "niemand").want(t, 1, "niemand.token")
+	// Bei zwei Token-Dateien gilt der Standard (Task 037); --account geht
+	// vor, auch ohne Token-Datei ohne Rückfall.
+	if err := os.WriteFile(filepath.Join(tokens, "default"), []byte("kp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	push().want(t, 0, "+ vendor/x/a.md")
+	push("--account", "niemand").want(t, 1, "niemand.token")
+	// Ein Standard ohne Token-Datei: Hinweis, dann fehlt die Wahl.
+	if err := os.WriteFile(filepath.Join(tokens, "default"), []byte("carol\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	push().want(t, 1, "Standard carol hat keine Token-Datei", "Wahl fehlt", "bob, kp")
+	if err := os.Remove(filepath.Join(tokens, "default")); err != nil {
+		t.Fatal(err)
+	}
 	// Ohne Token-Datei für den Hub: der Hinweis nennt das Verzeichnis.
 	runT(t, "node", "dir", "push", "fern:team-x", "vendor/x", src, "--dry-run", "--config", cfgPath).want(t, 1,
 		"keine Token-Datei unter", filepath.Join("tokens", "fern"))

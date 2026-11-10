@@ -163,30 +163,80 @@ function selectHubs(tokenHubs, chosen, remote) {
 
 const TOKEN_FORMAT = /^keph_[A-Za-z0-9_-]{43}$/;
 
-// Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers: der gewählte
-// (kephalaion.accounts), sonst der einzige; nur für die Hubs aus selectHubs. Ein Hub mit
-// mehreren Accounts ohne Wahl, mit einem gewählten ohne Token-Datei oder ohne Token-Datei fehlt
-// und steht in skipped. tokenAccounts ist {hub: [accounts]}. Nur Namen, kein Token.
-function mcpLogins(tokenAccounts, chosenAccounts, hubs) {
+// Ein Account-Name nach der Namensregel, ohne den Präfix system und nicht admin (wie
+// ident.CheckPrincipalName).
+function validAccount(name) {
+  return validAlias(name) && name !== 'admin';
+}
+
+// Der Standard-Account eines Hubs aus dem Text von tokens/<hub>/default (Task 037): die erste Zeile,
+// ein gültiger Account-Name. Liefert { account } oder { error } — der Fehler nennt nie den Inhalt.
+function parseDefaultAccount(text) {
+  const name = String(text || '').split('\n')[0].trim();
+  if (!validAccount(name)) return { error: 'kein gültiger Account-Name in der Datei' };
+  return { account: name };
+}
+
+// Die Wahl des Accounts eines Hubs in derselben Reihenfolge wie die CLI (assistant.Resolve, Task
+// 037): (1) die Überschreibung (kephalaion.accounts), (2) der Standard (tokens/<hub>/default), (3)
+// die einzige Token-Datei; sonst fehlt die Wahl. accounts sind die Accounts mit Token-Datei,
+// override der Wert aus kephalaion.accounts, standard der Standard (oder { error }, wenn die Datei
+// nicht lesbar ist). Eine Überschreibung ohne Token-Datei bleibt die Wahl, ohne Rückfall: account
+// fehlt, missing nennt sie. Ein Standard ohne Token-Datei steht in notes, und die nächste Regel
+// greift. Liefert { account, how: override|default|only|missing, candidates, missing, notes }.
+function resolveAccount(accounts, override, standard) {
+  const candidates = [...(accounts || [])].sort();
+  const notes = [];
+  if (override) {
+    if (candidates.includes(override)) return { account: override, how: 'override', candidates, notes };
+    return { how: 'override', missing: override, candidates, notes };
+  }
+  if (standard && standard.error) {
+    notes.push(`Standard nicht lesbar (${standard.error}); es gilt die nächste Regel`);
+  } else if (standard && standard.account) {
+    if (candidates.includes(standard.account)) return { account: standard.account, how: 'default', candidates, notes };
+    notes.push(`der Standard ${standard.account} hat keine Token-Datei; es gilt die nächste Regel`);
+  }
+  if (candidates.length === 1) return { account: candidates[0], how: 'only', candidates, notes };
+  return { how: 'missing', candidates, notes };
+}
+
+// Der Text zur Herkunft der Wahl für Statusleiste und Tooltip.
+function choiceText(how) {
+  return { override: 'Einstellung kephalaion.accounts', default: 'Standard', only: 'einzige Token-Datei' }[how] || how;
+}
+
+// Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers, in der
+// Reihenfolge von resolveAccount; nur für die Hubs aus selectHubs. Ein Hub, dessen Wahl fehlt, mit
+// einer Überschreibung ohne Token-Datei oder ohne Token-Datei fehlt und steht in skipped; notes
+// nennt einen Standard ohne Token-Datei. tokenAccounts ist {hub: [accounts]}, defaults
+// {hub: { account } | { error }}. Nur Namen, kein Token.
+function mcpLogins(tokenAccounts, chosenAccounts, hubs, defaults) {
   const chosen = chosenAccounts || {};
+  const standards = defaults || {};
   const logins = [];
   const skipped = [];
+  const notes = [];
   for (const hub of hubs) {
     const accounts = tokenAccounts[hub] || [];
     if (!validAlias(hub)) {
       skipped.push(`${hub}: kein gültiger Alias`);
-    } else if (chosen[hub]) {
-      if (accounts.includes(chosen[hub])) logins.push({ hub, account: chosen[hub] });
-      else skipped.push(`${hub}: gewählter Account ${chosen[hub]} hat keine Token-Datei`);
-    } else if (accounts.length === 1) {
-      logins.push({ hub, account: accounts[0] });
+      continue;
+    }
+    const r = resolveAccount(accounts, chosen[hub], standards[hub]);
+    for (const n of r.notes) notes.push(`${hub}: ${n}`);
+    if (r.account) {
+      logins.push({ hub, account: r.account, how: r.how });
+    } else if (r.missing) {
+      skipped.push(`${hub}: gewählter Account ${r.missing} hat keine Token-Datei (kephalaion.accounts) — kein Rückfall`);
     } else if (accounts.length === 0) {
       skipped.push(`${hub}: gewählt, aber keine Token-Datei unter tokens/${hub}/`);
     } else {
-      skipped.push(`${hub}: mehrere Accounts (${accounts.join(', ')}), keiner gewählt — „Kephalaion: Account wählen“`);
+      skipped.push(`${hub}: Wahl fehlt — mehrere Accounts (${accounts.join(', ')}), keiner gewählt und kein Standard; `
+        + '„Kephalaion: Account wählen“ oder kephalaion node account default');
     }
   }
-  return { logins, skipped };
+  return { logins, skipped, notes };
 }
 
 // Die Header-Paare der Anmeldungen; readToken(hub, account) liest die erste Zeile der
@@ -275,11 +325,12 @@ const NO_USED_HUB = 'kein genutzter Hub — für keinen Hub dieses Nodes liegt e
 
 // Was die Statusleiste aus den Hubs von whoami macht (docs/vscode.md, „Status und Auswahl“;
 // docs/begriffe.md, „used hub“). Ein Node bedient viele Hubs, ein Client nutzt davon einige:
-// genutzt ist ein Hub mit Eintrag in credentials (die Hubs aus hubSelection, je mit account)
-// oder einer, den der Node als ok oder invalid meldet — er hat ein Paar gesehen. Nur genutzte
-// Hubs warnen: invalid, missing trotz Token-Datei (leer oder nicht lesbar; mit „Replica nicht
-// lesbar“ ein Abgleichfehler), ein Fehler im Abgleich, mehrere Accounts ohne Wahl (unchosen),
-// und ein pausiertes Paar (paused: { hub: { account, failures, nextProbe } }, Task 025) — es
+// genutzt ist ein Hub mit Eintrag in credentials (die Hubs aus hubSelection, je mit account,
+// oder ohne, wenn die Wahl fehlt) oder einer, den der Node als ok oder invalid meldet — er hat
+// ein Paar gesehen. Nur genutzte Hubs warnen: invalid, missing trotz Token-Datei (leer oder
+// nicht lesbar; mit „Replica nicht lesbar“ ein Abgleichfehler), ein Fehler im Abgleich, „Wahl
+// fehlt“ (unchosen; mit den Kandidaten aus credentials), eine Überschreibung ohne Token-Datei
+// (missing in credentials), und ein pausiertes Paar (paused: { hub: { account, failures, nextProbe } }, Task 025) — es
 // geht nicht hinaus, der Node meldet den Hub deshalb als missing; der Grund ist „pausiert“ mit
 // nächster Probe, Fehlversuchen, Schwelle der Jail und Abhilfe. Ein pausierter Hub, den whoami
 // nicht nennt (alle Paare pausiert: keine Anfrage), steht trotzdem als genutzt in der Liste.
@@ -313,10 +364,15 @@ function hubStatus(hubs, credentials, unchosen, paused, now) {
       why.push(pauseWarning(p, at));
     } else if (h.login === 'invalid') {
       why.push(sync.never_synced ? 'noch nie abgeglichen, die Anmeldung lässt sich noch nicht prüfen' : 'Anmeldung ungültig');
-    } else if (h.login === 'missing' && sync.last_error !== REPLICA_UNREADABLE) {
+    } else if (h.login === 'missing' && sync.last_error !== REPLICA_UNREADABLE && !unchosenSet.has(h.hub)
+      && !(c && c.missing)) {
       why.push(c && c.account ? `Token-Datei tokens/${h.hub}/${c.account}.token leer oder nicht lesbar` : 'keine Zugangsdaten angekommen');
     }
-    if (unchosenSet.has(h.hub)) why.push('mehrere Accounts, keiner gewählt');
+    if (unchosenSet.has(h.hub)) {
+      const cands = c && c.accounts && c.accounts.length ? ` (${c.accounts.join(', ')})` : '';
+      why.push(`Wahl fehlt${cands} — Account wählen`);
+    }
+    if (c && c.missing) why.push(`gewählter Account ${c.missing} hat keine Token-Datei — Account wählen`);
     if (why.length) {
       entry.warning = why.join(', ');
       reasons.push(`${h.hub}: ${entry.warning}`);
@@ -369,4 +425,5 @@ function droppedHubs(dropped, readable) {
 module.exports = {
   parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, whoamiOutcome,
   droppedHubs, PROXY_HINT, userConfigDir, locateConfig, configSourceText, parseNodeListen, DEFAULT_NODE_LISTEN,
+  resolveAccount, parseDefaultAccount, choiceText,
 };

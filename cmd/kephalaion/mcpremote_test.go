@@ -71,7 +71,9 @@ func TestNodeMCPRemote(t *testing.T) {
 	if strings.Contains(r.out, "Hinweis: Dieser Rechner hat einen eigenen Node") {
 		t.Errorf("Hinweis ohne eigenen Node:\n%s", r.out)
 	}
-	helper := e.remoteHelper([]string{"vm"}, "vm=kamran")
+	// Die Wahl der Hubs steht fest im Helfer, der Account nur bei
+	// ausdrücklicher Wahl (Task 037).
+	helper := e.remoteHelper([]string{"vm"})
 	if entry := e.claudeEntry(t); entry["url"] != url || entry["headersHelper"] != helper {
 		t.Fatalf("Claude Code: %v", entry)
 	}
@@ -114,7 +116,7 @@ func TestNodeMCPRemote(t *testing.T) {
 	// Beide gewählt: beide Paare, in fester Reihenfolge.
 	e.mcp(t, "add", "--node", base, "--ca-file", caPath, "--hub", "vm", "--hub", "eigen").want(t, 0,
 		"claude: eingetragen, ersetzt den Eintrag (anderer Helfer): "+url+", eigen=kp, vm=kamran")
-	if entry := e.claudeEntry(t); entry["headersHelper"] != e.remoteHelper([]string{"eigen", "vm"}, "eigen=kp", "vm=kamran") {
+	if entry := e.claudeEntry(t); entry["headersHelper"] != e.remoteHelper([]string{"eigen", "vm"}) {
 		t.Errorf("zwei Hubs: %v", entry)
 	}
 	// Ein gewählter Hub ohne Token-Datei wird genannt.
@@ -211,7 +213,7 @@ func TestNodeMCPRemoteWithOwnNode(t *testing.T) {
 		"Hinweis: Dieser Rechner hat einen eigenen Node ("+e.cfg+")")
 	e.mcp(t, "status").want(t, 0, "claude: weicht ab — andere Adresse ("+base+"/mcp statt "+mcpURL+")")
 	e.mcp(t, "add", "--auto").want(t, 0, "claude: eingetragen, ersetzt den Eintrag")
-	if entry := e.claudeEntry(t); entry["url"] != mcpURL || entry["headersHelper"] != e.helper("eigen=kp", "vm=kamran") {
+	if entry := e.claudeEntry(t); entry["url"] != mcpURL || entry["headersHelper"] != e.helper() {
 		t.Errorf("nach --auto: %v", entry)
 	}
 	// Eine lokale Adresse über --node ist keine entfernte: alle Hubs, ohne

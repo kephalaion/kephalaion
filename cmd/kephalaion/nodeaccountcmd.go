@@ -23,6 +23,7 @@ const nodeAccountUsage = `Aufruf:
   kephalaion node account rotate <hub> <account> (--token-file pfad | --token-stdin)
   kephalaion node account check  <hub> <account> (--token-file pfad | --token-stdin)
   kephalaion node account list   [--node url [--ca-file pfad]] [--json]
+  kephalaion node account default <hub> [<account> | --unset]
 
 Kommandos:
   setup    richtet einen Account mit seinem Einrichtungstoken (aus kephalaion
@@ -47,6 +48,41 @@ Kommandos:
            ~/.config/kephalaion/tokens/ (<account>.token und .pending) mit
            Hub, Account, Zustand, User und Collections — gefragt beim Node,
            je Datei genau eine Anfrage, nicht in einer eigenen Datenbank.
+           Die Spalte STANDARD markiert je Hub den Standard-Account.
+  default  zeigt, setzt oder entfernt den Standard-Account eines Hubs
+           (siehe unten).
+
+Standard-Account und Reihenfolge der Wahl:
+  Je Hub kann es einen Standard-Account geben: tokens/<hub>/default neben
+  den Token-Dateien, nur der Name und eine Zeilenschaltung, 0600, nie ein
+  Token. Jeder Client dieses Rechners wählt den Account eines Hubs in
+  derselben Reihenfolge: (1) seine eigene Überschreibung (--account an node
+  mcp add|headers, node dir und node client, kephalaion.accounts in VS
+  Code), (2) der Standard, (3) die einzige Token-Datei. Trifft nichts zu,
+  fehlt die Wahl — die Kandidaten werden genannt. Nennt der Standard einen
+  Account ohne Token-Datei, gibt es einen Hinweis, und die nächste Regel
+  greift.
+
+  default <hub>            zeigt den Standard, die Token-Dateien und welcher
+                           Account gilt.
+  default <hub> <account>  setzt ihn; der Account braucht eine Token-Datei.
+                           Mit eigenem Node danach wie kephalaion node mcp
+                           add --auto; ein OpenCode-Eintrag, der den
+                           bisherigen Standard trägt (gab es keinen: die
+                           bisher einzige Token-Datei), folgt dem neuen. Jeder
+                           Eintrag mit einer ausdrücklichen Wahl, die vom
+                           neuen Standard abweicht, bleibt und wird genannt.
+                           Ohne eigenen Node (kein node: in der config)
+                           trägt es nichts ein: Claude Code und Codex folgen
+                           dem Standard ohne add, für OpenCode nennt es den
+                           Weg (kephalaion node mcp add --node … --assistant
+                           opencode --account <hub>=<account>).
+  default <hub> --unset    entfernt ihn.
+
+  setup setzt den Standard beim ersten Account eines Hubs. Bei jedem weiteren
+  bleibt er, und die Ausgabe nennt den Weg, ihn zu ändern; hat der Hub noch
+  keinen, setzt setup vorher den bisher einzigen Account als Standard — sonst
+  fiele der Hub sofort in „Wahl fehlt“.
 
 setup:
   <hub> ist der Alias des Hub-Eintrags am Node, <token> das Einrichtungstoken.
@@ -113,7 +149,8 @@ Optionen:
   --ca-file pfad  setup, list: mit --node https://… das Zertifikat gegen
                   diese CA (PEM) prüfen statt gegen die System-Roots
   --json          list: als JSON ({"node", "files": [{hub, account, kind,
-                  file, state, user, collections, reason}]})
+                  file, state, user, collections, reason, default}]})
+  --unset         default: den Standard entfernen
   --config pfad   Ort der config (siehe kephalaion node init --help)
 
 Exit-Codes von setup:
@@ -128,6 +165,12 @@ Exit-Codes von list:
   1   der Node antwortet nicht (alle Dateien nicht geprüft) oder tokens/
       ist nicht lesbar
   2   falscher Aufruf, auch ohne Node in der config und ohne --node
+
+Exit-Codes von default:
+  0   gezeigt, gesetzt oder entfernt (auch wenn das Nachziehen bei den
+      Assistenten nur eine Warnung brachte)
+  1   der Account hat keine Token-Datei, oder die Datei ist nicht schreibbar
+  2   falscher Aufruf
 `
 
 func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -158,10 +201,11 @@ func runNodeAccount(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 		}
 	}
 	return dispatch("node account", u, args, stdout, stderr, map[string]func([]string) int{
-		"setup":  func(a []string) int { return runNodeAccountSetup(a, stdin, stdout, stderr) },
-		"list":   func(a []string) int { return runNodeAccountList(a, stdout, stderr) },
-		"rotate": leaf("rotate", (*command).accountRotate),
-		"check":  leaf("check", (*command).accountCheck),
+		"setup":   func(a []string) int { return runNodeAccountSetup(a, stdin, stdout, stderr) },
+		"list":    func(a []string) int { return runNodeAccountList(a, stdout, stderr) },
+		"default": func(a []string) int { return runNodeAccountDefault(a, stdout, stderr) },
+		"rotate":  leaf("rotate", (*command).accountRotate),
+		"check":   leaf("check", (*command).accountCheck),
 	})
 }
 

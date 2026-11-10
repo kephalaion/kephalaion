@@ -1525,6 +1525,11 @@ Dienste, mehrere Ports, mehrere MCP-Einträge je Client.
 - **Abgleich je Hub.** Ist ein Hub nicht erreichbar, laufen die anderen weiter.
 - **Ein Client trägt mehrere Paare aus Name und Token**, je Hub höchstens eins. Die Suche
   geht über alle Collections, die diese Accounts lesen dürfen.
+- **Welcher Account je Hub — seit Task 037 für alle Clients gleich:** die eigene Überschreibung
+  des Clients, sonst der **Standard-Account** des Hubs auf diesem Rechner
+  (`tokens/<hub>/default`, gesetzt mit `kephalaion node account default`), sonst die einzige
+  Token-Datei; trifft nichts zu, fehlt die Wahl, und der Hub bleibt ohne Anmeldung („Bei den
+  Assistenten angemeldet“ unten).
 
 **Kein Schutz gegen Abfluss zwischen Hubs.** Ein Client mit Token für zwei Hubs kann aus
 dem einen lesen und in den anderen schreiben. Das zu verhindern ist nicht Aufgabe von
@@ -1837,6 +1842,38 @@ auf und bereinigt tote Verweise. Cursor und Gemini CLI vorerst nicht. Einzelheit
 [`installation.md`](installation.md), „Bei den Assistenten anmelden“; Befund
 `material/befunde/mcp-client-registrierung.md`.
 
+**Standard-Account und Auskunft für Clients — entschieden am 2026-11-10, gebaut in Task 037.**
+Liegen an einem Hub mehrere Token-Dateien, wählt jeder Client in derselben Reihenfolge: seine
+eigene Überschreibung (`--account`, `kephalaion.accounts`), der Standard-Account, die einzige
+Token-Datei; sonst fehlt die Wahl, mit den Kandidaten. Den ersten nach Namen nimmt niemand
+mehr. Die Entscheidungen dahinter:
+
+- **Der Standard ersetzt die Übernahme aus anderen Einträgen.** Bis Task 037 schrieb `node mcp
+  add` die Wahl für jeden Hub ausdrücklich in den Helfer, und ein Assistent ohne Wahl übernahm
+  die der anderen Einträge. Jetzt trägt der Helfer `--account` nur für eine ausdrückliche Wahl
+  und löst alles Übrige bei jeder Verbindung auf: Ein neuer Standard wirkt bei Claude Code und
+  Codex ohne `add`. OpenCode trägt den Account immer fest; dort folgt ein Eintrag mit dem
+  bisherigen Standard dem neuen (`node account default` zieht ihn nach), ein anderer gilt als
+  ausdrückliche Wahl. `setup` setzt den Standard beim ersten Account und, bevor ein zweiter
+  dazukommt, den bisher einzigen. Alte Einträge werden nicht erkannt oder umgeschrieben: einmal
+  `node mcp remove`, dann `node mcp add`.
+- **Ablage neben den Token-Dateien, nicht in `config.yaml`.** Die config beschreibt die
+  Installation; bei einer globalen gibt es keine des Users. `tokens/` gibt es bei beiden Arten
+  und im Devcontainer, der es einbindet: `tokens/<hub>/default`, nur ein Name, `0600`.
+- **Die Kommandozeile gibt Auskunft, nicht der Node.** Clients außerhalb dieses Repos —
+  k-playbook zuerst — fragen `kephalaion node client --json --format <n>` nach config, Adresse des
+  lokalen Nodes und Account je Hub, statt die Suche (`KEPHALAION_CONFIG` > User > `/etc`,
+  `node.listen`, `tokens/<hub>/<account>.token`) nachzubauen. Der Node kennt den Account erst aus
+  dem Token einer Anfrage, und ein globaler Node darf das Token-Verzeichnis des Users (`0700`)
+  nicht lesen; die Kommandozeile läuft als der User. Die Auskunft öffnet keine Datenbank und
+  schickt keine Anfrage mit Token. Ihr Format ist versioniert (`format`; eine höhere Fassung
+  nur, wenn ein Feld umbenannt oder entfernt wird oder sich eine Bedeutung ändert) und
+  beschreibt den lokalen Rechner: einen entfernten Node nennt Fassung 1 nicht. Die Erweiterung
+  für VS Code folgt derselben Reihenfolge, ruft die Auskunft aber nicht auf — sie liest
+  `tokens/` selbst.
+- **Anlass:** k-playbook fand im Devcontainer auf der Dev-VM keine config — es baute die Suche
+  nach und las den Account aus einer eigenen Datei je Rechner —, und das Briefing scheiterte.
+
 **Doku für Menschen, Ansible und KI — entschieden am 2026-09-26, geschrieben in Task 011.**
 [`installation.md`](installation.md) beschreibt beide Arten, Dienst und Upgrade, dazu einen Abschnitt „Für Automatisierung“ mit
 den festen Angaben: URL-Schema der Assets, `SHA256SUMS`, Architekturen (`x86_64` → `amd64`,
@@ -1897,6 +1934,19 @@ Rechners ist für Devcontainer nicht der Weg („Kommunikation“), eine Bridge 
   `--add-host=host.docker.internal:host-gateway`, und der Node müsste zusätzlich auf der
   Docker-Bridge lauschen — nur dort, nicht im übrigen Netz. Zurückgestellt, bis es gebraucht
   wird.
+
+**Stand am 2026-11-10 (Task 037), Weg 1 mit Weiterleiter:** `~/.config/kephalaion` des Hosts
+ist im Container nur lesend eingebunden — der Standard-Account (`tokens/<hub>/default`) lässt
+sich dort lesen, gesetzt wird er auf dem Host. `127.0.0.1:7433` erreicht über einen
+socat-Weiterleiter des Dev-Setups den Node des Hosts. Clients im Container (k-playbook, die
+Skripte des Dev-Setups) fragen `kephalaion node client --json` statt die Suche nachzubauen; ohne
+`KEPHALAION_CONFIG`. `kephalaion status` meldet im Container bei Hub und Node „läuft nicht hier“
+statt „Fehler“, weil Datenbank und ihr Verzeichnis dort fehlen — der Container ist ein reiner
+Client; ein ganz gelöschtes Datenverzeichnis auf einem eingerichteten Rechner sähe genauso aus,
+diese Grenze ist hingenommen (`installation.md`, „Verwalten“). Hat der Host eine globale
+Installation und ist `/etc/kephalaion` nicht eingebunden, gibt es im Container keine config: Die
+Auskunft sagt das und nennt die Standardadresse; `status` bleibt dort bei „Keine Rolle
+eingerichtet“.
 
 **Für beide Wege:** Die Assistenten im Container werden angemeldet wie auf dem Host
 (`kephalaion node mcp add`, „Installation und Betrieb“), oder ihre Konfiguration kommt vom Host.
@@ -2402,6 +2452,11 @@ bekommt, statt jede Datei zu lesen (`list` mit `recursive`, `mask: "SKILL.md"` u
   der geschriebene Text bleiben (`2026-09-27` wird nicht `2026-09-27T00:00:00Z`) und Schlüssel
   am Tag geprüft werden; ein leerer Block ist `{}`. Die Replica liest mit `HeadByName`/`HeadByID`
   nur die ersten 64 KiB in Bytes (`substr(CAST(content AS BLOB) …)`).
+- **Die Schreibseite (Task 036, 2026-11-09):** `create` und `write` einer `.md` prüfen das
+  Frontmatter des Inhalts im Aufruf und melden in der Antwort `frontmatter_error` mit demselben
+  Grund wie `list` und `read` und `frontmatter_hints` für unquotierte Werte, die an einem „ #“
+  enden — siehe „Allgemein — schreiben“. Wer schreibt, erfährt es so sofort, nicht erst beim
+  nächsten `list`.
 
 **`whoami` — festgelegt am 2026-09-26.** Ein Werkzeug für „wer bin ich“ und „wie steht der
 Node“; ein eigenes `status` brächte kaum mehr. Die Antwort:
@@ -2537,6 +2592,20 @@ Verschieben im Explorer von VS Code darauf laufen und ein Ersatz aus Anlegen und
   der Node den Abgleich an, auch bei `sync_interval` `0`.
 - **Leere Verzeichnisse** gibt es am Hub weiter nicht; die Erweiterung für VS Code merkt sich
   ein neu angelegtes, bis darin etwas liegt.
+- **Frontmatter beim Schreiben — Task 036, 2026-11-09:** Der Node ist die einzige Stelle, durch
+  die jeder Schreibweg geht; dort wird gewarnt, nie abgelehnt. `create` und `write` einer `.md`
+  (Endung ohne Unterscheidung von Groß- und Kleinschreibung) prüfen den Inhalt des Aufrufs —
+  nicht die Replica, darum auch bei `replayed` — und tragen nach Erfolg zwei wahlweise Felder:
+  `frontmatter_error`, wenn der Block da ist und sich nicht lesen lässt (Grund wie bei `list`
+  und `read`, „Frontmatter in `list` und `read`“), und `frontmatter_hints`, eine Liste von
+  Sätzen für Menschen: je Skalar ohne Anführungszeichen, der als Wert eines Mappings auf seiner
+  Zeile einen Kommentar trägt, Zeile in der Datei (das öffnende `---` ist Zeile 1), Schlüssel
+  und Kommentar — YAML schneidet `title: a (Todo #1)` still zu `a (Todo`. Das gilt auch für
+  gewollte Kommentare (`n: 3 # später`); Listeneinträge, Werte in Anführungszeichen und
+  Kommentare auf eigener Zeile geben keinen Hinweis, ein unlesbarer Block keine Hinweise. Ein
+  `.md` ohne Frontmatter oder mit kaputtem bleibt ein gültiges Dokument: kein `isError`, kein
+  Code, kein neuer Vorgang des Vertrags. `delete` und `rename` tragen die Felder nie.
+  `frontmatter.Hints` teilt den Schnitt des Blocks mit `frontmatter.Parse`.
 - **Grenzen:** Inhalt UTF-8 ohne NUL-Byte, höchstens 1 MiB, leer erlaubt; über HTTP trägt ein
   Schreibvorgang bis 7 MiB, ebenso der MCP-Eingang des Nodes — so passt jedes Dokument auch in
   der größten Form, die JSON daraus macht. Schreiben setzt voraus, dass die Replica Collection

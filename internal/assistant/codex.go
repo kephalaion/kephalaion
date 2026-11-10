@@ -212,6 +212,7 @@ func (c *codexClient) read(ctx context.Context) (found, error) {
 	f := found{exists: cf.entry.table, raw: cf}
 	if cf.entry.table {
 		f.choice = helperChoice(cf.entry.helper)
+		f.url = cf.entry.url
 		return f, nil
 	}
 	// Keine eigene Tabelle. Nennt die Datei den Namen trotzdem, kann der

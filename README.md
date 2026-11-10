@@ -98,7 +98,10 @@ den Node noch nicht, weder global noch pro User; die vorgesehenen Wege stehen in
 
 Die config wird ohne Angabe gefunden: `--config`, `KEPHALAION_CONFIG`, die des Users, wenn es
 sie gibt, sonst `/etc/kephalaion/config.yaml`, wenn es sie gibt. `kephalaion status` nennt,
-welche gilt und woher.
+welche gilt und woher. Auf einem reinen Client — etwa einem Devcontainer, der die config des
+Hosts liest und dessen Node erreicht — fehlen Datenbank und Verzeichnis einer Rolle; `status`
+meldet sie dann als „läuft nicht hier“ statt als Fehler (Task 037). Clients fragen die Suche
+mit `kephalaion node client --json` ab, statt sie nachzubauen.
 
 ## Upgrade
 
@@ -335,6 +338,24 @@ Die Token-Dateien liegen unter `~/.config/kephalaion/tokens/<hub>/<account>.toke
 ein Verzeichnis mit dem Alias des Hub-Eintrags, darin je Account eine Datei. Die Erweiterung
 für VS Code findet sie dort.
 
+**Mehrere Accounts an einem Hub (Task 037):** Daneben liegt der Standard-Account des Hubs,
+`tokens/<hub>/default` — nur der Name, nie ein Token. Jeder Client wählt in derselben
+Reihenfolge: seine eigene Überschreibung (`--account`, in VS Code `kephalaion.accounts`), der
+Standard, die einzige Token-Datei; sonst fehlt die Wahl, mit den Kandidaten. `setup` setzt den
+Standard beim ersten Account eines Hubs (und, bevor ein zweiter dazukommt, den bisher einzigen);
+`node account list` markiert ihn.
+
+```sh
+kephalaion node account default privat         # zeigen, welcher gilt
+kephalaion node account default privat alice   # setzen; danach wie node mcp add --auto
+kephalaion node account default privat --unset
+```
+
+**Auskunft für Clients:** `kephalaion node client --json` sagt Clients wie k-playbook, welche
+config gilt, wo der Node dieses Rechners lauscht und welcher Account je Hub gilt —
+versioniert (`--format <n>`), ohne Datenbank, ohne Token
+([`docs/installation.md`](docs/installation.md), „Auskunft für Clients“).
+
 `rotate` erzeugt das neue Token am Node, schreibt es vor dem Aufruf nach
 `alice.token.pending`, meldet sich mit dem alten an und schickt dem Hub nur den Hash des
 neuen. Nach Erfolg ersetzt es die Datei und schreibt die Zeilen des Accounts in die Replica —
@@ -386,8 +407,10 @@ OpenCode und Codex als MCP-Server `kephalaion` ein, auf User-Ebene und für alle
 Token nie im Klartext (Claude Code und Codex holen die Header bei jeder Verbindung über
 `kephalaion node mcp headers`, OpenCode verweist auf die Token-Datei); VS Code meldet die
 Erweiterung (unten). `kephalaion node mcp status` zeigt je Assistent, ob er eingetragen ist,
-`remove` entfernt den Eintrag. `install.sh`, `node account setup` und `node account rotate`
-stoßen das von selbst an.
+`remove` entfernt den Eintrag. `install.sh`, `node account setup`, `node account rotate` und
+`node account default` stoßen das von selbst an. Der Helfer trägt `--account` nur für eine
+ausdrückliche Wahl und folgt sonst bei jeder Verbindung dem Standard-Account; ein Eintrag aus
+der Zeit vor Task 037 wird mit `node mcp remove`, danach `node mcp add` neu eingerichtet.
 Einzelheiten: [`docs/installation.md`](docs/installation.md), „Bei den Assistenten anmelden“.
 Einen Node auf einem anderen Rechner trägt `kephalaion node mcp add --node
 https://<name>/kephalaion --hub <alias>` ein — auch ohne eigene config; zuerst prüft es den Node
@@ -512,7 +535,12 @@ umbenennt oder löscht. Ein Verzeichnis geht als Ganzes: das Recht je Dokument d
 oder nichts, eine Revision. `created_by`/`updated_by` ist der User des Accounts; welcher
 Account über welchen Node schrieb, steht im Protokoll des Hubs (`actions`). Die Antwort nennt
 Adresse, Name, `id`, Revision, angelegt, geändert und Größe, bei einem Verzeichnis
-`kind: directory` und die Zahl der Dokumente (`count`). Die eigene Änderung steht schon in der
+`kind: directory` und die Zahl der Dokumente (`count`). Bei `create` und `write` einer `.md`
+prüft der Node das Frontmatter des Inhalts und warnt, ohne abzulehnen: `frontmatter_error`
+nennt den Grund, wenn es sich nicht lesen lässt (wie `list` und `read`), `frontmatter_hints`
+je unquotiertem Wert, den ein Kommentar auf seiner Zeile abschneidet (`title: a (Todo #1)`
+ergibt `a (Todo`), Zeile und Schlüssel — gespeichert ist in beiden Fällen, das sind keine
+Fehlercodes. Die eigene Änderung steht schon in der
 Replica, wenn die Antwort kommt — `read` liefert sofort die neue Revision, zweimal hintereinander
 speichern geht —, und der Node stößt den Abgleich dieses Hubs an, auch bei `sync_interval` `0`.
 `changes` meldet die eigene Änderung erst nach diesem Abgleich.
@@ -793,8 +821,9 @@ Ausgang werden gemeldet, nicht wiederholt; der Lauf geht weiter und endet unvoll
 Exit-Codes: 0 fertig, 1 Fehler, 2 falscher Aufruf, 3 unvollständig. Die Adresse des Nodes
 kommt aus `listen` der config oder `--node <url>` — auch ein Node hinter einem Proxy auf einem
 anderen Rechner, `https://<name>/kephalaion` (Zertifikat gegen die System-Roots oder
-`--ca-file`; `http` nur zu diesem Rechner und zu `host.docker.internal`) —, der Account aus `--account` oder der
-einzigen Token-Datei unter `tokens/<hub>/`, das Token aus ihr, `--token-file` oder
+`--ca-file`; `http` nur zu diesem Rechner und zu `host.docker.internal`) —, der Account aus `--account`, dem
+Standard-Account (`tokens/<hub>/default`) oder der einzigen Token-Datei unter `tokens/<hub>/`
+(fehlt die Wahl, bricht es mit den Kandidaten ab), das Token aus ihr, `--token-file` oder
 `--token-stdin` — nie als Argument, nie in einer Ausgabe.
 
 ```text
@@ -829,14 +858,16 @@ im Container; wie sie dort einen Node erreicht, ist noch nicht gebaut
 - **Einrichtung braucht sie keine.** Die Adresse des Nodes liest sie aus `listen` im
   Abschnitt `node:` der config (Einstellung `kephalaion.nodeUrl` zum Überschreiben), Account
   und Token aus `~/.config/kephalaion/tokens/<hub>/<account>.token` — das Verzeichnis ist der
-  Alias des Hubs, der Dateiname der Account. Liegen an einem Hub mehrere, wählt man einen
-  mit „Kephalaion: Account wählen“; die Wahl steht in der Einstellung `kephalaion.accounts`,
-  je Rechner. Ohne Wahl nimmt sie den ersten nach Namen und zeigt die Statusleiste gelb.
+  Alias des Hubs, der Dateiname der Account. Liegen an einem Hub mehrere, wählt sie wie die
+  Kommandozeile (Task 037): die Einstellung `kephalaion.accounts` („Kephalaion: Account
+  wählen“, je Rechner), sonst den Standard-Account (`kephalaion node account default`), sonst
+  die einzige Token-Datei. Trifft nichts zu, fehlt die Wahl: Für den Hub geht kein Paar hinaus,
+  die Statusleiste ist gelb, der Tooltip nennt die Kandidaten und die Herkunft der Wahl.
 - **Statusleiste:** `Keph <hub>` mit den Hubs, die dieser Client nutzt (Token-Datei unter
   `tokens/<hub>/`); der Tooltip zeigt, was `whoami` liefert — Version, je Hub Anmeldung,
   Account, User, Collections mit Rechten und Stand des Abgleichs. Gelb, wenn der Node nicht
-  erreichbar ist, eine Anmeldung nicht gilt, der Abgleich eines genutzten Hubs scheitert, kein
-  Account gewählt ist oder kein Hub genutzt wird. Ein Hub des Nodes, für den der Client kein
+  erreichbar ist, eine Anmeldung nicht gilt, der Abgleich eines genutzten Hubs scheitert, die
+  Wahl des Accounts fehlt oder kein Hub genutzt wird. Ein Hub des Nodes, für den der Client kein
   Token hat, ist kein Fehler und steht nur im Tooltip als „nicht genutzt“ — ein Node bedient
   viele Hubs, ein Client nutzt davon einige. Abgefragt alle 30 s.
 - **Menü** per Klick auf die Statusleiste: Status anzeigen (dasselbe als Text im Output

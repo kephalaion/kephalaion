@@ -89,7 +89,7 @@ func TestLoginsAndHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(logins, []Login{{Hub: "eigen", Account: "kp", File: one}}) {
+	if !reflect.DeepEqual(logins, []Login{{Hub: "eigen", Account: "kp", File: one, How: ByOnly}}) {
 		t.Fatalf("logins = %+v", logins)
 	}
 	if len(skipped) != 1 || skipped[0].Hub != "vm" || !reflect.DeepEqual(skipped[0].Accounts, []string{"alice", "bob"}) {
@@ -101,7 +101,7 @@ func TestLoginsAndHeaders(t *testing.T) {
 	if err != nil || len(skipped) != 0 {
 		t.Fatalf("skipped = %+v, %v", skipped, err)
 	}
-	want := []Login{{Hub: "eigen", Account: "kp", File: one}, {Hub: "vm", Account: "bob", File: bob}}
+	want := []Login{{Hub: "eigen", Account: "kp", File: one, How: ByOnly}, {Hub: "vm", Account: "bob", File: bob, How: ByOverride}}
 	if !reflect.DeepEqual(logins, want) {
 		t.Fatalf("logins = %+v", logins)
 	}

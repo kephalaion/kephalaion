@@ -137,30 +137,59 @@ function tokenAccounts() {
   return out;
 }
 
-// Der gewählte Account je Hub steht in der Einstellung kephalaion.accounts ({hub: account}).
+// Die Überschreibung je Hub steht in der Einstellung kephalaion.accounts ({hub: account}).
 function chosenAccounts() {
   return vscode.workspace.getConfiguration('kephalaion').get('accounts') || {};
 }
 
-// Welcher Account je Hub benutzt wird und warum: only (einziger), chosen (Einstellung),
-// first (mehrere, keiner oder ein unbekannter gewählt — der erste nach Namen).
-// Nur die Hubs aus hubSelection: An eine entfernte nodeUrl gehen nur die gewählten.
+// Der Standard-Account je Hub aus tokens/<hub>/default (Task 037; kephalaion node account default):
+// {hub: { account } | { error }}; ein Hub ohne die Datei fehlt. Gelesen wird nur die erste Zeile,
+// ein Name, nie ein Token; ein Fehler nennt den Inhalt nicht.
+function defaultAccounts() {
+  const base = tokensDir();
+  const out = {};
+  let hubs = [];
+  try {
+    hubs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory());
+  } catch {
+    return out;
+  }
+  for (const hub of hubs) {
+    let text;
+    try {
+      text = fs.readFileSync(path.join(base, hub.name, 'default'), 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') out[hub.name] = { error: e.code || 'nicht lesbar' };
+      continue;
+    }
+    out[hub.name] = rules.parseDefaultAccount(text);
+  }
+  return out;
+}
+
+// Welcher Account je Hub benutzt wird und warum — dieselbe Reihenfolge wie die CLI
+// (rules.resolveAccount): override (Einstellung kephalaion.accounts), default (Standard), only
+// (einzige Token-Datei). Fehlt die Wahl (missing) oder hat die Überschreibung keine Token-Datei,
+// steht der Hub ohne account und ohne token da: Kein Paar geht hinaus, Statusleiste und Tooltip
+// nennen die Kandidaten. Nur die Hubs aus hubSelection: An eine entfernte nodeUrl gehen nur die
+// gewählten.
 function readCredentials(log) {
   const base = tokensDir();
   const chosen = chosenAccounts();
+  const standards = defaultAccounts();
   const creds = {};
   const all = tokenAccounts();
   for (const hub of hubSelection().hubs) {
     const accounts = all[hub];
     if (!accounts) continue;
-    let account = accounts[0];
-    let how = accounts.length === 1 ? 'only' : 'first';
-    if (chosen[hub] && accounts.includes(chosen[hub])) {
-      account = chosen[hub];
-      how = 'chosen';
-    } else if (chosen[hub]) {
-      log(`Hub ${hub}: gewählter Account ${chosen[hub]} hat keine Token-Datei, nehme ${account}`);
+    const r = rules.resolveAccount(accounts, chosen[hub], standards[hub]);
+    for (const n of r.notes) log(`Hub ${hub}: ${n}`);
+    if (!r.account) {
+      if (r.missing) log(`Hub ${hub}: gewählter Account ${r.missing} hat keine Token-Datei — kein Rückfall`);
+      creds[hub] = { account: undefined, token: '', tokenId: '-', accounts, how: r.how, missing: r.missing, notes: r.notes };
+      continue;
     }
+    const { account, how } = r;
     const file = path.join(base, hub, `${account}.token`);
     let token = '';
     try {
@@ -177,8 +206,7 @@ function readCredentials(log) {
     } catch {
       // bleibt '-'
     }
-    const missing = how === 'first' && chosen[hub] ? chosen[hub] : undefined;
-    creds[hub] = { account, token, tokenId, accounts, how, missing };
+    creds[hub] = { account, token, tokenId, accounts, how, notes: r.notes };
   }
   return creds;
 }
@@ -205,10 +233,11 @@ function traceLogging() {
 }
 
 // Welcher Account je Hub in den MCP-Eintrag kommt — wie kephalaion node mcp headers, nur für
-// die Hubs aus hubSelection (rules.mcpLogins). Nur Namen, kein Token.
+// die Hubs aus hubSelection (rules.mcpLogins): Einstellung, Standard, einzige Token-Datei. Nur
+// Namen, kein Token.
 function mcpLogins() {
   const sel = hubSelection();
-  const out = rules.mcpLogins(tokenAccounts(), chosenAccounts(), sel.hubs);
+  const out = rules.mcpLogins(tokenAccounts(), chosenAccounts(), sel.hubs, defaultAccounts());
   if (sel.error) out.skipped.push(sel.error);
   return out;
 }
@@ -217,8 +246,9 @@ function mcpLogins() {
 // { hub: … }, Task 025) fehlt. Meldungen nennen nie ein Token.
 function mcpHeaders(log, paused) {
   const base = tokensDir();
-  const { logins, skipped } = mcpLogins();
+  const { logins, skipped, notes } = mcpLogins();
   for (const s of skipped) log(`MCP-Server: Hub ${s}`);
+  for (const n of notes) log(`MCP-Server: Hub ${n}`);
   const active = logins.filter((l) => {
     if (!paused || !paused[l.hub]) return true;
     log(`MCP-Server: Hub ${l.hub}: Paar ${l.account} pausiert (Anmeldung ungültig), nicht an den Server`);
@@ -229,7 +259,8 @@ function mcpHeaders(log, paused) {
 }
 
 // Stand, an dem sich zeigt, ob die Definition neu zu melden ist: Adresse, Einstellung, Trace,
-// Hubs mit ihren Accounts und die Token-Dateien (Name, Größe, Zeit) — ohne ihren Inhalt.
+// Hubs mit ihren Accounts, die Token-Dateien und je Hub die Datei default des Standards (Name,
+// Größe, Zeit) — ohne ihren Inhalt. So wird auch ein neuer Standard neu gemeldet (Task 037).
 function mcpState() {
   const base = tokensDir();
   const files = [];
@@ -241,6 +272,20 @@ function mcpState() {
       } catch {
         files.push(`${hub}/${a}:-`);
       }
+    }
+  }
+  let hubDirs = [];
+  try {
+    hubDirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    // kein tokens/: kein Standard
+  }
+  for (const hub of hubDirs) {
+    try {
+      const st = fs.statSync(path.join(base, hub, 'default'));
+      files.push(`${hub}/default:${st.size}:${st.mtimeMs}`);
+    } catch {
+      // kein Standard an diesem Hub
     }
   }
   return JSON.stringify([nodeUrl() || '', mcpEnabled(), traceLogging(), chosenAccounts(), chosenHubs() || [],
@@ -587,18 +632,29 @@ class Status {
     return (h.collections || []).filter((c) => (c.rights || []).includes('read'));
   }
 
-  // Hinweis zur Wahl des Accounts eines Hubs, leer bei nur einem Account.
+  // Die Herkunft der Wahl des Accounts eines Hubs (Task 037): Einstellung, Standard oder einzige
+  // Token-Datei; bei „Wahl fehlt“ die Kandidaten, bei einer Überschreibung ohne Token-Datei sie —
+  // jeweils mit „Account wählen“; dazu ein Standard ohne Token-Datei. Leer ohne Zugangsdaten.
   accountNote(hub) {
     const c = this.node.credentials()[hub];
-    if (!c || c.accounts.length < 2) return '';
-    if (c.missing) return `gewählter Account ${c.missing} hat keine Token-Datei — benutzt ${c.account}; wählen im Menü`;
-    if (c.how === 'first') return `mehrere Accounts (${c.accounts.join(', ')}), keiner gewählt — benutzt ${c.account}; wählen im Menü`;
-    return `gewählt aus ${c.accounts.join(', ')}`;
+    if (!c) return '';
+    let note;
+    if (c.missing) {
+      note = `gewählter Account ${c.missing} hat keine Token-Datei (Einstellung kephalaion.accounts) — kein Rückfall; `
+        + `Kandidaten: ${c.accounts.join(', ')}; „Account wählen“ im Menü`;
+    } else if (!c.account) {
+      note = `Wahl fehlt — Kandidaten: ${c.accounts.join(', ')}; „Account wählen“ im Menü oder kephalaion node account default`;
+    } else {
+      note = `Account ${c.account} (${rules.choiceText(c.how)})`;
+      if (c.accounts.length > 1) note += `, aus ${c.accounts.join(', ')}`;
+    }
+    for (const n of c.notes || []) note += `; ${n}`;
+    return note;
   }
 
-  // Hubs, an denen mehrere Accounts liegen und keiner gewählt ist.
+  // Hubs, an denen die Wahl fehlt: mehrere Accounts, keine Einstellung, kein Standard.
   unchosen() {
-    return Object.entries(this.node.credentials()).filter(([, c]) => c.how === 'first').map(([h]) => h);
+    return Object.entries(this.node.credentials()).filter(([, c]) => c.how === 'missing').map(([h]) => h);
   }
 
   // Die Regel der Statusleiste auf den Hubs von whoami (rules.hubStatus): genutzt sind die Hubs
@@ -1299,7 +1355,7 @@ function activate(context) {
           const active = creds[hub] && creds[hub].account === account;
           items.push({
             label: `${active ? '$(check)' : '$(blank)'} ${account}`,
-            description: active ? (creds[hub].how === 'first' ? 'benutzt, nicht gewählt' : 'aktiv') : '',
+            description: active ? `aktiv — ${rules.choiceText(creds[hub].how)}` : '',
             detail: `Hub ${hub}`,
             hub,
             account,

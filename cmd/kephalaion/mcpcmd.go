@@ -70,7 +70,8 @@ Kommandos:
            mit Token. Im Terminal bricht headers deshalb ab. Außer im
            Terminal und bei falschem Aufruf endet es immer mit Exit 0 und
            gültigem JSON: Ein Hub ohne eindeutiges, lesbares Token (mehrere
-           Accounts ohne Wahl, die gewählte Datei fehlt oder ist unlesbar)
+           Accounts ohne Wahl und ohne Standard, die gewählte Datei fehlt
+           oder ist unlesbar)
            fehlt im Objekt, mit einer Meldung ohne Token auf stderr. Der
            Assistent verbindet dann ohne Anmeldung für diesen Hub; das
            Werkzeug whoami zeigt es.
@@ -83,12 +84,31 @@ Kommandos:
 
 Accounts: Token-Dateien liegen unter <tokens-dir>/<hub>/<account>.token (eine
 Zeile, 0600; .pending wird übergangen), wie bei kephalaion node dir. Je Hub
-gilt die einzige Token-Datei. Liegen mehrere da, wählt --account
-<hub>=<account>; add schreibt die Wahl für jeden Hub ausdrücklich in den
-Eintrag. Ohne --account bleibt die Wahl aus dem Eintrag des Assistenten,
-sonst gilt die der anderen Einträge; ein gewählter Account ohne Token-Datei
-gilt als keine Wahl. Ein Hub mit mehreren Accounts ohne Wahl wird übergangen
-und genannt, die übrigen werden eingetragen (Exit 1).
+gilt in dieser Reihenfolge: (1) die ausdrückliche Wahl — --account
+<hub>=<account>, sonst die Wahl im eigenen Eintrag, (2) der Standard-Account
+(<tokens-dir>/<hub>/default, kephalaion node account default), (3) die
+einzige Token-Datei. Nennt der Standard einen Account ohne Token-Datei, gibt
+es einen Hinweis, und die nächste Regel greift. Aus den Einträgen anderer
+Assistenten wird keine Wahl übernommen; das tut der Standard.
+
+  Helfer (Claude Code, Codex): --account steht nur für eine ausdrückliche
+  Wahl darin, und sie bleibt bei weiteren add. Alle übrigen Hubs löst der
+  Helfer bei jeder Verbindung auf — ein neuer Standard wirkt dort ohne add.
+  OpenCode: Der Account steht immer fest im Eintrag (Header und Verweis auf
+  die Token-Datei); ausdrücklich oder aufgelöst ist dort nicht zu
+  unterscheiden. add ohne --account lässt ihn stehen, solange seine
+  Token-Datei liegt. Trägt der Eintrag den bisherigen Standard, zieht
+  kephalaion node account default ihn auf den neuen nach; ein anderer Account
+  gilt als ausdrückliche Wahl.
+
+Ein gewählter Account aus einem Eintrag ohne Token-Datei gilt als keine Wahl.
+Ein Hub mit mehreren Accounts ohne Wahl und ohne Standard wird übergangen und
+genannt, die übrigen werden eingetragen (Exit 1). status nennt jede
+ausdrückliche Wahl, die vom Standard abweicht.
+
+Umstieg (Task 037): Ein Eintrag aus der Zeit davor trägt im Helfer --account
+für jeden Hub, und das bleibt als ausdrückliche Wahl. Damit er dem Standard
+folgt: kephalaion node mcp remove, danach kephalaion node mcp add.
 
 Ein Node auf einem anderen Rechner (--node):
   --node <url> trägt statt der Adresse aus der config diese ein: ein Node
@@ -126,8 +146,8 @@ Optionen:
   --assistant name           beschränkt auf diesen Assistenten (claude,
                              opencode, codex, vscode); wiederholbar. Ohne
                              Angabe alle gefundenen
-  --account <hub>=<account>  wählt den Account eines Hubs mit mehreren
-                             Token-Dateien; wiederholbar
+  --account <hub>=<account>  wählt den Account eines Hubs ausdrücklich, vor
+                             dem Standard; wiederholbar
   --dry-run                  add: nur melden, was geschähe
   --auto                     add: automatischer Anstoß (siehe oben); nicht
                              mit --node
@@ -445,13 +465,15 @@ func registerAssistants(ctx context.Context, name string, target assistant.Targe
 		}
 	}
 	for _, n := range rep.Notes {
-		fmt.Fprintf(stderr, "%s: %s\n", name, n)
+		fmt.Fprintf(stderr, "%s: Hinweis: %s\n", name, n)
 	}
 	for _, s := range rep.SkippedHubs {
 		fmt.Fprintf(stderr, "%s: Hub %s übergangen: %s\n", name, s.Hub, s.Reason)
 		if len(s.Accounts) > 0 {
-			fmt.Fprintf(stderr, "  Wählen: kephalaion node mcp add --account %s=<account> [--assistant <name>] — ohne --assistant "+
-				"trägt add bei allen gefundenen Assistenten ein, auch nach einem remove für einzelne.\n", s.Hub)
+			fmt.Fprintf(stderr, "  Wählen für alle Clients dieses Rechners: kephalaion node account default %s <account>; "+
+				"nur für einen Eintrag: kephalaion node mcp add --account %s=<account> [--assistant <name>] — ohne "+
+				"--assistant trägt add bei allen gefundenen Assistenten ein, auch nach einem remove für einzelne.\n",
+				s.Hub, s.Hub)
 		}
 	}
 	if rep.NoLogin && !opts.Auto && len(rep.SkippedHubs) == 0 {
@@ -584,7 +606,7 @@ func runNodeMCPStatus(args []string, stdout, stderr io.Writer) int {
 	} else if target, err = assistantTarget(*c.cfg); err != nil {
 		return c.fail(err)
 	}
-	statuses, skipped, err := newAssistantManager().Status(ctx, target, names)
+	statuses, skipped, notes, err := newAssistantManager().Status(ctx, target, names)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -606,9 +628,15 @@ func runNodeMCPStatus(args []string, stdout, stderr io.Writer) int {
 		for _, w := range st.Warnings {
 			fmt.Fprintf(stdout, "  Warnung: %s\n", w)
 		}
+		for _, d := range st.Deviations {
+			fmt.Fprintf(stdout, "  Hinweis: %s\n", d)
+		}
 	}
 	for _, s := range skipped {
 		fmt.Fprintf(stdout, "Hub %s ohne Anmeldung: %s\n", s.Hub, s.Reason)
+	}
+	for _, n := range notes {
+		fmt.Fprintf(stdout, "Hinweis: %s\n", n)
 	}
 	return code
 }
@@ -658,6 +686,17 @@ func runNodeMCPHeaders(args []string, stdout, stderr io.Writer) int {
 		headers, unread = assistant.Headers(logins)
 		for _, s := range append(skipped, unread...) {
 			fmt.Fprintf(stderr, "%s: Hub %s ohne Anmeldung: %s\n", name, s.Hub, s.Reason)
+		}
+		// Hinweise zur Wahl, etwa ein Standard ohne Token-Datei — ohne Token.
+		for _, l := range logins {
+			for _, n := range l.Notes {
+				fmt.Fprintf(stderr, "%s: Hinweis: Hub %s: %s\n", name, l.Hub, n)
+			}
+		}
+		for _, s := range skipped {
+			for _, n := range s.Notes {
+				fmt.Fprintf(stderr, "%s: Hinweis: Hub %s: %s\n", name, s.Hub, n)
+			}
 		}
 	}
 	out, err := json.Marshal(headers)

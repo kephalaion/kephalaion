@@ -79,7 +79,17 @@ Ausführlich: [`konzept.md`](konzept.md).
   Anfrage mit Token, `nicht geprüft`) — pro User wie global, nur Information. Exit 1,
   wenn eine Datenbank fehlt oder nicht passt oder es die config des Users und die globale
   nebeneinander gibt (zwei Arten auf einem Rechner); bei der globalen config ohne Leserecht
-  auf die Datenbanken nur ein Hinweis, Exit 0.
+  auf die Datenbanken nur ein Hinweis, Exit 0. Fehlen die Datenbankdatei einer Rolle **und**
+  ihr Verzeichnis, heißt die Rolle **läuft nicht hier** (Task 037): ein **pure client**, kein
+  Fehler — der Node mit `Antwort:` und `Anmeldung:`, der Hub ohne beides. Fehlt nur die Datei,
+  bleibt es ein Fehler.
+- **pure client** (reiner Client, Task 037) — ein Rechner, der die config eines anderen liest
+  und dessen Node erreicht, ohne selbst eine Rolle zu tragen: etwa ein **devcontainer** mit der
+  eingebundenen config des Hosts, dessen `127.0.0.1:7433` über einen Weiterleiter beim Node des
+  Hosts ankommt. `status` meldet dort **läuft nicht hier**. Grenze: Ein ganz gelöschtes
+  Datenverzeichnis auf einem eingerichteten Rechner sieht genauso aus. Nicht zu verwechseln mit
+  einem Client ohne eigenen Node, der einen Node auf einem anderen Rechner über `https` nutzt
+  (`installation.md`, „Ein Client ohne eigenen Node“).
 - **client** (MCP-Client) — was per MCP mit dem Node redet: Claude Code, Cursor, OpenCode,
   k-playbook. Für ihn ist der Node der MCP-Server. Die KI im Client sieht Name und Token nicht.
 - **header** (Header-Paar) — wie ein Client sich am Node anmeldet, je Hub ein Paar:
@@ -310,7 +320,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   Helfer, fremder Inhalt); bei `vscode` „über die Erweiterung“.
 - **headers helper** (Helfer) — die Kommandozeile, die ein Assistent bei jeder Verbindung
   aufruft, um die Header-Paare zu bekommen: `<absoluter Pfad>/kephalaion node mcp headers
-  --tokens-dir <pfad> [--hub <alias>]… [--account <hub>=<account>]…`. `node mcp headers` gibt
+  --tokens-dir <pfad> [--hub <alias>]… [--account <hub>=<account>]…` — `--account` nur für
+  eine ausdrückliche Wahl (Task 037); alle übrigen Hubs löst der Helfer bei jeder Verbindung
+  über den **default account** bzw. die einzige Token-Datei auf. `node mcp headers` gibt
   die Header-Paare aller Hubs mit Token-Datei (mit **--hub** nur dieser) als ein JSON-Objekt aus (`{"X-Keph-Account-<alias>":"…",
   "X-Keph-Token-<alias>":"…"}`), ohne Token-Datei `{}`. Es ist die einzige Ausgabe mit Token:
   nur, wenn die Standardausgabe kein Terminal ist. Außer im Terminal und bei falschem Aufruf
@@ -320,11 +332,14 @@ Ausführlich: [`konzept.md`](konzept.md).
   (`<pfad>/<hub>/<account>.token`); ohne Angabe `tokens/` neben der config des Users. Der
   **headers helper** nennt es ausdrücklich, weil ein Assistent ihn mit anderer Umgebung
   aufruft (Codex ohne `XDG_CONFIG_HOME`).
-- **--account** (bei `node mcp`) — `--account <hub>=<account>`, wiederholbar: wählt je Hub den
-  Account, wenn unter `tokens/<hub>/` mehrere Token-Dateien liegen. `add` schreibt die Wahl für
-  jeden Hub ausdrücklich in den Eintrag; ohne Angabe bleibt die Wahl aus dem Eintrag. Ein Hub
-  mit mehreren Accounts ohne Wahl wird übergangen und genannt. (Bei `node dir` und `node whoami`
-  nennt `--account <name>` nur den Account.)
+- **--account** (bei `node mcp`) — `--account <hub>=<account>`, wiederholbar: die ausdrückliche
+  Wahl des Accounts je Hub, vor dem **default account** (Task 037). `add` schreibt nur sie in
+  den Eintrag, und sie bleibt bei weiteren `add`, solange ihre Datei liegt; aus den Einträgen
+  anderer Assistenten wird keine Wahl übernommen. Ein Hub ohne Wahl, ohne Standard und mit
+  mehreren Token-Dateien wird übergangen und genannt. Bei OpenCode steht der Account immer fest
+  im Eintrag; `add` ohne `--account` lässt ihn stehen, solange seine Token-Datei existiert. (Bei
+  `node dir` nennt `--account <name>` den Account vor dem Standard, bei `node whoami` nur den
+  Account; bei `node client` ist es die Überschreibung des Clients, ohne Rückfall.)
 - **--hub** (Wahl der Hubs) — bei `node mcp add|status --node <url>`: `--hub <alias>`,
   wiederholbar, nennt die Hubs, deren Header-Paare an einen Node mit **entfernter** Adresse
   gehen (Task 023); `<alias>` ist der Hub-Eintrag am entfernten Node, und so heißt auch das
@@ -341,6 +356,36 @@ Ausführlich: [`konzept.md`](konzept.md).
   dem Node aus der config. Er ändert nur Assistenten, die
   schon einen Eintrag `kephalaion` haben; hat noch keiner der gefundenen einen, trägt er wie
   `add` bei allen gefundenen ein. Ohne Node in der config endet er ohne Meldung mit Exit 0.
+- **default account** (Standard-Account, Task 037) — je Rechner und Hub der Account, den alle
+  Clients ohne eigene Wahl nehmen: die Datei `tokens/<hub>/default` neben den Token-Dateien, nur
+  der Name und eine Zeilenschaltung, `0600`, nie ein Token, atomar geschrieben. **Reihenfolge der
+  Wahl** in jedem Client: (1) die eigene Überschreibung (`--account` an `node mcp add|headers`,
+  `node dir` und **node client**, `kephalaion.accounts` in VS Code), (2) der Standard, (3) die
+  einzige Token-Datei; sonst **Wahl fehlt**, mit den Kandidaten. Ein Standard ohne Token-Datei
+  ergibt einen Hinweis, dann greift die nächste Regel. Gesetzt mit **node account default**,
+  beim ersten Account eines Hubs von **node account setup**; **node account list** markiert ihn
+  (Spalte `STANDARD`, im JSON `default`). Nicht in der config: Die beschreibt die Installation,
+  `tokens/` gibt es bei beiden Arten und im **devcontainer**.
+- **node account default** — `kephalaion node account default <hub> [<account> | --unset]`
+  (Task 037): ohne Account zeigen, mit Account setzen (er braucht eine Token-Datei), mit
+  `--unset` entfernen. Nach dem Setzen mit eigenem Node wie **--auto**; ein OpenCode-Eintrag, der
+  den bisherigen Standard trägt (gab es keinen: die bisher einzige Token-Datei), folgt dem neuen,
+  einer mit anderem Account bleibt als ausdrückliche Wahl. Genannt wird jeder Eintrag, dessen
+  ausdrückliche Wahl vom neuen Standard abweicht. Ohne eigenen Node kein `add`: Claude Code und
+  Codex folgen dem Standard über den **headers helper**, für OpenCode nennt es den Weg mit
+  `--node`. Exit 0, 1 (keine Token-Datei, nicht schreibbar), 2 (falscher Aufruf).
+- **node client** (Auskunft für Clients, Task 037) — `kephalaion node client [--json] [--format
+  <n>] [--no-probe] [--config pfad] [--hub <alias>]… [--account <hub>=<account>]…`: sagt Clients
+  außerhalb dieses Repos (etwa k-playbook), welche config gilt (`path`, `source`
+  `flag|env|user|system|none`, `exists`, `problem`), wo der **lokale** Node lauscht (`listen`,
+  `url`, `source` `config|default`, `reachable` aus einer Probe ohne Token, `version`) und
+  welcher Account je Hub gilt (`account`, `choice` `override|default|only|missing`, `tokenFile`,
+  `candidates`, `pending`, `notes`) — dieselbe Suche und Reihenfolge der Wahl wie in der CLI.
+  Mit `--json` genau ein Objekt auf stdout, versioniert über `format` (eine höhere Fassung nur,
+  wenn ein Feld umbenannt oder entfernt wird oder sich eine Bedeutung ändert; Clients rufen mit
+  `--format <n>` und übergehen unbekannte Felder). Öffnet keine Datenbank, schickt keine Anfrage
+  mit Token, nennt kein Token. Exit 0, sobald die Auskunft entstand; 2 bei falschem Aufruf, auch
+  einem unbekannten `--format` (`installation.md`, „Auskunft für Clients“).
 - **kephalaion.nodeUrl** — Einstellung der Erweiterung für VS Code: die Adresse des Nodes als
   **node address** (Basis ohne `/mcp`), leer `listen` der config. Seit 0.0.7 (Task 023)
   geprüft wie `--node`: `http` nur zu Loopback und `host.docker.internal`, sonst `https`;
@@ -364,7 +409,7 @@ Ausführlich: [`konzept.md`](konzept.md).
   **kephalaion.hubs** gewählten —, dazu jeder Hub, den `whoami` mit `login` `ok` oder `invalid`
   meldet (der Node hat ein Paar gesehen). Ein Node bedient viele Hubs, ein Client nutzt davon
   einige: Die Statusleiste nennt nur die genutzten und warnt nur über sie (`invalid`, `missing`
-  trotz Token-Datei, Fehler im Abgleich, mehrere Accounts ohne Wahl) — und wenn kein Hub genutzt
+  trotz Token-Datei, Fehler im Abgleich, Wahl fehlt (Task 037)) — und wenn kein Hub genutzt
   ist. Ein Hub ohne Token des Clients ist `missing` und kein Fehler; Tooltip und „Kephalaion:
   Status anzeigen“ führen ihn als „nicht genutzt“. Regel `hubStatus` in `vscode/rules.js`.
 - **probe** (Probe, Task 025) — ein `whoami` der Erweiterung für VS Code an eine entfernte
@@ -528,7 +573,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   `list` und `read` liefern ihn mit dem Parameter `frontmatter` als JSON-Objekt (Feld
   `frontmatter`, bei einem Fehler `frontmatter_error` mit kurzem Grund; ohne Frontmatter fehlt
   beides). Gelesen werden nur die ersten 64 KiB. Ein Verzeichnis und eine Collection haben das
-  Frontmatter ihrer **README.md**. Paket `internal/frontmatter` (Task 015).
+  Frontmatter ihrer **README.md**. Paket `internal/frontmatter` (Task 015). `create` und `write`
+  einer `.md` prüfen den geschriebenen Inhalt und tragen in der Antwort `frontmatter_error`
+  (derselbe Grund) oder `frontmatter_hints` (Task 036): je unquotiertem Wert eines Mappings mit
+  Kommentar auf derselben Zeile ein Satz mit Zeile und Schlüssel — YAML schneidet einen solchen
+  Wert am „ #“ ab. Warnung, keine Ablehnung.
 - **directory** (Verzeichnis) — ein Präfix von Namen bis zu einem `/`; es gibt es, solange ein
   lebendes Dokument darunter liegt. `list` zeigt die Verzeichnisse der nächsten Ebene als
   eigene Einträge (Art `directory`), `read` erkennt eines an seinem Namen.
@@ -608,7 +657,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   und `source_unreachable` (Quelle nicht erreichbar), alle mit einem Status unter 500. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
   `unauthenticated` und `unsupported_version` reicht er durch. Die Werkzeuge melden einen
   Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
-  `message`; Clients entscheiden nach dem Code, nicht nach der Meldung.
+  `message`; Clients entscheiden nach dem Code, nicht nach der Meldung. `frontmatter_error` und
+  `frontmatter_hints` in der Antwort von `create` und `write` (Task 036) sind keine Fehlercodes:
+  Sie stehen neben einem Erfolg, ohne `isError` — gespeichert ist.
 - **fetch_release** — Werkzeug des Nodes: lässt den Hub das neueste Release in `defaults/` einer
   Collection mit Quelle holen (Adresse `<hub>:<collection>`), danach stößt der Node den Abgleich
   an. Liest keine URLs — der Name ist bewusst nicht `fetch`, das bei Assistenten üblich zum Lesen

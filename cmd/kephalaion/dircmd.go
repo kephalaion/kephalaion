@@ -75,10 +75,15 @@ Anmeldung:
   die Kommandozeile den Node ohne Token an; antwortet statt seiner der Proxy
   (401, Weiterleitung, HTML), heißt das: Präfix falsch oder Anmeldung des
   Proxys. <hub> ist der Alias des Hub-Eintrags am Node, den --node nennt.
-  Der Account ist --account, ohne Angabe der einzige unter
-  <config-dir>/tokens/<hub>/ (<account>.token; .pending wird übergangen); bei
-  mehreren nennt der Fehler sie. Das Token kommt aus dieser Datei,
-  --token-file oder --token-stdin — nie als Argument, nie in einer Ausgabe.
+  Der Account ist --account, ohne Angabe der Standard-Account des Hubs
+  (<config-dir>/tokens/<hub>/default, gesetzt mit kephalaion node account
+  default), sonst der einzige unter <config-dir>/tokens/<hub>/
+  (<account>.token; .pending wird übergangen). Nennt der Standard einen
+  Account ohne Token-Datei, gibt es einen Hinweis, und es gilt die einzige.
+  Liegen mehrere da und gibt es keinen Standard, fehlt die Wahl: Der Fehler
+  nennt die Kandidaten. Ein --account ohne Token-Datei ist ein Fehler, ohne
+  Rückfall. Das Token kommt aus dieser Datei, --token-file oder --token-stdin
+  — nie als Argument, nie in einer Ausgabe.
 
 Ausgabe: eine Zeile je Vorgang (+ angelegt, ~ geändert, - gelöscht,
 ! gemeldet oder übergangen), zuletzt der Bericht: angelegt, geändert,
@@ -98,7 +103,8 @@ Optionen:
                        der config
   --ca-file pfad       mit --node https://…: das Zertifikat gegen diese CA
                        (PEM) prüfen statt gegen die System-Roots
-  --account name       der Account; sonst der einzige mit Token-Datei
+  --account name       der Account; sonst der Standard, sonst der einzige
+                       mit Token-Datei
   --token-file pfad    Datei mit dem Token (eine Zeile)
   --token-stdin        das Token als eine Zeile von der Standardeingabe
   --exclude glob       Namen (Datei oder Ordner, jede Ebene) auslassen;
@@ -326,8 +332,9 @@ func (d *dirCommand) address() (nodeAddress, error) {
 }
 
 // credentials liefert Account und Token: --token-file oder --token-stdin
-// mit --account, sonst die Token-Datei unter tokens/<hub>/ — die des
-// Accounts oder die einzige.
+// mit --account, sonst die Token-Datei unter tokens/<hub>/ nach der
+// Reihenfolge der Wahl (Task 037): --account, der Standard, die einzige.
+// Fehlt die Wahl, bricht es mit den Kandidaten ab.
 func (d *dirCommand) credentials(hub string) (account, token string, err error) {
 	switch {
 	case *d.tokenFile != "":
@@ -337,27 +344,30 @@ func (d *dirCommand) credentials(hub string) (account, token string, err error) 
 		token, err = readToken(d.stdin)
 		return *d.account, token, err
 	}
-	// Dieselben Token-Dateien wie node mcp (internal/assistant).
+	// Dieselben Token-Dateien und dieselbe Wahl wie node mcp
+	// (internal/assistant).
 	base, err := assistant.TokensDir()
 	if err != nil {
 		return "", "", err
 	}
 	dir := filepath.Join(base, hub)
-	account = *d.account
-	if account == "" {
-		names, err := assistant.Accounts(dir)
-		if err != nil {
-			return "", "", err
-		}
-		switch len(names) {
-		case 0:
-			return "", "", fmt.Errorf("keine Token-Datei unter %s (<account>.token); --account mit --token-file oder --token-stdin", dir)
-		case 1:
-			account = names[0]
-		default:
-			return "", "", fmt.Errorf("mehrere Token-Dateien unter %s: %s; --account wählt", dir, strings.Join(names, ", "))
-		}
+	r := assistant.Resolve(base, hub, *d.account)
+	for _, n := range r.Notes {
+		fmt.Fprintf(d.c.stderr, "%s: Hinweis: Hub %s: %s\n", d.c.name, hub, n)
 	}
-	token, err = readTokenFile(assistant.TokenFile(base, hub, account))
-	return account, token, err
+	switch {
+	case r.How == assistant.ByOverride && r.File == "":
+		// Ohne Rückfall: Die Meldung nennt die fehlende Datei.
+		return "", "", fmt.Errorf("Token-Datei %s fehlt: %s hat keine Token-Datei an diesem Hub",
+			assistant.TokenFile(base, hub, r.Account), r.Account)
+	case r.File != "":
+		token, err = readTokenFile(r.File)
+		return r.Account, token, err
+	case len(r.Candidates) > 1:
+		return "", "", fmt.Errorf("Wahl fehlt: mehrere Token-Dateien unter %s: %s, kein Standard; --account wählt, "+
+			"oder dauerhaft: kephalaion node account default %s <account>", dir, strings.Join(r.Candidates, ", "), hub)
+	case r.Reason != "":
+		return "", "", errors.New(r.Reason)
+	}
+	return "", "", fmt.Errorf("keine Token-Datei unter %s (<account>.token); --account mit --token-file oder --token-stdin", dir)
 }

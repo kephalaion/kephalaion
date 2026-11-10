@@ -71,6 +71,7 @@ func (c *claudeClient) read(_ context.Context) (found, error) {
 		return f, nil
 	}
 	f.raw = fields
+	f.url, _ = fields["url"].(string)
 	if helper, ok := fields["headersHelper"].(string); ok {
 		f.choice = helperChoice(helper)
 	}

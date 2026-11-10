@@ -163,12 +163,17 @@ type entry struct {
 	logins []Login
 }
 
-// choice ist die Wahl, die der Eintrag ausdrücklich trägt: je Hub mit
-// Anmeldung der Account.
+// choice ist die Wahl, die der Helfer ausdrücklich trägt (Task 037): nur
+// die Hubs, deren Account ausdrücklich gewählt ist (--account oder die Wahl
+// im eigenen Eintrag). Alle übrigen löst der Helfer bei jeder Verbindung
+// auf — Standard, einzige Token-Datei —, ein neuer Standard wirkt dort also
+// ohne add.
 func (e entry) choice() Choice {
 	c := Choice{}
 	for _, l := range e.logins {
-		c[l.Hub] = l.Account
+		if l.How == ByOverride {
+			c[l.Hub] = l.Account
+		}
 	}
 	return c
 }
@@ -183,8 +188,12 @@ type found struct {
 	// exists: Es gibt einen Eintrag kephalaion, gleich welchen Inhalts.
 	exists bool
 	// choice ist die Wahl je Hub, die der Eintrag trägt — leer bei fremdem
-	// Inhalt.
+	// Inhalt. Beim Helfer ist es die ausdrückliche (--account), bei OpenCode
+	// jeder Account im Eintrag: Dort steht er immer fest, ausdrücklich oder
+	// aufgelöst ist nicht zu unterscheiden.
 	choice Choice
+	// url ist die Adresse, die der Eintrag nennt; leer bei fremdem Inhalt.
+	url string
 	// differs sagt, warum der Eintrag nicht der gewünschte ist; leer heißt:
 	// Er stimmt. Gefüllt erst nach compare.
 	differs string
@@ -301,6 +310,11 @@ type AddOptions struct {
 	// nur Assistenten mit Eintrag; hat keiner der gefundenen einen, trägt er
 	// bei allen gefundenen ein.
 	Auto bool
+	// Follow nennt je Hub den bisherigen Standard (gab es keinen: die bisher
+	// einzige Token-Datei), für node account default (Task 037): Ein
+	// OpenCode-Eintrag, der ihn trägt, folgt dem neuen Standard; einer mit
+	// anderem Account bleibt als ausdrückliche Wahl.
+	Follow map[string]string
 }
 
 // selection liefert die Assistenten, um die es geht: die genannten oder
@@ -339,9 +353,9 @@ type state struct {
 }
 
 // readAll liest die Einträge aller gefundenen Assistenten — auch der nicht
-// genannten, denn ihre Wahl der Accounts zählt für die genannten (siehe
-// resolveChoice). selected sind die gefundenen aus names; results nennt die
-// übrigen aus names (VS Code, nicht gefunden).
+// genannten, denn ob einer schon einen Eintrag hat, zählt für den
+// automatischen Anstoß. selected sind die gefundenen aus names; results nennt
+// die übrigen aus names (VS Code, nicht gefunden).
 func (m *Manager) readAll(ctx context.Context, names []string) (selected, all []*state, results []Result) {
 	want := map[string]bool{}
 	for _, n := range names {
@@ -391,12 +405,12 @@ func (m *Manager) Add(ctx context.Context, t Target, opts AddOptions) (Report, e
 			results = append(results, res)
 			continue
 		}
-		choice, notes := resolveChoice(t.TokensDir, s, all, opts.Choice)
-		rep.Notes = appendNew(rep.Notes, notes...)
+		choice := resolveChoice(t.TokensDir, s, opts.Choice, opts.Follow)
 		logins, skip, err := t.logins(choice)
 		if err != nil {
 			return Report{}, err
 		}
+		rep.Notes = appendNew(rep.Notes, hubNotes(logins, skip)...)
 		for _, sk := range skip {
 			skipped[sk.Hub] = sk
 		}
@@ -496,18 +510,24 @@ type Status struct {
 	Detail string
 	// Warnings nennen, was am Eintrag auffällt.
 	Warnings []string
-	Err      error
+	// Deviations nennen je Hub eine ausdrückliche Wahl im Eintrag, die vom
+	// Standard abweicht (Task 037).
+	Deviations []string
+	Err        error
 }
 
 // Status zeigt je Assistent, ob der Node eingetragen ist, fehlt oder
-// abweicht — gemessen an dem, was Add ohne --account eintragen würde.
-func (m *Manager) Status(ctx context.Context, t Target, assistants []string) ([]Status, []SkippedHub, error) {
+// abweicht — gemessen an dem, was Add ohne --account eintragen würde — und
+// jede ausdrückliche Wahl, die vom Standard abweicht. notes sind die
+// Hinweise zur Wahl je Hub (etwa ein Standard ohne Token-Datei).
+func (m *Manager) Status(ctx context.Context, t Target, assistants []string) (out []Status, hubs []SkippedHub,
+	notes []string, err error) {
 	names := assistants
 	if len(names) == 0 {
 		names = Names
 	}
 	names = selection(names)
-	states, all, results := m.readAll(ctx, names)
+	states, _, results := m.readAll(ctx, names)
 	byName := map[string]Status{}
 	for _, r := range results {
 		st := Status{Assistant: r.Assistant, State: StateNotFound}
@@ -524,15 +544,25 @@ func (m *Manager) Status(ctx context.Context, t Target, assistants []string) ([]
 			byName[s.name] = st
 			continue
 		}
-		choice, _ := resolveChoice(t.TokensDir, s, all, nil)
+		choice := resolveChoice(t.TokensDir, s, nil, nil)
 		logins, skip, err := t.logins(choice)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
+		notes = appendNew(notes, hubNotes(logins, skip)...)
 		for _, sk := range skip {
 			skipped[sk.Hub] = sk
 		}
 		st.Logins, st.Warnings = logins, s.f.warnings
+		for _, l := range logins {
+			if l.How != ByOverride {
+				continue
+			}
+			if r := Resolve(t.TokensDir, l.Hub, ""); r.How == ByDefault && r.Account != l.Account {
+				st.Deviations = append(st.Deviations, fmt.Sprintf("ausdrückliche Wahl %s=%s im Eintrag, nicht der "+
+					"Standard %s", l.Hub, l.Account, r.Account))
+			}
+		}
 		switch {
 		case !s.f.exists:
 			st.State = StateMissing
@@ -545,69 +575,57 @@ func (m *Manager) Status(ctx context.Context, t Target, assistants []string) ([]
 		}
 		byName[s.name] = st
 	}
-	var out []Status
 	for _, n := range names {
 		out = append(out, byName[n])
 	}
-	var hubs []SkippedHub
 	for _, hub := range sortedKeys(skipped) {
 		hubs = append(hubs, skipped[hub])
 	}
-	return out, hubs, nil
+	return out, hubs, notes, nil
 }
 
-// resolveChoice ermittelt die Wahl je Hub für den Eintrag eines Assistenten:
-// zuerst --account, dann der eigene Eintrag, dann die anderen Einträge. Ein
-// gewählter Account aus einem Eintrag, dessen Token-Datei fehlt, gilt als
-// keine Wahl; widersprechen sich die anderen, gilt der Hub als ohne Wahl und
-// notes nennt sie.
-func resolveChoice(tokensDir string, self *state, all []*state, explicit Choice) (choice Choice, notes []string) {
-	choice = Choice{}
-	hubs := map[string]bool{}
+// hubNotes sind die Hinweise zur Wahl aus Anmeldungen und übergangenen Hubs,
+// je mit dem Hub davor.
+func hubNotes(logins []Login, skipped []SkippedHub) []string {
+	var out []string
+	for _, l := range logins {
+		for _, n := range l.Notes {
+			out = appendNew(out, "Hub "+l.Hub+": "+n)
+		}
+	}
+	for _, s := range skipped {
+		for _, n := range s.Notes {
+			out = appendNew(out, "Hub "+s.Hub+": "+n)
+		}
+	}
+	return out
+}
+
+// resolveChoice ermittelt die ausdrückliche Wahl je Hub für den Eintrag
+// eines Assistenten (Task 037): zuerst --account, dann die Wahl im eigenen
+// Eintrag — beim Helfer sein --account, bei OpenCode jeder Account im
+// Eintrag, solange seine Token-Datei liegt. Ein OpenCode-Account, der der
+// bisherige Standard aus follow ist (node account default), gilt nicht als
+// Wahl: Der Eintrag folgt dem neuen Standard. Aus den Einträgen anderer
+// Assistenten wird nichts übernommen; alles Übrige wählt Resolve — der
+// Standard, die einzige Token-Datei.
+func resolveChoice(tokensDir string, self *state, explicit, follow Choice) Choice {
+	choice := Choice{}
 	for hub, account := range explicit {
 		choice[hub] = account
 	}
-	has := func(hub, account string) bool {
-		fi, err := os.Stat(TokenFile(tokensDir, hub, account))
-		return err == nil && !fi.IsDir()
-	}
-	for _, s := range all {
-		for hub := range s.f.choice {
-			hubs[hub] = true
-		}
-	}
-	for _, hub := range sortedKeys(hubs) {
-		if _, ok := choice[hub]; ok {
+	for hub, own := range self.f.choice {
+		if _, ok := choice[hub]; ok || own == "" {
 			continue
 		}
-		if own := self.f.choice[hub]; own != "" && has(hub, own) {
+		if self.name == OpenCode && follow[hub] == own {
+			continue
+		}
+		if fi, err := os.Stat(TokenFile(tokensDir, hub, own)); err == nil && !fi.IsDir() {
 			choice[hub] = own
-			continue
-		}
-		others := map[string][]string{}
-		for _, s := range all {
-			if s == self {
-				continue
-			}
-			if a := s.f.choice[hub]; a != "" && has(hub, a) {
-				others[a] = append(others[a], s.name)
-			}
-		}
-		switch len(others) {
-		case 0:
-		case 1:
-			for a := range others {
-				choice[hub] = a
-			}
-		default:
-			var parts []string
-			for _, a := range sortedKeys(others) {
-				parts = append(parts, fmt.Sprintf("%s (%s)", a, strings.Join(others[a], ", ")))
-			}
-			notes = append(notes, fmt.Sprintf("Hub %s: die Einträge nennen verschiedene Accounts: %s", hub, strings.Join(parts, "; ")))
 		}
 	}
-	return choice, notes
+	return choice
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -630,6 +648,30 @@ func appendNew(list []string, items ...string) []string {
 		}
 	}
 	return list
+}
+
+// EntryChoice ist, was der Eintrag eines Assistenten trägt (Task 037): ob es
+// ihn gibt, seine Adresse und die Wahl der Accounts — beim Helfer (Claude
+// Code, Codex) die ausdrückliche (--account), bei OpenCode jeden Account im
+// Eintrag.
+type EntryChoice struct {
+	Assistant string
+	Exists    bool
+	URL       string
+	Choice    Choice
+	Err       error
+}
+
+// Entries liest die Einträge aller gefundenen Assistenten mit eigenem
+// Eintrag, in fester Reihenfolge; ein Assistent, der nicht im PATH liegt,
+// fehlt.
+func (m *Manager) Entries(ctx context.Context) []EntryChoice {
+	_, all, _ := m.readAll(ctx, nil)
+	out := make([]EntryChoice, 0, len(all))
+	for _, s := range all {
+		out = append(out, EntryChoice{Assistant: s.name, Exists: s.f.exists, URL: s.f.url, Choice: s.f.choice, Err: s.err})
+	}
+	return out
 }
 
 // sortResults ordnet die Ergebnisse in der festen Reihenfolge der

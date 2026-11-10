@@ -32,6 +32,12 @@ function putToken(hub, account, token) {
   fs.writeFileSync(path.join(tokens, hub, `${account}.token`), `${token}\n`, { mode: 0o600 });
 }
 
+// Der Standard-Account eines Hubs (Task 037): tokens/<hub>/default, nur der Name.
+function putDefault(hub, account) {
+  fs.mkdirSync(path.join(tokens, hub), { recursive: true });
+  fs.writeFileSync(path.join(tokens, hub, 'default'), `${account}\n`, { mode: 0o600 });
+}
+
 // Einstellungen und die Spuren der Erweiterung.
 const settings = {};
 const logs = [];
@@ -352,8 +358,9 @@ test('MCP-Server: bei Trace nicht gemeldet und nicht gestartet', async () => {
   }
 });
 
-// Ein Hub mit mehreren Accounts ohne Wahl (kephalaion.accounts) fehlt im Server, mit Hinweis im
-// Log; die anderen bleiben. Mit Wahl kommt der gewählte Account.
+// Ein Hub mit mehreren Accounts ohne Wahl und ohne Standard fehlt im Server, mit Hinweis im Log;
+// die anderen bleiben. Mit Wahl (kephalaion.accounts) kommt der gewählte Account, mit Standard der
+// Standard (Task 037).
 test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => {
   resetTokens();
   putToken('vm', 'alice', TOKEN_A);
@@ -368,7 +375,7 @@ test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => 
     assert.strictEqual(def.version, 'eigen=kp');
     const { headers } = await provider.resolveMcpServerDefinition(def);
     assert.deepStrictEqual(headers, { 'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B });
-    assert.ok(logs.some((l) => l.includes('Hub vm: mehrere Accounts (alice, bob), keiner gewählt')), logs.join('\n'));
+    assert.ok(logs.some((l) => l.includes('Hub vm: Wahl fehlt — mehrere Accounts (alice, bob), keiner gewählt')), logs.join('\n'));
     settings.accounts = { vm: 'bob' };
     const [chosen] = provider.provideMcpServerDefinitions();
     assert.strictEqual(chosen.version, 'eigen=kp,vm=bob');
@@ -376,6 +383,11 @@ test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => 
       'X-Keph-Account-eigen': 'kp', 'X-Keph-Token-eigen': TOKEN_B,
       'X-Keph-Account-vm': 'bob', 'X-Keph-Token-vm': TOKEN_B,
     });
+    settings.accounts = {};
+    putDefault('vm', 'alice');
+    const [standard] = provider.provideMcpServerDefinitions();
+    assert.strictEqual(standard.version, 'eigen=kp,vm=alice');
+    assert.deepStrictEqual(hubsOf((await provider.resolveMcpServerDefinition(standard)).headers), ['eigen', 'vm']);
   } finally {
     settings.accounts = {};
   }
@@ -824,4 +836,126 @@ test('Schranke an einer entfernten nodeUrl: kind wie bisher, reason daneben', as
   } finally {
     reply = null;
   }
+});
+
+// --- Die Wahl des Accounts wie in der CLI (Task 037; docs/vscode.md, „Status und Auswahl“) ---
+
+// whoami eines lokalen Nodes mit den Hub-Einträgen all: ok mit dem geschickten Account, sonst
+// missing (kein Paar geschickt).
+function localWhoami(all) {
+  const sync = { last_success: '2026-11-10T10:00:00Z', revision: 1 };
+  return (p, headers) => p.name === 'whoami' && {
+    content: [{ type: 'text', text: '' }],
+    structuredContent: {
+      version: 'dev',
+      hubs: all.map((hub) => {
+        const account = (headers || {})[`X-Keph-Account-${hub}`];
+        return account ? { hub, login: 'ok', node: 'n', account, user: 'u', sync, collections: [] }
+          : { hub, login: 'missing', node: 'n', sync };
+      }),
+      unknown_hubs: [],
+    },
+  };
+}
+
+// readCredentials in der laufenden Erweiterung: welcher Account geht an den Node (whoami beim
+// Start), was sagen Statusleiste, Tooltip und „Status anzeigen“. Dieselben Fälle wie die Go-Tests
+// (Standard, Überschreibung vor Standard, veralteter Standard, zwei Dateien ohne Standard, eine
+// Datei ohne Standard), dazu eine Überschreibung ohne Token-Datei: kein Rückfall, der Hub bleibt
+// ohne Account. Den ersten nach Namen gibt es nicht mehr.
+test('Wahl des Accounts: Standard, Einstellung, einzige Datei, Wahl fehlt — gesendet und angezeigt', async () => {
+  resetTokens();
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  reply = localWhoami(['vm']);
+  const run = async () => {
+    stop();
+    calls.length = 0;
+    start();
+    await settle();
+    logs.length = 0;
+    await registered['kephalaion.showStatus']();
+    const sent = calls.length ? (calls[0].headers || {})['X-Keph-Account-vm'] : undefined;
+    for (const t of [TOKEN_A, TOKEN_B]) assert.ok(!logs.join('\n').includes(t), 'Token im Log');
+    return { sent, summary: logs.join('\n'), text: statusItem.text, tip: tooltip() };
+  };
+  try {
+    // Eine Datei ohne Standard: die einzige.
+    putToken('vm', 'alice', TOKEN_A);
+    let r = await run();
+    assert.strictEqual(r.sent, 'alice');
+    assert.strictEqual(r.text, '$(database) Keph vm');
+    assert.ok(r.summary.includes('  Account alice (einzige Token-Datei)'), r.summary);
+    assert.ok(r.tip.includes('Account alice (einzige Token-Datei)'), r.tip);
+
+    // Zwei Dateien ohne Standard: Wahl fehlt — kein Paar, gelb, die Kandidaten.
+    putToken('vm', 'bob', TOKEN_B);
+    r = await run();
+    assert.strictEqual(r.sent, undefined);
+    assert.strictEqual(r.text, '$(warning) Keph vm');
+    assert.ok(r.summary.includes('  Warnung: Wahl fehlt (alice, bob) — Account wählen'), r.summary);
+    assert.ok(r.tip.includes('Wahl fehlt — Kandidaten: alice, bob'), r.tip);
+
+    // Standard.
+    putDefault('vm', 'bob');
+    r = await run();
+    assert.strictEqual(r.sent, 'bob');
+    assert.strictEqual(r.text, '$(database) Keph vm');
+    assert.ok(r.summary.includes('  Account bob (Standard), aus alice, bob'), r.summary);
+
+    // Überschreibung vor Standard.
+    settings.accounts = { vm: 'alice' };
+    r = await run();
+    assert.strictEqual(r.sent, 'alice');
+    assert.ok(r.tip.includes('Account alice (Einstellung kephalaion.accounts)'), r.tip);
+
+    // Überschreibung ohne Token-Datei: kein Rückfall auf den Standard, Hinweis, gelb.
+    settings.accounts = { vm: 'carol' };
+    r = await run();
+    assert.strictEqual(r.sent, undefined);
+    assert.strictEqual(r.text, '$(warning) Keph vm');
+    assert.ok(r.summary.includes('gewählter Account carol hat keine Token-Datei'), r.summary);
+
+    // Veralteter Standard: Hinweis, die nächste Regel — bei zwei Dateien fehlt die Wahl.
+    settings.accounts = {};
+    putDefault('vm', 'carol');
+    r = await run();
+    assert.strictEqual(r.sent, undefined);
+    assert.ok(r.summary.includes('Wahl fehlt (alice, bob)'), r.summary);
+    assert.ok(r.summary.includes('der Standard carol hat keine Token-Datei'), r.summary);
+    // … bei einer Datei gilt sie.
+    fs.rmSync(path.join(tokens, 'vm', 'bob.token'));
+    r = await run();
+    assert.strictEqual(r.sent, 'alice');
+    assert.ok(r.summary.includes('Account alice (einzige Token-Datei); der Standard carol hat keine Token-Datei'), r.summary);
+  } finally {
+    settings.accounts = {};
+    reply = null;
+  }
+});
+
+// Ein neuer oder geänderter Standard ändert die Wahl: Die Definition des MCP-Servers wird neu
+// gemeldet (mcpState nimmt tokens/<hub>/default auf, ohne Inhalt).
+test('MCP-Server: Standard geändert — neu gemeldet', async () => {
+  resetTokens();
+  putToken('vm', 'alice', TOKEN_A);
+  putToken('vm', 'bob', TOKEN_B);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {} });
+  start();
+  await settle();
+  assert.strictEqual(provider.provideMcpServerDefinitions()[0].version, 'ohne Anmeldung');
+  const changed = () => logs.filter((l) => l.endsWith('MCP-Server: Stand geändert, neu gemeldet')).length;
+  logs.length = 0;
+  provider.check();
+  assert.strictEqual(changed(), 0, 'ohne Änderung neu gemeldet');
+  putDefault('vm', 'bob');
+  provider.check();
+  assert.strictEqual(changed(), 1, logs.join('\n'));
+  assert.strictEqual(provider.provideMcpServerDefinitions()[0].version, 'vm=bob');
+  putDefault('vm', 'alice2');
+  provider.check();
+  assert.strictEqual(changed(), 2, logs.join('\n'));
+  fs.rmSync(path.join(tokens, 'vm', 'default'));
+  provider.check();
+  assert.strictEqual(changed(), 3, logs.join('\n'));
+  assert.ok(!logs.join('\n').includes(TOKEN_A) && !logs.join('\n').includes(TOKEN_B), 'Token im Log');
 });

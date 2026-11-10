@@ -438,9 +438,21 @@ func (s *setupCmd) readSetupToken() (string, int) {
 	return tok, 0
 }
 
-// store schreibt das Token in die Token-Datei, löscht .pending und trägt den
-// Node bei den Assistenten ein.
+// store schreibt das Token in die Token-Datei, löscht .pending, kümmert sich
+// um den Standard des Hubs und trägt den Node bei den Assistenten ein.
 func (s *setupCmd) store(token string) int {
+	tokensDir := filepath.Dir(filepath.Dir(s.file))
+	// Vorher: Der bisher einzige Account wird Standard, sonst fiele der Hub
+	// mit dem zweiten in „Wahl fehlt“ (Task 037).
+	prev := assistant.Resolve(tokensDir, s.hub, "")
+	if prev.How == assistant.ByOnly {
+		if err := assistant.WriteDefault(tokensDir, s.hub, prev.Account); err != nil {
+			fmt.Fprintf(s.c.stderr, "%s: Warnung: Standard für Hub %s nicht gesetzt: %v\n", s.c.name, s.hub, err)
+		} else {
+			s.logf("Standard für Hub %s: %s — bisher die einzige Token-Datei; damit die Wahl bleibt, wenn %s dazukommt.",
+				s.hub, prev.Account, s.account)
+		}
+	}
 	if err := config.WriteFileAtomic(s.file, []byte(token+"\n"), 0o600); err != nil {
 		return s.fail("Das neue Token gilt, aber %s ließ sich nicht schreiben: %v\nEs steht in %s; von Hand nach %s "+
 			"verschieben.", s.file, err, s.pending(), s.file)
@@ -449,6 +461,21 @@ func (s *setupCmd) store(token string) int {
 		fmt.Fprintf(s.c.stderr, "%s: %s ließ sich nicht löschen: %v\n", s.c.name, s.pending(), err)
 	}
 	s.logf("Token in %s gespeichert (0600).", s.file)
+	switch {
+	case len(prev.Candidates) == 0:
+		// Der erste Account des Hubs wird Standard.
+		if err := assistant.WriteDefault(tokensDir, s.hub, s.account); err != nil {
+			fmt.Fprintf(s.c.stderr, "%s: Warnung: Standard für Hub %s nicht gesetzt: %v\n", s.c.name, s.hub, err)
+		} else {
+			s.logf("Standard für Hub %s: %s (der erste Account des Hubs).", s.hub, s.account)
+		}
+	case prev.How == assistant.ByDefault || prev.How == assistant.ByOnly:
+		s.logf("Standard für Hub %s bleibt %s; ändern: kephalaion node account default %s %s", s.hub, prev.Account,
+			s.hub, s.account)
+	default:
+		s.logf("Hub %s hat keinen Standard (Wahl fehlt); setzen: kephalaion node account default %s <account>", s.hub,
+			s.hub)
+	}
 	s.register()
 	return 0
 }

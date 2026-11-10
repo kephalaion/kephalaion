@@ -120,8 +120,9 @@ und deren Benachrichtigungen brauchen eine Sitzung.
 ## Status und Auswahl
 
 - **Statusleiste:** `Keph <hub …>` mit den genutzten Hubs, gelb mit Warnsymbol, wenn etwas
-  zu beheben ist. Tooltip: Account je Hub, letzter Abgleich, Revision, Version von Node und
-  Erweiterung — mit Hinweis, wenn sie verschieden sind. Quelle ist `whoami`, dasselbe
+  zu beheben ist. Tooltip: Account je Hub mit der Herkunft der Wahl (Einstellung, Standard,
+  einzige Token-Datei; bei „Wahl fehlt“ die Kandidaten, Task 037), letzter Abgleich, Revision,
+  Version von Node und Erweiterung — mit Hinweis, wenn sie verschieden sind. Quelle ist `whoami`, dasselbe
   Werkzeug, das die KI benutzt: je Hub `login` (`ok`, `invalid`, `missing`) und `sync`
   (`last_success`, `revision`, `last_error`, `never_synced`). Ist `login` `invalid` und
   `sync.never_synced` gesetzt, liegt es nicht am Token, sondern der Node hat den Hub noch nie
@@ -136,7 +137,9 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   was der Client beheben muss: `invalid`; `missing` **trotz** Token-Datei (die Datei ist leer
   oder nicht lesbar, das Paar geht nicht hinaus — die Meldung nennt die Datei); ein Fehler im
   Abgleich eines genutzten Hubs (auch „Replica nicht lesbar“, das `whoami` als `missing` mit
-  `last_error` meldet); mehrere Accounts ohne Wahl; ein **pausiertes Paar** an einer entfernten
+  `last_error` meldet); „Wahl fehlt“ (mehrere Accounts, keine Einstellung, kein Standard — mit
+  den Kandidaten) und eine Einstellung `kephalaion.accounts`, deren Account keine Token-Datei
+  hat; ein **pausiertes Paar** an einer entfernten
   `nodeUrl` (Task 025, „Fehlversuche“ unten: der Grund „pausiert — Anmeldung ungültig (n
   Fehlversuche), nächste Probe in … min“ mit der Schwelle der Jail und der Abhilfe; das Paar geht
   nicht hinaus, der Node meldet den Hub als `missing`, die Regel führt ihn trotzdem als genutzt —
@@ -185,11 +188,21 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   eigene Einrichtung. Die Zuordnung ist eindeutig: Das Verzeichnis ist der Alias des Hubs und
   damit der Name im Header, der Dateiname der Account; Dateien auf `.pending` übergeht sie.
   `whoami` bestätigt danach nur, dass die Anmeldung gilt (`login: ok`). **Mehrere Accounts an
-  einem Hub:** Auswahl über „Kephalaion: Account wählen“ (auch im Menü der Statusleiste); die
-  Wahl steht in der Einstellung `kephalaion.accounts` (`{"<hub>": "<account>"}`) — nur Namen,
-  kein Token —, Scope `machine-overridable`: je Rechner, nicht über Settings Sync, ein
-  Workspace kann sie überschreiben. Ohne Wahl nimmt die Erweiterung den ersten nach Namen und
-  zeigt die Statusleiste gelb, ebenso bei einem gewählten Account ohne Token-Datei.
+  einem Hub (seit Task 037 wie die Kommandozeile):** Die Erweiterung wählt je Hub in derselben
+  Reihenfolge wie jeder Client ([`installation.md`](installation.md), „Mehrere Accounts an einem
+  Hub“): (1) die Einstellung `kephalaion.accounts` (`{"<hub>": "<account>"}`) — nur Namen,
+  kein Token —, gesetzt über „Kephalaion: Account wählen“ (auch im Menü der Statusleiste), Scope
+  `machine-overridable`: je Rechner, nicht über Settings Sync, ein Workspace kann sie
+  überschreiben; (2) der **Standard-Account** des Hubs aus `tokens/<hub>/default`
+  (`kephalaion node account default`); (3) die einzige Token-Datei. Trifft nichts zu, **fehlt
+  die Wahl**: Für den Hub geht kein Paar hinaus, die Statusleiste ist gelb, Tooltip und
+  „Kephalaion: Status anzeigen“ nennen die Kandidaten und „Account wählen“. Den ersten Account
+  nach Namen nimmt die Erweiterung nicht mehr. Nennt `kephalaion.accounts` einen Account ohne
+  Token-Datei, gibt es keinen Rückfall: ein Hinweis, der Hub bleibt ohne Account (gelb). Nennt
+  der Standard einen Account ohne Token-Datei, steht ein Hinweis im Tooltip, und die nächste
+  Regel greift. Tooltip und „Status anzeigen“ nennen je Hub die Herkunft der Wahl
+  (`Account bob (Standard), aus alice, bob`); „Account wählen“ schreibt weiter
+  `kephalaion.accounts`, als Überschreibung vor dem Standard.
   Der `SecretStorage` von VS Code bleibt nur der Ausweg, wenn keine Datei da ist; nie
   `settings.json` — die landet leicht im Repository oder in Settings Sync.
   Geprüft am 2026-09-26: `whoami` mit dem Token aus `tokens/home/kamran-desktop.token`
@@ -220,12 +233,14 @@ VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (W
 - **Wer verbindet:** der Extension Host, in dem die Erweiterung läuft (`workspace`, unter WSL im
   Linux), mit dem `fetch` von Node.js — wie die Erweiterung selbst. `Host` ist die Adresse aus
   `listen`, ein `Origin` schickt er nicht; die Prüfung des Nodes lässt die Anfrage durch.
-- **Accounts wie `node mcp headers`:** je Hub der gewählte Account (`kephalaion.accounts`),
-  sonst der einzige mit Token-Datei. Ein Hub mit mehreren Accounts ohne Wahl oder mit einem
-  gewählten ohne Token-Datei fehlt im MCP-Eintrag (anders als in Statusleiste und Dateisystem,
-  wo die Erweiterung den ersten nimmt); das Log „Kephalaion“ nennt ihn.
-- **Neu gemeldet** wird, wenn sich Adresse, Wahl, die Einstellung oder die Token-Dateien ändern
-  (geprüft alle 30 s). Eine laufende Verbindung behält ihre Header: nach `kephalaion node account
+- **Accounts wie `node mcp headers`:** je Hub die Einstellung (`kephalaion.accounts`), sonst der
+  Standard-Account (`tokens/<hub>/default`), sonst der einzige mit Token-Datei (Task 037). Ein
+  Hub, an dem die Wahl fehlt, oder einer, dessen Einstellung einen Account ohne Token-Datei
+  nennt, fehlt im MCP-Eintrag — wie in Statusleiste und Dateisystem; das Log „Kephalaion“ nennt
+  ihn, ebenso einen Standard ohne Token-Datei.
+- **Neu gemeldet** wird, wenn sich Adresse, Wahl, die Einstellung, die Token-Dateien oder der
+  Standard ändern — `tokens/<hub>/default` zählt mit Name, Größe und Zeit, ohne Inhalt (geprüft
+  alle 30 s). Eine laufende Verbindung behält ihre Header: nach `kephalaion node account
   rotate` den Server neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten) oder das
   Fenster neu laden.
 - **Trace:** Protokolliert der Extension Host auf „Trace“ (`vscode.env.logLevel`), schreibt

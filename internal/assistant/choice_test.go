@@ -1,13 +1,13 @@
 package assistant
 
 import (
-	"strings"
 	"testing"
 )
 
-// Die Wahl je Hub für den Eintrag eines Assistenten: --account, dann der
-// eigene Eintrag, dann die anderen; ein Account ohne Token-Datei gilt als
-// keine Wahl, und widersprechen sich die anderen, gilt der Hub als ohne Wahl.
+// Die ausdrückliche Wahl je Hub für den Eintrag eines Assistenten (Task
+// 037): --account, dann der eigene Eintrag; ein Account ohne Token-Datei
+// gilt als keine Wahl, und aus anderen Einträgen wird nichts übernommen. Bei
+// OpenCode gilt der bisherige Standard aus follow nicht als Wahl.
 func TestResolveChoice(t *testing.T) {
 	dir := t.TempDir()
 	writeToken(t, dir, "vm", "alice.token", tokenA+"\n")
@@ -18,46 +18,55 @@ func TestResolveChoice(t *testing.T) {
 		return &state{name: name, f: found{exists: choice != nil, choice: choice}}
 	}
 	claude := st(Claude, Choice{"vm": "alice"})
-	codex := st(Codex, Choice{"vm": "bob"})
-	third := st("dritter", nil)
-	gone := st("vierter", Choice{"vm": "carol", "eigen": "niemand"})
-	all := []*state{claude, codex, third, gone}
+	third := st(Codex, nil)
+	gone := st(Codex, Choice{"vm": "carol", "eigen": "niemand"})
 
-	// Der eigene Eintrag geht vor.
-	if c, notes := resolveChoice(dir, claude, all, nil); !c.Equal(Choice{"vm": "alice"}) || len(notes) != 0 {
-		t.Errorf("claude: %v, %v", c, notes)
-	}
-	if c, _ := resolveChoice(dir, codex, all, nil); !c.Equal(Choice{"vm": "bob"}) {
-		t.Errorf("codex: %v", c)
+	// Der eigene Eintrag gilt.
+	if c := resolveChoice(dir, claude, nil, nil); !c.Equal(Choice{"vm": "alice"}) {
+		t.Errorf("claude: %v", c)
 	}
 	// --account geht vor dem eigenen Eintrag, auch für einen Account ohne
 	// Token-Datei (den meldet Logins).
-	if c, _ := resolveChoice(dir, claude, all, Choice{"vm": "bob"}); !c.Equal(Choice{"vm": "bob"}) {
+	if c := resolveChoice(dir, claude, Choice{"vm": "bob"}, nil); !c.Equal(Choice{"vm": "bob"}) {
 		t.Errorf("claude mit --account: %v", c)
 	}
-	if c, _ := resolveChoice(dir, claude, all, Choice{"vm": "carol"}); !c.Equal(Choice{"vm": "carol"}) {
+	if c := resolveChoice(dir, claude, Choice{"vm": "carol"}, nil); !c.Equal(Choice{"vm": "carol"}) {
 		t.Errorf("claude mit --account ohne Datei: %v", c)
 	}
-	// Ohne eigenen Eintrag: Die anderen widersprechen sich — keine Wahl, und
-	// die Meldung nennt sie.
-	c, notes := resolveChoice(dir, third, all, nil)
-	if len(c) != 0 || len(notes) != 1 || !strings.Contains(notes[0], "Hub vm") ||
-		!strings.Contains(notes[0], "alice (claude)") || !strings.Contains(notes[0], "bob (codex)") {
-		t.Errorf("dritter: %v, %v", c, notes)
+	// Ohne eigenen Eintrag keine Wahl — auch wenn andere eine tragen.
+	if c := resolveChoice(dir, third, nil, nil); len(c) != 0 {
+		t.Errorf("ohne Eintrag: %v", c)
 	}
-	// Sind sich die anderen einig, gilt ihre Wahl.
-	agree := []*state{claude, st(Codex, Choice{"vm": "alice"}), third}
-	if c, notes := resolveChoice(dir, third, agree, nil); !c.Equal(Choice{"vm": "alice"}) || len(notes) != 0 {
-		t.Errorf("dritter, einig: %v, %v", c, notes)
+	// Die eigene Wahl ohne Token-Datei gilt nicht.
+	if c := resolveChoice(dir, gone, nil, nil); len(c) != 0 {
+		t.Errorf("ohne Token-Datei: %v", c)
 	}
-	// Die eigene Wahl ohne Token-Datei gilt nicht; dann zählen die anderen —
-	// hier widersprüchlich für vm, niemand für eigen.
-	if c, notes := resolveChoice(dir, gone, all, nil); len(c) != 0 || len(notes) != 1 {
-		t.Errorf("vierter: %v, %v", c, notes)
+	// follow wirkt nur bei OpenCode: Trägt der Eintrag den bisherigen
+	// Standard, ist es keine Wahl; ein anderer Account bleibt.
+	if c := resolveChoice(dir, claude, nil, Choice{"vm": "alice"}); !c.Equal(Choice{"vm": "alice"}) {
+		t.Errorf("claude mit follow: %v", c)
 	}
-	// Logins nimmt danach für den Hub mit einer Token-Datei diese eine.
-	logins, skipped, err := Logins(dir, Choice{})
-	if err != nil || len(logins) != 1 || logins[0].Hub != "eigen" || len(skipped) != 1 || skipped[0].Hub != "vm" {
-		t.Errorf("Logins: %+v, %+v, %v", logins, skipped, err)
+	oc := st(OpenCode, Choice{"vm": "alice", "eigen": "kp"})
+	if c := resolveChoice(dir, oc, nil, Choice{"vm": "alice"}); !c.Equal(Choice{"eigen": "kp"}) {
+		t.Errorf("opencode, folgt: %v", c)
+	}
+	if c := resolveChoice(dir, oc, nil, Choice{"vm": "bob"}); !c.Equal(Choice{"vm": "alice", "eigen": "kp"}) {
+		t.Errorf("opencode, ausdrücklich: %v", c)
+	}
+}
+
+// Der Helfer trägt nur die ausdrückliche Wahl; alles Übrige löst er bei jeder
+// Verbindung auf.
+func TestEntryChoiceExplicitOnly(t *testing.T) {
+	e := entry{Target: Target{Binary: "/b/kephalaion", TokensDir: "/t"}, logins: []Login{
+		{Hub: "eigen", Account: "kp", How: ByOnly},
+		{Hub: "vm", Account: "bob", How: ByDefault},
+		{Hub: "zwei", Account: "x", How: ByOverride},
+	}}
+	if c := e.choice(); !c.Equal(Choice{"zwei": "x"}) {
+		t.Fatalf("choice = %v", c)
+	}
+	if got := e.helper(); got != "/b/kephalaion node mcp headers --tokens-dir /t --account zwei=x" {
+		t.Fatalf("helper = %s", got)
 	}
 }

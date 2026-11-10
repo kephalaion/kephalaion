@@ -127,7 +127,8 @@ func (e *setupEnv) noSecrets(t *testing.T) {
 	t.Helper()
 	secrets := append([]string{}, e.secrets...)
 	_ = filepath.WalkDir(e.tokensDir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		// default hält nur den Namen des Standard-Accounts, kein Token.
+		if err == nil && !d.IsDir() && d.Name() != "default" {
 			if data, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(data)) != "" {
 				secrets = append(secrets, strings.TrimSpace(string(data)))
 			}
@@ -245,7 +246,7 @@ func TestNodeAccountSetupRemote(t *testing.T) {
 	if entry := e.fake.Writes(); len(entry) == 0 {
 		t.Fatal("nichts eingetragen")
 	}
-	helper := testBinary + " node mcp headers --tokens-dir " + e.tokensDir + " --hub eigen --account eigen=mac"
+	helper := testBinary + " node mcp headers --tokens-dir " + e.tokensDir + " --hub eigen"
 	if got := claudeHelper(t, e.fake); got != helper {
 		t.Errorf("Helfer %q, erwartet %q", got, helper)
 	}

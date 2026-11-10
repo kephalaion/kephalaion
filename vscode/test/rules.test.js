@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
   parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, versionHint, hubStatus, whoamiOutcome, droppedHubs,
+  resolveAccount, parseDefaultAccount,
 } = require('../rules');
 
 test('nodeUrl: lokal, Proxy, host.docker.internal', () => {
@@ -86,6 +87,62 @@ test('Header-Paare an eine entfernte nodeUrl: nur die gewählten Hubs, auch nach
   assert.deepStrictEqual(logged, ['MCP-Server: Hub vm: kamran.token hält kein gültiges Token']);
 });
 
+// Die Reihenfolge der Wahl wie in der CLI (Task 037, assistant.Resolve): Überschreibung
+// (kephalaion.accounts), Standard (tokens/<hub>/default), einzige Token-Datei; sonst fehlt die Wahl.
+// Dieselben Fälle wie die Go-Tests: Standard, Überschreibung vor Standard, veralteter Standard, zwei
+// Dateien ohne Standard, eine Datei ohne Standard; dazu eine Überschreibung ohne Token-Datei (kein
+// Rückfall). Kein Fall nimmt den ersten nach Namen.
+test('Wahl des Accounts: Überschreibung, Standard, einzige Datei, Wahl fehlt', () => {
+  const two = ['bob', 'alice'];
+  assert.deepStrictEqual(resolveAccount(two, undefined, { account: 'bob' }),
+    { account: 'bob', how: 'default', candidates: ['alice', 'bob'], notes: [] });
+  assert.deepStrictEqual(resolveAccount(two, 'alice', { account: 'bob' }),
+    { account: 'alice', how: 'override', candidates: ['alice', 'bob'], notes: [] });
+  const stale = resolveAccount(two, undefined, { account: 'carol' });
+  assert.strictEqual(stale.account, undefined);
+  assert.strictEqual(stale.how, 'missing');
+  assert.deepStrictEqual(stale.notes, ['der Standard carol hat keine Token-Datei; es gilt die nächste Regel']);
+  assert.deepStrictEqual(resolveAccount(['kp'], undefined, { account: 'carol' }).account, 'kp');
+  assert.deepStrictEqual(resolveAccount(two, undefined, undefined),
+    { how: 'missing', candidates: ['alice', 'bob'], notes: [] });
+  assert.deepStrictEqual(resolveAccount(['kp'], undefined, undefined),
+    { account: 'kp', how: 'only', candidates: ['kp'], notes: [] });
+  // Überschreibung ohne Token-Datei: kein Rückfall auf den Standard oder die einzige Datei.
+  assert.deepStrictEqual(resolveAccount(['kp'], 'carol', { account: 'kp' }),
+    { how: 'override', missing: 'carol', candidates: ['kp'], notes: [] });
+  // Ein Standard, der sich nicht lesen lässt: Hinweis, nächste Regel.
+  const bad = resolveAccount(['kp'], undefined, { error: 'EACCES' });
+  assert.strictEqual(bad.how, 'only');
+  assert.match(bad.notes[0], /Standard nicht lesbar \(EACCES\)/);
+});
+
+test('Standard aus der Datei default: erste Zeile, Account-Name, Fehler ohne Inhalt', () => {
+  assert.deepStrictEqual(parseDefaultAccount('bob\n'), { account: 'bob' });
+  assert.deepStrictEqual(parseDefaultAccount('  bob  \nrest'), { account: 'bob' });
+  for (const bad of ['', 'admin\n', 'Bob\n', 'system-x\n', `keph_${'A'.repeat(43)}\n`]) {
+    const r = parseDefaultAccount(bad);
+    assert.ok(r.error, bad);
+    assert.ok(!r.error.includes('keph_'), 'Inhalt im Fehler');
+  }
+});
+
+test('MCP-Eintrag: mcpLogins mit Standard wie die CLI', () => {
+  const accounts = { vm: ['alice', 'bob'], eigen: ['kp'] };
+  let r = mcpLogins(accounts, {}, ['eigen', 'vm'], {});
+  assert.deepStrictEqual(r.logins, [{ hub: 'eigen', account: 'kp', how: 'only' }]);
+  assert.match(r.skipped[0], /^vm: Wahl fehlt — mehrere Accounts \(alice, bob\)/);
+  r = mcpLogins(accounts, {}, ['eigen', 'vm'], { vm: { account: 'bob' } });
+  assert.deepStrictEqual(r.logins, [{ hub: 'eigen', account: 'kp', how: 'only' }, { hub: 'vm', account: 'bob', how: 'default' }]);
+  assert.deepStrictEqual(r.skipped, []);
+  r = mcpLogins(accounts, { vm: 'alice' }, ['vm'], { vm: { account: 'bob' } });
+  assert.deepStrictEqual(r.logins, [{ hub: 'vm', account: 'alice', how: 'override' }]);
+  r = mcpLogins(accounts, { vm: 'carol' }, ['vm'], { vm: { account: 'bob' } });
+  assert.deepStrictEqual(r.logins, []);
+  assert.match(r.skipped[0], /^vm: gewählter Account carol hat keine Token-Datei/);
+  r = mcpLogins(accounts, {}, ['vm'], { vm: { account: 'carol' } });
+  assert.deepStrictEqual(r.notes, ['vm: der Standard carol hat keine Token-Datei; es gilt die nächste Regel']);
+});
+
 test('Version: Hinweis nur bei echter Abweichung, nie bei dev oder 0.0.0', () => {
   assert.strictEqual(versionHint('v0.3.0', '0.3.0', 'Visual Studio Code'), undefined);
   // Vorabversion: vX.Y.Z-… trägt die Erweiterung X.Y.Z.
@@ -150,9 +207,13 @@ test('Statusleiste: invalid, Abgleichfehler, ohne Wahl, kein genutzter Hub', () 
   assert.strictEqual(st.hubs[0].warning, 'Abgleich: Hub nicht erreichbar');
   assert.strictEqual(st.hubs[1].warning, undefined);
   assert.strictEqual(st.warning, 'a: Abgleich: Hub nicht erreichbar');
-  // Mehrere Gründe an einem Hub, mehrere Hubs.
-  st = hubStatus([{ ...ok, login: 'invalid', sync: failed }, { ...ok, hub: 'b' }], { a: { account: 'x' }, b: { account: 'x' } }, ['b']);
-  assert.strictEqual(st.warning, 'a: Abgleich: Hub nicht erreichbar, Anmeldung ungültig; b: mehrere Accounts, keiner gewählt');
+  // Mehrere Gründe an einem Hub, mehrere Hubs; „Wahl fehlt“ mit den Kandidaten (Task 037).
+  st = hubStatus([{ ...ok, login: 'invalid', sync: failed }, { hub: 'b', login: 'missing', node: 'n', sync: synced }],
+    { a: { account: 'x' }, b: { accounts: ['p', 'q'] } }, ['b']);
+  assert.strictEqual(st.warning, 'a: Abgleich: Hub nicht erreichbar, Anmeldung ungültig; b: Wahl fehlt (p, q) — Account wählen');
+  // Eine Überschreibung ohne Token-Datei: eigener Grund, nicht „keine Zugangsdaten angekommen“.
+  st = hubStatus([{ hub: 'b', login: 'missing', node: 'n', sync: synced }], { b: { accounts: ['p'], missing: 'r' } }, []);
+  assert.strictEqual(st.warning, 'b: gewählter Account r hat keine Token-Datei — Account wählen');
   // Kein genutzter Hub: alle missing ohne Token — und gar kein Hub.
   const miss = (hub) => ({ hub, login: 'missing', node: 'n', sync: synced });
   st = hubStatus([miss('a'), miss('b')], {}, []);

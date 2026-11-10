@@ -136,10 +136,12 @@ func TestNodeMCPAddStatusRemove(t *testing.T) {
 	r.want(t, 0, "claude: eingetragen: "+mcpURL+", vm=alice", "codex: eingetragen: "+mcpURL+", vm=alice",
 		"Wirksam in einer neuen Sitzung")
 	entry := e.claudeEntry(t)
-	if entry["type"] != "http" || entry["url"] != mcpURL || entry["headersHelper"] != e.helper("vm=alice") || len(entry) != 3 {
+	// Ohne ausdrückliche Wahl kein --account im Helfer: Er löst bei jeder
+	// Verbindung auf (Task 037).
+	if entry["type"] != "http" || entry["url"] != mcpURL || entry["headersHelper"] != e.helper() || len(entry) != 3 {
 		t.Fatalf("Eintrag bei Claude Code: %v", entry)
 	}
-	wantCodex := codexBefore + "\n[mcp_servers.kephalaion]\nurl = \"" + mcpURL + "\"\nhttp_headers_helper = \"" + e.helper("vm=alice") + "\"\n"
+	wantCodex := codexBefore + "\n[mcp_servers.kephalaion]\nurl = \"" + mcpURL + "\"\nhttp_headers_helper = \"" + e.helper() + "\"\n"
 	if got := e.codexText(t); got != wantCodex {
 		t.Fatalf("config.toml:\n%s\nerwartet:\n%s", got, wantCodex)
 	}
@@ -356,10 +358,10 @@ func TestNodeMCPNoNodeNoToken(t *testing.T) {
 		t.Errorf("ohne Token-Datei geschrieben: %v", e.fake.Writes())
 	}
 
-	// Ein vorhandener Eintrag wird auch dann bereinigt: Die Wahl eines
-	// Accounts ohne Token-Datei fällt heraus.
+	// Ein vorhandener Eintrag wird auch dann bereinigt: Die ausdrückliche
+	// Wahl eines Accounts ohne Token-Datei fällt heraus.
 	file := e.put(t, "vm", "alice.token", dummyTokenA+"\n")
-	e.mcp(t, "add").want(t, 0, "claude: eingetragen", "codex: eingetragen")
+	e.mcp(t, "add", "--account", "vm=alice").want(t, 0, "claude: eingetragen", "codex: eingetragen")
 	if err := os.Remove(file); err != nil {
 		t.Fatal(err)
 	}
@@ -371,9 +373,11 @@ func TestNodeMCPNoNodeNoToken(t *testing.T) {
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen (ohne Anmeldung)")
 }
 
-// Mehrere Accounts für einen Hub: ohne Wahl wird der Hub übergangen und
-// genannt (Exit 1), die übrigen werden eingetragen; --account wählt, und die
-// Wahl bleibt im Eintrag.
+// Mehrere Accounts für einen Hub: ohne Wahl und ohne Standard wird der Hub
+// übergangen und genannt (Exit 1), die übrigen werden eingetragen; --account
+// wählt ausdrücklich, und nur diese Wahl steht im Helfer und bleibt. Aus
+// anderen Einträgen wird keine Wahl übernommen; der Standard gilt ohne add,
+// status nennt eine Abweichung davon (Task 037).
 func TestNodeMCPAccounts(t *testing.T) {
 	e := newMCPEnv(t, assistant.Claude, assistant.Codex)
 	e.put(t, "vm", "alice.token", dummyTokenA+"\n")
@@ -382,6 +386,7 @@ func TestNodeMCPAccounts(t *testing.T) {
 	// Nur der Hub mit zwei Accounts: nichts einzutragen.
 	r := e.mcp(t, "add")
 	r.want(t, 1, "Hub vm übergangen: mehrere Accounts mit Token-Datei (alice, bob), keiner gewählt",
+		"kephalaion node account default vm <account>",
 		"kephalaion node mcp add --account vm=<account> [--assistant <name>]", "auch nach einem remove für einzelne",
 		"claude: übergangen: keine Token-Datei")
 	if len(e.fake.Writes()) != 0 {
@@ -391,74 +396,123 @@ func TestNodeMCPAccounts(t *testing.T) {
 	// Ein zweiter Hub mit einem Account: Er wird eingetragen, vm übergangen.
 	e.put(t, "eigen", "kp.token", dummyTokenC+"\n")
 	e.mcp(t, "add").want(t, 1, "claude: eingetragen: "+mcpURL+", eigen=kp", "codex: eingetragen", "Hub vm übergangen")
-	if e.claudeEntry(t)["headersHelper"] != e.helper("eigen=kp") {
+	if e.claudeEntry(t)["headersHelper"] != e.helper() {
 		t.Errorf("Helfer: %v", e.claudeEntry(t)["headersHelper"])
 	}
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen (eigen=kp)", "Hub vm ohne Anmeldung: mehrere Accounts")
 
-	// --account wählt; die Wahl steht für jeden Hub ausdrücklich im Eintrag.
+	// --account wählt; nur die ausdrückliche Wahl steht im Helfer.
 	e.mcp(t, "add", "--account", "vm=bob").want(t, 0, "claude: eingetragen, ersetzt den Eintrag (anderer Helfer): "+mcpURL+", eigen=kp, vm=bob")
-	if e.claudeEntry(t)["headersHelper"] != e.helper("eigen=kp", "vm=bob") {
+	if e.claudeEntry(t)["headersHelper"] != e.helper("vm=bob") {
 		t.Errorf("Helfer: %v", e.claudeEntry(t)["headersHelper"])
 	}
-	if !strings.Contains(e.codexText(t), "--account eigen=kp --account vm=bob") {
+	if !strings.Contains(e.codexText(t), "--account vm=bob\"") || strings.Contains(e.codexText(t), "eigen=kp") {
 		t.Errorf("config.toml:\n%s", e.codexText(t))
 	}
 	// Ohne --account bleibt die Wahl aus dem Eintrag.
 	e.mcp(t, "add").want(t, 0, "claude: unverändert: "+mcpURL+", eigen=kp, vm=bob", "codex: unverändert")
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen (eigen=kp, vm=bob)", "codex: eingetragen (eigen=kp, vm=bob)")
 
-	// Ein Assistent ohne Eintrag nimmt die Wahl der anderen.
+	// Ein Assistent ohne Eintrag übernimmt die Wahl der anderen nicht.
 	e.mcp(t, "remove", "--assistant", "codex").want(t, 0)
-	e.mcp(t, "add", "--assistant", "codex").want(t, 0, "codex: eingetragen: "+mcpURL+", eigen=kp, vm=bob")
+	e.mcp(t, "add", "--assistant", "codex").want(t, 1, "codex: eingetragen: "+mcpURL+", eigen=kp", "Hub vm übergangen")
+
+	// Der Standard: gilt ohne add für den Eintrag ohne Wahl; die ausdrückliche
+	// Wahl bleibt, status nennt die Abweichung.
+	runT(t, "node", "account", "default", "vm", "alice").want(t, 0,
+		"claude: ausdrückliche Wahl vm=bob im Eintrag bleibt, nicht der Standard alice")
+	r = e.mcp(t, "status")
+	r.want(t, 0, "claude: eingetragen (eigen=kp, vm=bob)", "Hinweis: ausdrückliche Wahl vm=bob im Eintrag, nicht der Standard alice",
+		"codex: eingetragen (eigen=kp, vm=alice)")
+	if strings.Contains(r.out, "ohne Anmeldung") {
+		t.Errorf("Hub ohne Anmeldung trotz Standard:\n%s", r.out)
+	}
 
 	// Eine neue Wahl gilt für die genannten Assistenten.
 	e.mcp(t, "add", "--account", "vm=alice", "--assistant", "claude").want(t, 0, "claude: eingetragen, ersetzt", "vm=alice")
-	e.mcp(t, "status").want(t, 0, "claude: eingetragen (eigen=kp, vm=alice)", "codex: eingetragen (eigen=kp, vm=bob)")
+	r = e.mcp(t, "status")
+	r.want(t, 0, "claude: eingetragen (eigen=kp, vm=alice)", "codex: eingetragen (eigen=kp, vm=alice)")
+	if strings.Contains(r.out, "nicht der Standard") {
+		t.Errorf("Abweichung, obwohl die Wahl dem Standard gleicht:\n%s", r.out)
+	}
 
 	// Ein gewählter Account ohne Token-Datei: mit --account ein übergangener
-	// Hub, aus dem Eintrag keine Wahl.
+	// Hub, aus dem Eintrag keine Wahl — dann gilt der Standard.
 	e.mcp(t, "add", "--account", "vm=carol").want(t, 1, "Hub vm übergangen: der gewählte Account carol hat keine Token-Datei")
-	e.mcp(t, "add", "--account", "vm=alice").want(t, 0)
-	if err := os.Remove(filepath.Join(e.tokens, "vm", "alice.token")); err != nil {
+	e.mcp(t, "add", "--account", "vm=bob").want(t, 0)
+	if err := os.Remove(filepath.Join(e.tokens, "vm", "bob.token")); err != nil {
 		t.Fatal(err)
 	}
-	e.mcp(t, "add").want(t, 0, "claude: eingetragen, ersetzt den Eintrag (anderer Helfer): "+mcpURL+", eigen=kp, vm=bob")
+	e.mcp(t, "add").want(t, 0, "claude: eingetragen, ersetzt den Eintrag (anderer Helfer): "+mcpURL+", eigen=kp, vm=alice")
+	if e.claudeEntry(t)["headersHelper"] != e.helper() {
+		t.Errorf("Helfer: %v", e.claudeEntry(t)["headersHelper"])
+	}
 }
 
-// Zu einem Hub kommt ein zweiter Account hinzu: headers — mit dem Aufruf aus
-// dem Eintrag — und ein erneutes add bleiben beim bisher gewählten.
+// Zu einem Hub kommt ein zweiter Account hinzu (Task 037): Der Helfer ohne
+// ausdrückliche Wahl löst bei jeder Verbindung auf. Mit dem Standard — den
+// setup vorher setzt — bleibt er beim bisherigen, ohne add; ohne Standard
+// fehlt die Wahl, und der Hub fehlt im Objekt, mit Meldung auf stderr. Ein
+// neuer Standard wirkt ohne add.
 func TestNodeMCPSecondAccount(t *testing.T) {
 	e := newMCPEnv(t, assistant.Claude, assistant.Codex)
 	e.put(t, "vm", "alice.token", dummyTokenA+"\n")
 	e.mcp(t, "add").want(t, 0, "claude: eingetragen: "+mcpURL+", vm=alice")
 
-	helperHeaders := func() map[string]string {
+	helperHeaders := func() (map[string]string, string) {
 		t.Helper()
 		helper, _ := e.claudeEntry(t)["headersHelper"].(string)
 		args, ok := assistant.ShellSplit(helper)
 		if !ok || len(args) < 2 || args[0] != testBinary {
 			t.Fatalf("Helfer: %q", helper)
 		}
-		got, _ := e.headers(t, args[4:]...)
-		return got
+		return e.headers(t, args[4:]...)
 	}
-	want := map[string]string{"X-Keph-Account-vm": "alice", "X-Keph-Token-vm": dummyTokenA}
-	wantHeaders(t, helperHeaders(), want)
+	alice := map[string]string{"X-Keph-Account-vm": "alice", "X-Keph-Token-vm": dummyTokenA}
+	got, _ := helperHeaders()
+	wantHeaders(t, got, alice)
 
+	// Wie setup: zuerst der bisher einzige als Standard, dann der zweite.
+	runT(t, "node", "account", "default", "vm", "alice").want(t, 0)
 	e.put(t, "vm", "bob.token", dummyTokenB+"\n")
-	wantHeaders(t, helperHeaders(), want)
+	got, _ = helperHeaders()
+	wantHeaders(t, got, alice)
 	writes := len(e.fake.Writes())
 	e.mcp(t, "add").want(t, 0, "claude: unverändert: "+mcpURL+", vm=alice", "codex: unverändert: "+mcpURL+", vm=alice")
 	if len(e.fake.Writes()) != writes {
 		t.Errorf("add nach dem zweiten Account schreibt: %v", e.fake.Writes()[writes:])
 	}
-	wantHeaders(t, helperHeaders(), want)
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen (vm=alice)", "codex: eingetragen (vm=alice)")
 
+	// Ein neuer Standard wirkt im Helfer ohne add.
+	writeText(t, filepath.Join(e.tokens, "vm", "default"), "bob\n")
+	got, _ = helperHeaders()
+	wantHeaders(t, got, map[string]string{"X-Keph-Account-vm": "bob", "X-Keph-Token-vm": dummyTokenB})
+
+	// Ohne Standard fehlt die Wahl: vm fehlt im Objekt, stderr nennt die
+	// Kandidaten.
+	if err := os.Remove(filepath.Join(e.tokens, "vm", "default")); err != nil {
+		t.Fatal(err)
+	}
+	got, errOut := helperHeaders()
+	wantHeaders(t, got, map[string]string{})
+	if !strings.Contains(errOut, "Hub vm ohne Anmeldung") || !strings.Contains(errOut, "alice, bob") {
+		t.Errorf("stderr:\n%s", errOut)
+	}
+
+	// Ein Standard ohne Token-Datei: Hinweis, dann die nächste Regel.
+	writeText(t, filepath.Join(e.tokens, "vm", "default"), "carol\n")
+	got, errOut = helperHeaders()
+	wantHeaders(t, got, map[string]string{})
+	if !strings.Contains(errOut, "Hinweis: Hub vm: der Standard carol hat keine Token-Datei") {
+		t.Errorf("stderr:\n%s", errOut)
+	}
+
 	// Ein neuer Hub mit einer Token-Datei erscheint im Helfer ohne neues add.
+	writeText(t, filepath.Join(e.tokens, "vm", "default"), "alice\n")
 	e.put(t, "eigen", "kp.token", dummyTokenC+"\n")
-	wantHeaders(t, helperHeaders(), map[string]string{
+	got, _ = helperHeaders()
+	wantHeaders(t, got, map[string]string{
 		"X-Keph-Account-vm": "alice", "X-Keph-Token-vm": dummyTokenA,
 		"X-Keph-Account-eigen": "kp", "X-Keph-Token-eigen": dummyTokenC,
 	})
@@ -524,7 +578,7 @@ func TestNodeMCPClaudeConfigDir(t *testing.T) {
 	}
 	e.mcp(t, "status").want(t, 0, "claude: eingetragen (vm=alice)")
 	want := []string{
-		"claude mcp add-json kephalaion " + `{"type":"http","url":"` + mcpURL + `","headersHelper":"` + e.helper("vm=alice") + `"}` + " --scope user",
+		"claude mcp add-json kephalaion " + `{"type":"http","url":"` + mcpURL + `","headersHelper":"` + e.helper() + `"}` + " --scope user",
 	}
 	if got := e.fake.Calls; len(got) != 1 || got[0] != want[0] {
 		t.Errorf("Aufrufe:\n%v\nerwartet:\n%v", got, want)
@@ -678,11 +732,16 @@ func TestNodeMCPOpenCodeMissingTokenFile(t *testing.T) {
 	}
 
 	// Keine Token-Datei mehr: Der Eintrag bei OpenCode fällt weg, Claude Code
-	// behält seinen (der Helfer ohne Wahl) — auch mit --auto.
+	// behält seinen (der Helfer ohne ausdrückliche Wahl bleibt, wie er ist) —
+	// auch mit --auto.
 	if err := os.Remove(filepath.Join(e.tokens, "vm", "alice.token")); err != nil {
 		t.Fatal(err)
 	}
-	e.mcp(t, "add", "--auto").want(t, 0, "opencode: entfernt (keine Token-Datei mehr)", "claude: eingetragen, ersetzt den Eintrag")
+	r = e.mcp(t, "add", "--auto")
+	r.want(t, 0, "opencode: entfernt (keine Token-Datei mehr)")
+	if strings.Contains(r.out, "claude:") {
+		t.Errorf("Claude Code geändert:\n%s", r.out)
+	}
 	if e.opencodeEntry(t) != nil {
 		t.Error("Eintrag bei OpenCode ohne Token-Datei")
 	}
@@ -724,5 +783,30 @@ func TestNodeMCPOpenCodeFiles(t *testing.T) {
 	e.mcp(t, "add").want(t, 1, "opencode: Fehler:")
 	if got := readText(t, filepath.Join(xdg, "opencode", "opencode.json")); got != "{kaputt" {
 		t.Errorf("add hat die kaputte Datei geändert: %s", got)
+	}
+}
+
+// OpenCode trägt den Account immer fest (Task 037): add ohne --account lässt
+// ihn stehen, solange seine Token-Datei liegt — auch wenn der Standard ein
+// anderer ist; status nennt die Abweichung. Fehlt die Datei, gilt der
+// Standard.
+func TestNodeMCPOpenCodeKeepsAccount(t *testing.T) {
+	e := newMCPEnv(t, assistant.OpenCode)
+	alice := e.put(t, "vm", "alice.token", dummyTokenA+"\n")
+	e.put(t, "vm", "bob.token", dummyTokenB+"\n")
+	writeText(t, filepath.Join(e.tokens, "vm", "default"), "bob\n")
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen: "+mcpURL+", vm=bob")
+	e.mcp(t, "add", "--account", "vm=alice").want(t, 0, "opencode: eingetragen, ersetzt den Eintrag (andere Header): "+
+		mcpURL+", vm=alice")
+	e.mcp(t, "add").want(t, 0, "opencode: unverändert: "+mcpURL+", vm=alice")
+	e.mcp(t, "status").want(t, 0, "opencode: eingetragen (vm=alice)",
+		"Hinweis: ausdrückliche Wahl vm=alice im Eintrag, nicht der Standard bob")
+	if err := os.Remove(alice); err != nil {
+		t.Fatal(err)
+	}
+	e.mcp(t, "add").want(t, 0, "opencode: eingetragen, ersetzt den Eintrag", mcpURL+", vm=bob")
+	headers, _ := e.opencodeEntry(t)["headers"].(map[string]any)
+	if headers["X-Keph-Account-vm"] != "bob" || headers["X-Keph-Token-vm"] != e.ref("vm", "bob") {
+		t.Errorf("Header: %v", headers)
 	}
 }

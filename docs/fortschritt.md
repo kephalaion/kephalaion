@@ -17,8 +17,8 @@ ist Nacharbeit des Nutzers)
 - **Wann:** nach jeder abgeschlossenen Etappe, nach jedem Task, der nach `done/` wandert, und
   wenn im Gespräch etwas entschieden oder neu als offen erkannt wird.
 - **Quellen, in dieser Reihenfolge:**
-  1. `k-playbook-local/tasks/*.md` — Tabelle „Fortschritt“ je Task (offene Etappen);
-  2. `k-playbook-local/tasks/done/*.md` — Abschnitte „Offen (nicht gefixt)“, „Offen:“ und
+  1. `keph:/user/kamran/tasks/` — Tabelle „Fortschritt“ je Task (offene Etappen);
+  2. `keph:/user/kamran/tasks/done/` — Abschnitte „Offen (nicht gefixt)“, „Offen:“ und
      „Intent-Alignment“ der Ausführung (was nicht oder nur teilweise geprüft wurde);
   3. `git log --oneline` und `git status` — was committet ist, was gerade in Arbeit ist;
   4. `docs/konzept.md` — Abschnitte „Offene Punkte“, „Stufen“, „Werkzeuge“ und alles mit
@@ -391,6 +391,40 @@ ist Nacharbeit des Nutzers)
     erreicht den Hub nicht (`~/dev/vm/kephalaion/README.md`, „Stand 2026-10-07“; Befund
     `benutzer-und-tokens-gui.md`). Abnahme mit eigenen Sitzungen: siehe „Zu testen“.
 
+- **Task 036 — create und write melden unlesbares Frontmatter und Kommentare im Wert**
+  (2026-11-09, Etappen 1–3; `keph:/user/kamran/tasks/done/001-create-write-melden-frontmatter.md`,
+  Anlass aus k-playbook, dort Task 136 für die Leseseite): `create` und `write` einer `.md`
+  tragen nach Erfolg `frontmatter_error` (Grund wie bei `list`/`read`) und `frontmatter_hints`
+  (unquotierter Wert eines Mappings mit Kommentar auf derselben Zeile, mit Dateizeile und
+  Schlüssel), geprüft am Inhalt des Aufrufs, auch bei `replayed`; Warnung, kein Fehlercode,
+  kein Vertrag; README nachgezogen.
+  `frontmatter.Hints` teilt den Schnitt des Blocks mit `Parse`. Tests: `TestHints`,
+  `TestWriteFrontmatter` (`konzept.md`, „Allgemein — schreiben“, „Frontmatter in `list` und
+  `read`“; `begriffe.md`, „frontmatter“, „write error codes“).
+
+- **Task 037 — Standard-Account je Hub und maschinenlesbare Auskunft für Clients**
+  (2026-11-10, Etappen 1–7 ausgeführt;
+  `keph:/user/kamran/tasks/done/002-standard-account-und-client-auskunft.md`, Anlass aus
+  k-playbook: das Briefing scheiterte im Devcontainer der Dev-VM):
+  - Standard-Account `tokens/<hub>/default` (`internal/assistant/standard.go`, `Resolve`) und
+    die Reihenfolge der Wahl — Überschreibung, Standard, einzige Token-Datei, sonst „Wahl
+    fehlt“ — in `node mcp add|status|headers`, `node dir` und der Erweiterung für VS Code; den
+    ersten nach Namen gibt es nicht mehr;
+  - `node account default <hub> [<account> | --unset]` (danach wie `add --auto`, OpenCode folgt
+    dem bisherigen Standard, abweichende ausdrückliche Wahl genannt), `setup` setzt den Standard
+    beim ersten Account und vor dem zweiten, `list` markiert ihn (`STANDARD`, JSON `default`);
+  - der Helfer trägt `--account` nur für eine ausdrückliche Wahl, keine Übernahme mehr aus
+    anderen Einträgen, `node mcp status` nennt Abweichungen vom Standard;
+  - `node client [--json] [--format <n>] [--no-probe] [--hub …] [--account …]`: Auskunft Format
+    1 über config, lokalen Node und Account je Hub, ohne Datenbank und ohne Token;
+  - `status` meldet auf einem reinen Client „läuft nicht hier“ (Datenbank und Verzeichnis
+    fehlen), Exit 0; fehlt nur die Datei, bleibt es ein Fehler;
+  - Doku: `installation.md` („Mehrere Accounts an einem Hub“, „Auskunft für Clients“,
+    „Verwalten“), `vscode.md`, `begriffe.md`, `konzept.md` („Bei den Assistenten angemeldet“,
+    „Mehrere Hubs“, „Devcontainer“), README; die Version der Erweiterung folgt wie seit Task 027
+    der des Binarys. Tests hermetisch (kein 127.0.0.1:7433, kein echtes Token-Verzeichnis).
+    Abnahme an den drei Orten und Mindestversion: siehe „Zu testen“.
+
 ## In Arbeit
 
 - **Task 032 — Idempotenzschlüssel für die Schreibvorgänge** (2026-10-15, Etappen 1–5
@@ -610,6 +644,26 @@ ist Nacharbeit des Nutzers)
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 037 — Standard-Account und Auskunft, Abnahme an den drei Orten** (nach dem Release;
+  Binary auf der Dev-VM über die Ansible-Rolle `kephalaion` in `~/dev/vm`, nichts von Hand; ohne
+  `KEPHALAION_CONFIG`):
+  1. **WSL** (pro User): wo Einträge bestehen, `kephalaion node mcp remove`, danach `kephalaion
+     node mcp add`; dann `kephalaion node client --json` (Node `http://127.0.0.1:7433/mcp`,
+     richtiger Account je Hub, `choice`) und `kephalaion status`.
+  2. **Dev-VM** (globale Installation): je User wie oben `remove`, dann `add`; `node client
+     --json` und `status`.
+  3. **Devcontainer** mit eingebundenem `~/.config/kephalaion`: `node client --json` liefert
+     `127.0.0.1:7433` und den Account; `status` meldet bei Hub und Node „läuft nicht hier“ mit
+     gültiger Probe und Anmeldung, Exit 0. Im Devcontainer auf der Dev-VM setzt `status` Task
+     120 in OMNI voraus (`/etc/kephalaion` lesend eingebunden); ohne ihn wird dort nur `node
+     client --json` abgenommen (erwartet: `config.source` `none`, Standardadresse).
+  4. Zwei Token-Dateien an einem Hub ohne Standard: `node client` meldet „Wahl fehlt“ mit beiden
+     Kandidaten; nach `kephalaion node account default <hub> <account>` gilt er in der CLI, in
+     `node mcp add|status|headers` und in der Erweiterung für VS Code.
+- **Task 037 — Mindestversion nachtragen:** Beim Release die genaue Nummer der ersten Version
+  mit Format 1 in `installation.md`, „Auskunft für Clients“ (Mindestversion und Tabelle der
+  Fassungen) eintragen; danach der k-playbook-Sitzung das Release melden.
 
 - **Task 025 — Fehlversuche fälschungssicher, Abnahme mit VS Code und `rotate`** (Nacharbeit des
   Nutzers; braucht die Fenster und Token-Dateien des Nutzers. Auf der VM ist alles ausgerollt und

@@ -167,12 +167,13 @@ const nodeUsage = `Aufruf:
   kephalaion node setup <code> | --code-stdin [--alias …] [--ca-file …] [--no-service]
   kephalaion node hub add|check|list|show|set|rm|token|rotate …
   kephalaion node collection add|list|rm …
-  kephalaion node account setup|rotate|check|list …
+  kephalaion node account setup|rotate|check|list|default …
   kephalaion node sync [<alias>]
   kephalaion node doc list|get …
   kephalaion node dir push|pull …
   kephalaion node mcp add|remove|status|headers …
   kephalaion node whoami [<account>] [--hub <alias>] [--json]
+  kephalaion node client [--json] [--format <n>] [--no-probe] [--hub <alias>]… [--account <hub>=<account>]…
 
 Kommandos:
   init         richtet den Node ein: Datenbank, Schema, Abschnitt node: in der config
@@ -184,7 +185,8 @@ Kommandos:
   collection   die Collections, die der Node von seinen Hubs haben will
   account      richtet einen Account mit seinem Einrichtungstoken über einen
                Node ein (setup), ersetzt das Token am Hub (rotate), prüft es
-               (check) und zeigt alle Token-Dateien mit Zustand (list)
+               (check), zeigt alle Token-Dateien mit Zustand (list) und
+               setzt den Standard-Account je Hub (default)
   sync         gleicht die Replicas mit den Hubs ab (Transport local, http und
                https); serve tut das im Hintergrund selbst
   doc          listet und liest Dokumente aus der Replica
@@ -197,12 +199,16 @@ Kommandos:
                Header-Paare aus den Token-Dateien
   whoami       zeigt Version, Hubs, Stand des Abgleichs und die bekannten
                Accounts; mit Account, was das Werkzeug whoami ihm antwortet
+  client       die Auskunft für Clients (etwa k-playbook): config, Adresse
+               des lokalen Nodes und Account je Hub, mit --json
+               maschinenlesbar; ohne Datenbank, ohne Token
 
 Hilfe: kephalaion node setup --help, kephalaion node hub --help,
 kephalaion node collection --help,
 kephalaion node account --help, kephalaion node sync --help,
 kephalaion node doc --help, kephalaion node dir --help,
-kephalaion node mcp --help, kephalaion node whoami --help
+kephalaion node mcp --help, kephalaion node whoami --help,
+kephalaion node client --help
 `
 
 // runRole verteilt die Kommandos unter hub bzw. node.
@@ -249,6 +255,8 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runNodeMCP(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "whoami":
 		return runNodeWhoami(args[1:], stdout, stderr)
+	case r == config.Node && args[0] == "client":
+		return runNodeClient(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "Unbekanntes Kommando: %s %s\n\n", r, args[0])
 		fmt.Fprint(stderr, usage)
@@ -418,13 +426,25 @@ Gilt die globale config und darf der Aufrufer die Datenbanken nicht lesen
 Installation und den Weg, sie zu verwalten, statt eines Fehlers; Antwort und
 Anmeldung prüft es trotzdem.
 
+Ein reiner Client: Fehlen die Datenbankdatei einer Rolle und ihr Verzeichnis
+beide, meldet status die Rolle als „läuft nicht hier“ statt eines Fehlers —
+beim Node mit Antwort und Anmeldung, beim Hub ohne beides. So sieht es in
+einem Devcontainer aus, der die config des Hosts liest (global oder pro
+User): /var/lib/kephalaion bzw. das Datenverzeichnis des Host-Users gibt es
+dort nicht, den Node des Hosts erreicht er über 127.0.0.1. Grenze: Ein ganz
+gelöschtes Datenverzeichnis auf einem eingerichteten Rechner sieht genauso
+aus. Fehlt nur die Datei und das Verzeichnis existiert, bleibt es ein Fehler
+(Datenbank gelöscht, Pfad in der config falsch).
+
 Exit-Code:
   0   alles geprüft; auch bei einer globalen Installation, deren Datenbanken
-      der Aufrufer nicht lesen darf. Die Zeilen Dienst, Antwort und Anmeldung
-      ändern ihn nie.
+      der Aufrufer nicht lesen darf, und bei Rollen, die hier nicht laufen
+      (reiner Client). Die Zeilen Dienst, Antwort und Anmeldung ändern ihn
+      nie.
   1   die config ist nicht lesbar, die Datenbank einer eingerichteten Rolle
-      fehlt oder passt nicht, oder es gibt die config des Users und die
-      globale nebeneinander (zwei Arten der Installation auf einem Rechner)
+      fehlt (ihr Verzeichnis existiert) oder passt nicht, oder es gibt die
+      config des Users und die globale nebeneinander (zwei Arten der
+      Installation auf einem Rechner)
 
 Optionen:
   --config pfad   Ort der config (siehe kephalaion hub init --help)
@@ -462,6 +482,20 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		sec := cfg.Section(r)
 		if sec == nil {
 			fmt.Fprintf(stdout, "%s: nicht eingerichtet\n", r)
+			continue
+		}
+		if dbDir, ok := roleNotHere(sec); ok && !(loc.System() && systemDBUnreadable(sec)) {
+			// Ein reiner Client, etwa ein Devcontainer mit der config des
+			// Hosts (Task 037): kein Fehler, trägt nicht zum Exit-Code bei.
+			fmt.Fprintf(stdout, "%s: läuft nicht hier\n", r)
+			fmt.Fprintf(stdout, "  db:            %s (fehlt samt Verzeichnis %s)\n", sec.DB, dbDir)
+			fmt.Fprintf(stdout, "  listen:        %s\n", cfg.Listen(r))
+			fmt.Fprintf(stdout, "  Hinweis:       eingerichtet in der config, aber Datenbank und Verzeichnis fehlen auf "+
+				"diesem Rechner — ein reiner Client, etwa ein Devcontainer mit der config des Hosts. Ein ganz "+
+				"gelöschtes Datenverzeichnis sähe genauso aus.\n")
+			if r == config.Node {
+				printNodeProbe(ctx, stdout, cfg.Listen(r))
+			}
 			continue
 		}
 		fmt.Fprintf(stdout, "%s: eingerichtet\n", r)
@@ -603,6 +637,27 @@ func pathErrReason(err error) error {
 		return pe.Err
 	}
 	return err
+}
+
+// roleNotHere sagt, ob die Rolle auf diesem Rechner nicht läuft: Die
+// Datenbankdatei und ihr Verzeichnis fehlen beide (Task 037) — ein reiner
+// Client, der die config eines anderen Rechners liest, etwa ein Devcontainer
+// mit der des Hosts. Fehlt nur die Datei, ist auf einem eingerichteten
+// Rechner etwas kaputt; das bleibt ein Fehler. dir ist das fehlende
+// Verzeichnis.
+func roleNotHere(sec *config.Section) (dir string, ok bool) {
+	addr, err := config.ParseDB(sec.DB)
+	if err != nil || addr.Kind != config.SQLite {
+		return "", false
+	}
+	dir = filepath.Dir(addr.Path)
+	if _, err := os.Stat(addr.Path); !errors.Is(err, fs.ErrNotExist) {
+		return "", false
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		return "", false
+	}
+	return dir, true
 }
 
 // systemDBUnreadable sagt, ob die Datenbank einer Rolle mangels Rechten nicht

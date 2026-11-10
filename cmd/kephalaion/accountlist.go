@@ -36,6 +36,9 @@ type tokenEntry struct {
 	Collections []string `json:"collections"`
 	// Reason sagt bei allem außer gültig, warum.
 	Reason string `json:"reason,omitempty"`
+	// Default markiert die Token-Datei des Standard-Accounts ihres Hubs
+	// (Task 037); bei .pending nie.
+	Default bool `json:"default"`
 }
 
 const (
@@ -45,7 +48,8 @@ const (
 
 // tokenFiles sammelt die Token-Dateien unter dir, nach Hub, Account und Art
 // (token vor pending). Verzeichnisse und Dateien, deren Name kein Alias bzw.
-// Account sein kann, zählen nicht.
+// Account sein kann, zählen nicht; die Datei default auch nicht. Die
+// Token-Datei des Standard-Accounts trägt Default.
 func tokenFiles(dir string) ([]tokenEntry, error) {
 	hubs, err := assistant.Hubs(dir)
 	if err != nil {
@@ -57,6 +61,7 @@ func tokenFiles(dir string) ([]tokenEntry, error) {
 		if err != nil {
 			return nil, err
 		}
+		def, _ := assistant.ReadDefault(dir, hub)
 		for _, e := range entries {
 			if e.IsDir() {
 				continue
@@ -70,7 +75,8 @@ func tokenFiles(dir string) ([]tokenEntry, error) {
 				continue
 			}
 			out = append(out, tokenEntry{Hub: hub, Account: account, Kind: kind,
-				File: filepath.Join(dir, hub, e.Name()), Collections: []string{}})
+				File: filepath.Join(dir, hub, e.Name()), Collections: []string{},
+				Default: kind == kindToken && def != "" && account == def})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -144,15 +150,20 @@ func runNodeAccountList(args []string, stdout, stderr io.Writer) int {
 		return exit
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "HUB\tACCOUNT\tDATEI\tZUSTAND\tUSER\tCOLLECTIONS")
+	fmt.Fprintln(tw, "HUB\tACCOUNT\tDATEI\tZUSTAND\tUSER\tCOLLECTIONS\tSTANDARD")
 	for _, f := range files {
-		fmt.Fprintf(tw, "%s\t%s\t.%s\t%s\t%s\t%s\n", f.Hub, f.Account, f.Kind, f.State.text(), orDash(f.User),
-			joinOrDash(f.Collections))
+		mark := ""
+		if f.Default {
+			mark = "ja"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t.%s\t%s\t%s\t%s\t%s\n", f.Hub, f.Account, f.Kind, f.State.text(), orDash(f.User),
+			joinOrDash(f.Collections), mark)
 	}
 	if err := tw.Flush(); err != nil {
 		return c.fail(err)
 	}
 	listNotes(stdout, files)
+	defaultNotes(stdout, dir, files)
 	return exit
 }
 
@@ -205,6 +216,28 @@ func listNotes(w io.Writer, files []tokenEntry) {
 	}
 	if hasInvalidToken(files) {
 		fmt.Fprintln(w, invalidTokenHint)
+	}
+}
+
+// defaultNotes nennt je Hub, was am Standard auffällt (Task 037): ein
+// Standard ohne Token-Datei, oder mehrere Token-Dateien ohne Standard — dann
+// fehlt die Wahl.
+func defaultNotes(w io.Writer, dir string, files []tokenEntry) {
+	var hubs []string
+	for _, f := range files {
+		if len(hubs) == 0 || hubs[len(hubs)-1] != f.Hub {
+			hubs = append(hubs, f.Hub)
+		}
+	}
+	for _, hub := range hubs {
+		r := assistant.Resolve(dir, hub, "")
+		for _, n := range r.Notes {
+			fmt.Fprintf(w, "%s: %s\n", hub, n)
+		}
+		if r.How == assistant.Missing && len(r.Candidates) > 1 {
+			fmt.Fprintf(w, "%s: kein Standard bei mehreren Token-Dateien (%s) — Wahl fehlt; setzen: kephalaion node "+
+				"account default %s <account>\n", hub, strings.Join(r.Candidates, ", "), hub)
+		}
 	}
 }
 

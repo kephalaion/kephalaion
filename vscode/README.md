@@ -20,11 +20,14 @@ oder neuer.
 - **Node:** Adresse aus `listen` im Abschnitt `node:` der config
   (`~/.config/kephalaion/config.yaml`, abweichend `KEPHALAION_CONFIG`, `XDG_CONFIG_HOME`);
   überschreibbar mit der Einstellung `kephalaion.nodeUrl`.
-- **Anmeldung:** aus `~/.config/kephalaion/tokens/<hub>/<account>.token`; ohne Einrichtung. Bei
-  mehreren Accounts an einem Hub: „Kephalaion: Account wählen“.
+- **Anmeldung:** aus `~/.config/kephalaion/tokens/<hub>/<account>.token`; ohne Einrichtung. Der
+  Account je Hub in derselben Reihenfolge wie die Kommandozeile: die Einstellung
+  `kephalaion.accounts` („Kephalaion: Account wählen“), der Standard-Account
+  (`kephalaion node account default`), die einzige Token-Datei. Trifft nichts zu, fehlt die
+  Wahl; die Statusleiste nennt die Kandidaten.
 - **MCP-Server für Copilot:** Die Erweiterung meldet den Node als MCP-Server „Kephalaion“, mit
-  den Header-Paaren aus den Token-Dateien wie `kephalaion node mcp headers` (ein Hub mit
-  mehreren Accounts ohne Wahl fehlt). Das Token setzt sie erst beim Start des Servers ein, nie
+  den Header-Paaren aus den Token-Dateien wie `kephalaion node mcp headers` (ein Hub, an dem
+  die Wahl fehlt, fehlt). Das Token setzt sie erst beim Start des Servers ein, nie
   in die gemeldete Definition. Solange VS Code auf „Trace“ protokolliert, meldet sie ihn nicht:
   VS Code schriebe die Header sonst ins Log. Nach `kephalaion node account rotate` den Server
   neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten). Abschalten mit

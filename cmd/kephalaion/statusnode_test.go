@@ -256,3 +256,64 @@ func TestStatusNodeProbeTokens(t *testing.T) {
 		t.Errorf("Hinweis auf setup trotz unlesbarem Verzeichnis:\n%s", r.out)
 	}
 }
+
+// Ein reiner Client (Task 037), etwa ein Devcontainer mit der config des
+// Hosts: Fehlen Datenbank und Verzeichnis, ist die Rolle „läuft nicht hier“
+// — der Node mit Antwort und Anmeldung, der Hub ohne beides, kein Fehler,
+// Exit 0. Fehlt nur die Datenbank, bleibt es ein Fehler (Exit 1).
+func TestStatusPureClient(t *testing.T) {
+	dir := isolate(t)
+	listen, checks := fakeNode(t, initializeOK, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"hub":"eigen","account":"ok1","user":"ok1","collections":["team-x"]}`)
+	})
+	gone := filepath.Join(dir, "host", "var", "lib", "kephalaion")
+	cfg := config.Config{
+		Hub:  &config.Section{DB: "sqlite://" + filepath.Join(gone, "hub.db")},
+		Node: &config.Section{DB: "sqlite://" + filepath.Join(gone, "node.db"), Listen: listen},
+	}
+	if err := config.Save(config.SystemPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	tokens := filepath.Join(dir, "config", "kephalaion", "tokens", "eigen")
+	if err := os.MkdirAll(tokens, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tokens, "ok1.token"), []byte(dummyTokenA+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := runT(t, "status")
+	r.want(t, 0, "Quelle: global", "hub: läuft nicht hier", "node: läuft nicht hier",
+		"(fehlt samt Verzeichnis "+gone+")", "ein reiner Client",
+		"  Antwort:       ja, Version t035", "  Anmeldung:     eigen/ok1 gültig (User ok1, Collections team-x)")
+	if strings.Contains(r.out, "Fehler") {
+		t.Errorf("Fehler auf einem reinen Client:\n%s", r.out)
+	}
+	hub, node, _ := strings.Cut(r.out, "node: läuft nicht hier")
+	if strings.Contains(hub, "Antwort:") || strings.Contains(hub, "Anmeldung:") {
+		t.Errorf("Hub mit Probe oder Anmeldung:\n%s", hub)
+	}
+	if !strings.Contains(node, "Anmeldung:") {
+		t.Errorf("Node ohne Anmeldung:\n%s", node)
+	}
+	if checks.Load() != 1 || strings.Contains(r.out, dummyTokenA) {
+		t.Errorf("Anfragen mit Token: %d; Token in der Ausgabe: %v", checks.Load(), strings.Contains(r.out, dummyTokenA))
+	}
+	if exists(gone) {
+		t.Error("status hat das Verzeichnis angelegt")
+	}
+
+	// Das Verzeichnis gibt es, nur die Datenbank fehlt: Fehler, Exit 1.
+	if err := os.MkdirAll(gone, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r = runT(t, "status")
+	r.want(t, 1, "hub: eingerichtet", "node: eingerichtet", "Fehler:", "Datenbankdatei fehlt")
+	if strings.Contains(r.out, "läuft nicht hier") {
+		t.Errorf("läuft nicht hier, obwohl das Verzeichnis existiert:\n%s", r.out)
+	}
+	if exists(filepath.Join(gone, "node.db")) {
+		t.Error("status hat die Datenbankdatei angelegt")
+	}
+}

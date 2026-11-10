@@ -331,6 +331,23 @@ denselben Hinweis wie `node account list`: die Datei löschen oder neu einrichte
 die Prüfung abzuschalten, gibt es nicht. `kephalaion init` und `kephalaion service install`
 brechen für einen anderen User als den Systembenutzer ab.
 
+**`status` auf einem reinen Client (Task 037).** Ein reiner Client liest die config eines
+Rechners, auf dem die Rollen laufen, ohne selbst eine Rolle zu tragen — etwa ein Devcontainer,
+der die config des Hosts einbindet (global oder pro User) und den Node des Hosts über
+`127.0.0.1:7433` erreicht. Dort fehlen die Datenbankdatei und ihr Verzeichnis
+(`/var/lib/kephalaion` bzw. das Datenverzeichnis des Host-Users). Fehlen **beide**, meldet
+`status` die Rolle als `läuft nicht hier` statt eines Fehlers: beim Node mit `Antwort:` und den
+Zeilen `Anmeldung:`, beim Hub ohne beides; das trägt nicht zum Exit-Code bei, und gelten Probe
+und Anmeldung, endet `status` mit Exit 0. Fehlt nur die Datei und das Verzeichnis existiert,
+bleibt es ein Fehler (Exit 1): Dann ist auf einem eingerichteten Rechner etwas kaputt — die
+Datenbank gelöscht oder der Pfad in der config falsch. **Grenze:** Ein ganz gelöschtes
+Datenverzeichnis auf einem eingerichteten Rechner sieht genauso aus wie ein reiner Client; eine
+Erkennung des Containers gibt es nicht. Eine Datenbank, die der Aufrufer bei der globalen config
+mangels Rechten nicht lesen darf, bleibt der Fall oben (Hinweis auf die globale Installation).
+Ohne config bleibt `status` wie bisher („Keine Rolle eingerichtet“). Nicht zu verwechseln mit
+einem **Client ohne eigenen Node** („Node für Clients anderer Rechner“ unten): Der erreicht
+einen Node auf einem anderen Rechner über `https`, ein reiner Client den Node seines Hosts.
+
 Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) an `http://127.0.0.1:7433/mcp`, siehe README,
 „serve und MCP“. Bei ihren KI-Assistenten tragen sie den Node selbst ein
@@ -357,8 +374,8 @@ kephalaion node mcp remove --assistant opencode       # nur diesen Eintrag entfe
 | VS Code (Copilot) | die Erweiterung für VS Code meldet den Node selbst ([`vscode.md`](vscode.md), „MCP-Server für Copilot“) | aus den Token-Dateien, erst beim Start des Servers |
 
 Der Helfer steht mit absolutem Pfad im Eintrag (`/home/<user>/.local/bin/kephalaion node mcp
-headers --tokens-dir … --account <hub>=<account>`): Assistenten aus einer GUI erben kein
-`PATH`, und Codex leert die Umgebung. Alles andere in den Dateien bleibt, auch Kommentare.
+headers --tokens-dir …`, dazu `--account <hub>=<account>` nur für eine ausdrückliche Wahl):
+Assistenten aus einer GUI erben kein `PATH`, und Codex leert die Umgebung. Alles andere in den Dateien bleibt, auch Kommentare.
 Gefunden werden die Assistenten über `PATH`; ein nicht gefundener wird übergangen und genannt.
 
 **Wann eingetragen wird:**
@@ -381,10 +398,8 @@ Gefunden werden die Assistenten über `PATH`; ein nicht gefundener wird übergan
   OpenCode ungültig, deshalb nimmt `add` nur vorhandene Token-Dateien auf und bereinigt tote
   Verweise; `status` warnt.
 
-**Mehrere Accounts an einem Hub:** `add` nimmt je Hub die einzige Token-Datei. Liegen mehrere
-da, wählt `--account <hub>=<account>` (wiederholbar); die Wahl steht danach ausdrücklich im
-Eintrag und bleibt bei jedem weiteren `add`, solange ihre Datei da ist. Ohne Wahl wird der Hub
-übergangen und genannt (Exit 1), die übrigen werden eingetragen.
+**Welcher Account je Hub:** die ausdrückliche Wahl (`--account`), sonst der Standard-Account des
+Hubs, sonst die einzige Token-Datei — siehe „Mehrere Accounts an einem Hub“ unten.
 
 **Nach `rotate`** stimmt der Eintrag ohne Zutun — der Helfer bzw. der Verweis liest die Datei —,
 wirksam aber erst mit einer neuen Sitzung des Assistenten bzw. einer Neuverbindung (in VS Code:
@@ -414,6 +429,187 @@ ankommt; höchstens die Schlüssel: `kephalaion node mcp headers | jq -r 'keys[]
 
 Exit-Codes von `add`, `remove` und `status`: 0 fertig, 1 Fehler bei einem Assistenten oder ein
 übergangener Hub, 2 falscher Aufruf.
+
+### Mehrere Accounts an einem Hub
+
+Seit Task 037 gibt es je Rechner und Hub einen **Standard-Account**: die Datei
+`~/.config/kephalaion/tokens/<hub>/default` neben den Token-Dateien, nur der Name des Accounts
+und eine Zeilenschaltung, `0600`, nie ein Token. Alle Clients dieses Rechners lesen ihn — die
+Kommandozeile, der Helfer der Assistenten, die Erweiterung für VS Code und Clients wie
+k-playbook über die Auskunft (unten, „Auskunft für Clients“). Er steht nicht in der config: Die
+beschreibt die Installation, und bei einer globalen gibt es keine des Users; `tokens/` gibt es
+bei beiden Arten und im Devcontainer, der es einbindet.
+
+**Reihenfolge der Wahl**, in jedem Client gleich:
+
+1. die eigene Überschreibung des Clients — `--account <hub>=<account>` an `node mcp
+   add|headers` und `node client`, `--account <name>` an `node dir`, `kephalaion.accounts` in
+   VS Code;
+2. der Standard;
+3. die einzige Token-Datei.
+
+Trifft nichts zu, **fehlt die Wahl**: Der Hub bekommt keine Anmeldung, und die Kandidaten
+werden genannt. Nennt der Standard einen Account ohne Token-Datei, gibt es einen Hinweis, und
+die nächste Regel greift. Eine Überschreibung ohne Token-Datei fällt dagegen nicht zurück. Den
+ersten Account nach Namen nimmt niemand mehr.
+
+```sh
+kephalaion node account default vm             # zeigen: Standard, Token-Dateien, welcher gilt
+kephalaion node account default vm alice-wsl   # setzen; der Account braucht eine Token-Datei
+kephalaion node account default vm --unset     # entfernen
+kephalaion node account list --node …          # Spalte STANDARD markiert ihn je Hub
+```
+
+- **`setup`** setzt den Standard, wenn es der erste Account des Hubs ist. Bei jedem weiteren
+  bleibt er, und die Ausgabe nennt den Weg, ihn zu ändern. Hat der Hub noch keinen Standard,
+  setzt `setup` vorher den bisher einzigen Account als Standard und sagt es — sonst fiele der Hub
+  mit dem zweiten sofort in „Wahl fehlt“.
+- **`default <hub> <account>`** stößt mit eigenem Node danach `node mcp add --auto` an, wie
+  `setup`. Claude Code und Codex: Ohne ausdrückliche Wahl steht im Helfer kein `--account`; er
+  löst bei jeder Verbindung auf, ein neuer Standard wirkt dort also ohne `add`. OpenCode trägt
+  den Account immer fest im Eintrag (Header und Verweis auf die Token-Datei) — ausdrücklich oder
+  aufgelöst ist dort nicht zu unterscheiden: Trägt der Eintrag den bisherigen Standard (gab es
+  keinen: die bisher einzige Token-Datei), zieht `default` ihn auf den neuen nach; trägt er einen
+  anderen Account, gilt das als ausdrückliche Wahl und bleibt. `default` nennt jeden Eintrag,
+  dessen ausdrückliche Wahl vom neuen Standard abweicht, mit dem Weg, sie zu ändern.
+- **Ohne eigenen Node** (kein `node:` in der config, etwa ein Client mit `--node https://…`)
+  stößt `default` kein `add --auto` an: Claude Code und Codex folgen dem Standard ohne `add`; für
+  OpenCode nennt es den Weg `kephalaion node mcp add --node … --assistant opencode --account
+  <hub>=<account>`.
+- **`node mcp add`** mit `--account <hub>=<account>` schreibt eine ausdrückliche Wahl in den
+  Eintrag; sie bleibt bei jedem weiteren `add`, solange ihre Datei da ist. Ohne `--account` lässt
+  `add` bei OpenCode den Account im Eintrag stehen, solange seine Token-Datei existiert. Eine
+  Wahl wird **nicht mehr aus den Einträgen anderer Assistenten** übernommen; das tut jetzt der
+  Standard. Ein Hub ohne Wahl und ohne Standard wird übergangen und genannt (Exit 1), die übrigen
+  werden eingetragen.
+- **`node mcp status`** nennt je Assistent eine ausdrückliche Wahl, die vom Standard abweicht
+  (`Hinweis: ausdrückliche Wahl vm=alice im Eintrag, nicht der Standard bob`), dazu am Ende
+  einen Standard ohne Token-Datei.
+- **`node dir push|pull`** wählt ebenso: `--account`, der Standard, die einzige Token-Datei;
+  fehlt die Wahl, bricht es mit den Kandidaten ab. `--token-file` und `--token-stdin` bleiben,
+  wie sie sind (dann ist `--account` Pflicht).
+
+**Umstieg von einer Version vor Task 037:** Jeder alte Eintrag im Helfer trägt `--account` für
+jeden Hub, und das bleibt als ausdrückliche Wahl — ein bloßes `add` ändert daran nichts. Damit
+die Einträge dem Standard folgen, je Rechner einmal neu einrichten:
+
+```sh
+kephalaion node mcp remove
+kephalaion node mcp add                 # mit Node der config; sonst wie bisher mit --node … --hub …
+```
+
+## Auskunft für Clients
+
+Clients außerhalb dieses Repos — etwa k-playbook — brauchen auf jedem Rechner dieselben drei
+Angaben: welche config gilt, unter welcher Adresse der Node dieses Rechners lauscht und welcher
+Account je Hub gilt. Statt die Suche nachzubauen, fragen sie seit Task 037 die Kommandozeile
+(`konzept.md`, „Bei den Assistenten angemeldet“):
+
+```sh
+kephalaion node client --json --format 1 --no-probe --hub vm
+kephalaion node client                  # dasselbe lesbar, mit Probe des Nodes
+```
+
+`node client [--json] [--format <n>] [--no-probe] [--config pfad] [--hub <alias>]… [--account
+<hub>=<account>]…` öffnet keine Datenbank und schickt keine Anfrage mit Token; die Probe des
+Nodes geht ohne Token. In keiner Ausgabe steht ein Token, nur die Pfade der Token-Dateien. Ohne
+`--json` ist die Ausgabe lesbarer Text. Mit `--json` steht auf stdout genau ein JSON-Objekt,
+alles andere geht auf stderr.
+
+**Format 1:**
+
+```json
+{
+  "format": 1,
+  "kephalaion": "vX.Y.Z",
+  "config": {
+    "path": "/home/anna/.config/kephalaion/config.yaml",
+    "source": "user",
+    "exists": true,
+    "problem": null
+  },
+  "node": {
+    "listen": "127.0.0.1:7433",
+    "url": "http://127.0.0.1:7433/mcp",
+    "source": "config",
+    "reachable": null,
+    "version": null
+  },
+  "tokensDir": "/home/anna/.config/kephalaion/tokens",
+  "hubs": [
+    {
+      "alias": "vm",
+      "account": "anna-wsl",
+      "choice": "default",
+      "tokenFile": "/home/anna/.config/kephalaion/tokens/vm/anna-wsl.token",
+      "candidates": ["anna-laptop", "anna-wsl"],
+      "pending": [],
+      "notes": []
+    }
+  ]
+}
+```
+
+| Feld | Bedeutung |
+|---|---|
+| `format` | die Fassung dieses Objekts (Zahl) |
+| `kephalaion` | die Version des Binarys |
+| `config.path` | die config, die gilt, oder `null` |
+| `config.source` | `flag` (`--config`), `env` (`KEPHALAION_CONFIG`), `user`, `system` oder `none`. `none` und `path: null` nur, wenn nichts angegeben ist und weder die config des Users noch die globale existiert. Zeigen `--config` oder `KEPHALAION_CONFIG` auf eine fehlende Datei, ist `path` dieser Pfad, `source` `flag` bzw. `env` und `exists` `false` |
+| `config.exists` | ob es die Datei gibt |
+| `config.problem` | der Grund, wenn die config da, aber nicht lesbar oder ungültig ist — ohne Inhalt der Datei; sonst `null`. Dann gilt für den Node die Standardadresse (`node.source: default`), Exit 0 |
+| `node` | immer der **lokale** Node dieses Rechners, nie ein entfernter; es gibt kein `--node` |
+| `node.listen` | `listen` aus dem Abschnitt `node:` der config oder `null` |
+| `node.url` | die fertige MCP-Adresse; eine Wildcard wird umgesetzt: `0.0.0.0` zu `127.0.0.1`, `[::]` zu `[::1]` |
+| `node.source` | `config` oder `default` (die Standardadresse `127.0.0.1:7433`) |
+| `node.reachable` | aus einer Probe ohne Token mit einer Frist von 3 s wie bei `status`; mit `--no-probe` `null` |
+| `node.version` | die Version aus der Probe, sonst `null` |
+| `tokensDir` | das Verzeichnis der Token-Dateien |
+| `hubs` | mit `--hub` genau ein Eintrag je genanntem Alias, auch ohne Verzeichnis oder Token-Datei; ohne `--hub` je Hub mit Verzeichnis unter `tokens/`, dazu je Hub aus `--account`. Nach Alias sortiert |
+| `hubs[].alias` | der Alias des Hubs |
+| `hubs[].account` | der gewählte Account oder `null` |
+| `hubs[].choice` | `override` (`--account`), `default` (Standard), `only` (einzige Token-Datei) oder `missing` (Wahl fehlt) |
+| `hubs[].tokenFile` | der Pfad der Token-Datei oder `null`, nie ihr Inhalt |
+| `hubs[].candidates` | die Accounts mit Token-Datei, immer eine Liste, auch leer |
+| `hubs[].pending` | die Accounts mit wartendem Token (`.pending`), immer eine Liste. Eine `.pending` allein macht keinen Kandidaten; liegt daneben die `.token` (ein offenes `rotate`), steht der Account in beiden Listen |
+| `hubs[].notes` | Texte nur zum Anzeigen, nie mit Token; entschieden wird nach `choice` und den übrigen Feldern |
+
+Eine **Überschreibung ohne Token-Datei** (`--account vm=x`, aber kein `x.token`) ergibt
+`choice: override`, `account: x`, `tokenFile: null` und einen Hinweis in `notes` — ohne Rückfall
+auf den Standard oder die einzige Datei. Ein Standard ohne Token-Datei fällt dagegen auf die
+nächste Regel zurück.
+
+**Format 1 beschreibt den lokalen Rechner und seinen lokalen Node.** Auf einem Client ohne
+eigenen Node (Einträge mit `--node https://…`, „Ein Client ohne eigenen Node“ unten) nennt die
+Auskunft deshalb die Standardadresse, in der Regel nicht erreichbar; einen entfernten Node
+beschreibt sie nicht. Auf einem reinen Client — etwa einem Devcontainer, dessen
+`127.0.0.1:7433` über einen Weiterleiter den Node des Hosts erreicht — ist die Standardadresse
+dagegen richtig. Fehlt die config ganz (Devcontainer auf einem Host mit globaler Installation,
+ohne eingebundenes `/etc/kephalaion`), sagt die Auskunft das (`source: none`) und nennt die
+Standardadresse, statt abzubrechen.
+
+**Exit-Codes:** 0, sobald die Auskunft entstehen konnte — eine fehlende oder nicht lesbare
+config, ein Node, der nicht antwortet, und „Wahl fehlt“ stehen im JSON; 1, wenn sie nicht
+entstehen konnte (Heimatverzeichnis unbekannt); 2 nur bei falschem Aufruf, auch bei einem
+`--format`, das dieses Binary nicht trägt — stderr nennt dann die getragenen Fassungen.
+
+**Fassungen und `--format`:** Ohne `--format` kommt die neueste. Eine höhere Nummer heißt: ein
+Feld wurde umbenannt oder entfernt, oder eine Bedeutung hat sich geändert. Ein neues Feld
+erhöht sie nicht; Clients übergehen unbekannte Felder. Clients prüfen genau und rufen mit
+`--format <n>` auf. Eine ältere Fassung trägt das Binary mindestens bis zum Release nach dem,
+das die neue einführt.
+
+| Fassung | eingeführt | getragen |
+|---|---|---|
+| 1 | Task 037, erste Version nach v0.3.2 (die genaue Nummer kommt beim Release dazu) | ja |
+
+**Mindestversion für Clients:** die erste Version nach v0.3.2, die Format 1 liefert — die genaue
+Nummer wird beim Release hier nachgetragen. Ein älteres Binary kennt `node client` nicht und
+endet mit Exit 2 („Unbekanntes Kommando“).
+
+**Orte des Binarys für Clients**, verbindlich, in dieser Reihenfolge: zuerst `PATH`, dann
+`~/.local/bin/kephalaion` (`install.sh`), dann `/usr/local/bin/kephalaion` (globale
+Installation). Ein MCP-Server, den ein Assistent aus einer GUI startet, erbt `PATH` nicht immer.
 
 ## Hub für Nodes anderer Rechner: hinter einem Reverse-Proxy
 
@@ -1123,7 +1319,8 @@ kephalaion node mcp status --node "$N" --hub vm   # eingetragen / weicht ab / fe
 
 - `<hub>` und `--hub` nennen den **Alias des Hub-Eintrags am entfernten Node** (auf der VM
   `vm`); so heißt auch das Verzeichnis unter `tokens/`. Der Account kommt wie lokal aus
-  `--account` oder der einzigen Token-Datei unter `~/.config/kephalaion/tokens/<alias>/`.
+  `--account`, dem Standard-Account oder der einzigen Token-Datei unter
+  `~/.config/kephalaion/tokens/<alias>/` („Mehrere Accounts an einem Hub“ oben).
 - `http` geht nur zu diesem Rechner (`localhost`, `127.0.0.1`, `[::1]`) und zu
   `host.docker.internal`, alles andere nur über `https` — sonst gingen Tokens im Klartext übers
   Netz. Keine Query, kein User in der Adresse, keiner Weiterleitung wird gefolgt.
@@ -1169,6 +1366,12 @@ Hub. Eingerichtet wird er über den entfernten Node (Task 028):
 Der alte Weg — das erste `rotate` am Node des Hub-Rechners als Systembenutzer und die
 Token-Datei per SSH übergeben („Hub-Einträge und Accounts, von Hand“, Sonderfall) — geht weiter,
 ist aber nur noch ein Sonderfall.
+
+**Standard und Auskunft auf einem Client ohne eigenen Node (Task 037):** `node account default`
+trägt hier nichts ein; Claude Code und Codex folgen dem Standard über den Helfer, OpenCode zieht
+`kephalaion node mcp add --node https://<name>/kephalaion --assistant opencode --account
+<hub>=<account>` nach. `node client` beschreibt den lokalen Rechner: Es nennt die Standardadresse
+`127.0.0.1:7433`, nicht den entfernten Node („Auskunft für Clients“ oben).
 
 **Spätere Rotation:** `setup` richtet nur ein (es bricht ab, wenn die Token-Datei schon da
 ist), und `node account rotate` braucht einen Hub-Eintrag am eigenen Node; die automatischen
