@@ -56,6 +56,11 @@ type docHub struct {
 	fetched   []contract.FetchRequest
 	fetchErr  error
 	fetchResp contract.FetchResponse
+	// rebuilt sind die Anfragen an rebuild_docs; rebuildErr lässt es
+	// scheitern, sonst antwortet es mit rebuildResp.
+	rebuilt     []contract.RebuildDocsRequest
+	rebuildErr  error
+	rebuildResp contract.RebuildDocsResponse
 	// requests merkt je Account und Schlüssel (request_id) die Antwort
 	// eines gelungenen Schreibvorgangs, wie der Hub (ohne Fingerabdruck und
 	// Frist); requestIDs sind die Schlüssel, die ankamen, leer ohne.
@@ -75,6 +80,16 @@ func (f *docHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.F
 		return contract.FetchResponse{}, f.fetchErr
 	}
 	return f.fetchResp, nil
+}
+
+func (f *docHub) RebuildDocs(_ context.Context, req contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rebuilt = append(f.rebuilt, req)
+	if f.rebuildErr != nil {
+		return contract.RebuildDocsResponse{}, f.rebuildErr
+	}
+	return f.rebuildResp, nil
 }
 
 func newDocHub(allowed ...string) *docHub {

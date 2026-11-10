@@ -21,6 +21,7 @@ const hubCollectionUsage = `Aufruf:
   kephalaion hub collection show <name>
   kephalaion hub collection set  <name> [--description text] [--public[=false]]
   kephalaion hub collection fetch <name>
+  kephalaion hub collection rebuild-docs <name>
   kephalaion hub collection rm   <name>
 
 Kommandos:
@@ -39,6 +40,14 @@ Kommandos:
          geholt, ist nichts zu tun. Tag aus der Weiterleitung von
          releases/latest, ohne GitHub-API und Token; Proxy aus der Umgebung
          (HTTPS_PROXY). Höchstens 20 s für Tag und Laden.
+  rebuild-docs
+         baut docs/ der Collection neu, in einem Schreibvorgang (Urheber
+         system): docs/README.md, die festen Verzeichnisse manual/ und
+         generated/, eine Mahnung (README.md) in jedem Verzeichnis ohne
+         README.md und je Verzeichnis eine index.md; verwaiste index.md und
+         Mahnungen löscht es. Nur Geändertes wird geschrieben. Ohne docs/
+         auf oberster Ebene ist nichts zu tun; eine Collection mit Quelle
+         lehnt es ab. Accounts stoßen dasselbe über MCP an (rebuild_docs).
   rm     entfernt eine Collection — nur, wenn kein Node sie abgleichen darf,
          kein Account Rechte in ihr hat (auch kein gesperrter) und keine
          Dokumente in ihr stehen, auch keine Löschmarken. Löschmarken von
@@ -223,6 +232,17 @@ func runHubCollection(args []string, stdout, stderr io.Writer) int {
 					return err
 				}
 				printFetch(stdout, pos[0], res)
+				return nil
+			})
+		},
+		"rebuild-docs": func(a []string) int {
+			c := newCommand("hub collection rebuild-docs", u, stdout, stderr, "<name>")
+			return c.hubDo(a, func(ctx context.Context, s hubstore.Store, pos []string) error {
+				res, err := s.RebuildDocs(ctx, pos[0], source.Actor{Account: hubstore.Admin})
+				if err != nil {
+					return err
+				}
+				printRebuild(stdout, pos[0], res)
 				return nil
 			})
 		},
@@ -418,6 +438,19 @@ func printFetch(w io.Writer, name string, res source.Result) {
 		fmt.Fprintf(w, " (Revision %d)", res.Revision)
 	}
 	fmt.Fprintln(w, ".")
+}
+
+// printRebuild zeigt das Ergebnis eines Neubaus von docs/.
+func printRebuild(w io.Writer, name string, res hubstore.RebuildResult) {
+	switch {
+	case res.NoDocs:
+		fmt.Fprintf(w, "Collection %s: kein docs/ auf oberster Ebene, nichts zu tun.\n", name)
+	case res.Revision == 0:
+		fmt.Fprintf(w, "Collection %s: docs/ schon aktuell.\n", name)
+	default:
+		fmt.Fprintf(w, "Collection %s: docs/ neu gebaut — %d angelegt, %d ersetzt, %d gelöscht (Revision %d).\n", name,
+			res.Created, res.Updated, res.Deleted, res.Revision)
+	}
 }
 
 // hubDo wertet die Argumente aus, öffnet den Hub und führt fn aus.

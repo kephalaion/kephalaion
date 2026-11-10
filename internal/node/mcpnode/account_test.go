@@ -137,6 +137,10 @@ func (f *acctHub) Fetch(context.Context, contract.FetchRequest) (contract.FetchR
 	return contract.FetchResponse{}, errors.New("nicht in der Attrappe")
 }
 
+func (f *acctHub) RebuildDocs(context.Context, contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	return contract.RebuildDocsResponse{}, errors.New("nicht in der Attrappe")
+}
+
 // set ändert refuse und lost unter der Sperre.
 func (f *acctHub) set(refuse, lost bool) {
 	f.mu.Lock()

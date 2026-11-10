@@ -40,10 +40,13 @@ const (
 	// OpNodeRotate ersetzt das Token des Nodes (Task 034); nie wiederholt
 	// wie rotate.
 	OpNodeRotate = "node_rotate"
+	// OpRebuildDocs baut docs/ einer Collection neu (Task 033); ein
+	// Schreibvorgang mit kleinem Body, nie wiederholt wie fetch.
+	OpRebuildDocs = "rebuild_docs"
 )
 
 // MaxBodyBytes begrenzt den Body einer Anfrage an whoami, rotate,
-// node_rotate, sync und fetch:
+// node_rotate, sync, fetch und rebuild_docs:
 // 1 MiB. Antworten sind nicht begrenzt — eine Seite des Abgleichs kann eine
 // große Revision ganz tragen.
 const MaxBodyBytes = 1 << 20
@@ -58,7 +61,7 @@ const MaxWriteBodyBytes = 6*contract.MaxDocumentBytes + MaxBodyBytes
 // wenn der Hub den Vorgang nicht kennt.
 func bodyLimit(op string) (limit int64, ok bool) {
 	switch op {
-	case OpWhoami, OpRotate, OpNodeRotate, OpSync, OpFetch:
+	case OpWhoami, OpRotate, OpNodeRotate, OpSync, OpFetch, OpRebuildDocs:
 		return MaxBodyBytes, true
 	case OpCreate, OpWrite, OpDelete, OpRename:
 		return MaxWriteBodyBytes, true

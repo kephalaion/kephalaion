@@ -200,6 +200,10 @@ func (l localHub) Fetch(ctx context.Context, req contract.FetchRequest) (contrac
 	return outcome(l.hub.Fetch(ctx, req))
 }
 
+func (l localHub) RebuildDocs(ctx context.Context, req contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	return outcome(l.hub.RebuildDocs(ctx, req))
+}
+
 // outcome hüllt einen Fehler, der kein Fehler des Vertrags ist, in
 // contract.ErrOutcomeUnknown.
 func outcome[T any](resp T, err error) (T, error) {

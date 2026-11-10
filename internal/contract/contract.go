@@ -76,6 +76,13 @@ type Hub interface {
 	// nie wiederholt, unklarer Ausgang als ErrOutcomeUnknown. Der Aufrufer
 	// darf erneut anstoßen — dann antwortet der Hub FetchCurrent.
 	Fetch(ctx context.Context, req FetchRequest) (FetchResponse, error)
+
+	// RebuildDocs lässt den Hub docs/ einer Collection neu bauen (Task 033):
+	// docs/README.md, feste Verzeichnisse, Mahnungen, jede index.md, als
+	// system. Ein Schreibvorgang wie fetch: nie wiederholt, unklarer Ausgang
+	// als ErrOutcomeUnknown; der Aufrufer darf erneut anstoßen — dann
+	// antwortet der Hub RebuildCurrent.
+	RebuildDocs(ctx context.Context, req RebuildDocsRequest) (RebuildDocsResponse, error)
 }
 
 // NodeAuth ist die Anmeldung des Nodes am Hub: sein Name dort und sein Token.

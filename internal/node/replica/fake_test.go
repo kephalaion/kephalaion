@@ -197,3 +197,7 @@ func (f *fakeHub) RotateNode(context.Context, contract.NodeRotateRequest) (contr
 func (f *fakeHub) Fetch(context.Context, contract.FetchRequest) (contract.FetchResponse, error) {
 	return contract.FetchResponse{}, errors.New("fetch: in der Attrappe nicht umgesetzt")
 }
+
+func (f *fakeHub) RebuildDocs(context.Context, contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	return contract.RebuildDocsResponse{}, errors.New("rebuild_docs: in der Attrappe nicht umgesetzt")
+}

@@ -141,4 +141,12 @@ func TestHubDocGenerated(t *testing.T) {
 		"übersprungen: docs/README.md (erzeugte Datei", "angelegt: docs/sub/x.md",
 		"1 angelegt, 0 ersetzt, 0 unverändert, 3 übersprungen")
 	runT(t, "hub", "doc", "get", "team-x", "docs/index.md", c).want(t, 1, "gibt es")
+
+	// Neubau als Admin: legt index.md, Mahnungen und docs/README.md an.
+	runT(t, "hub", "collection", "rebuild-docs", "team-x", c).want(t, 0, "docs/ neu gebaut — 8 angelegt, 0 ersetzt, 0 gelöscht")
+	runT(t, "hub", "doc", "get", "team-x", "docs/sub/index.md", c).want(t, 0, "* [x.md](x.md) - *no description*")
+	runT(t, "hub", "collection", "rebuild-docs", "team-x", c).want(t, 0, "docs/ schon aktuell")
+	runT(t, "hub", "collection", "add", "leer", c).want(t, 0)
+	runT(t, "hub", "collection", "rebuild-docs", "leer", c).want(t, 0, "kein docs/ auf oberster Ebene")
+	runT(t, "hub", "collection", "rebuild-docs", "fehlt", c).want(t, 1, "fehlt")
 }

@@ -64,6 +64,15 @@ func (e *echoHub) Fetch(_ context.Context, req contract.FetchRequest) (contract.
 		Status: contract.FetchFetched, Tag: "v1", Revision: 7, Created: 1}, nil
 }
 
+func (e *echoHub) RebuildDocs(_ context.Context, req contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	e.auth, e.last = req.Auth, req
+	if e.err != nil {
+		return contract.RebuildDocsResponse{}, e.err
+	}
+	return contract.RebuildDocsResponse{HubID: "01H", Version: req.Version, Collection: req.Collection,
+		Status: contract.RebuildRebuilt, Revision: 8, Created: 3}, nil
+}
+
 func (e *echoHub) Whoami(_ context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
 	e.auth = req.Auth
 	if e.err != nil {
@@ -384,6 +393,48 @@ func TestFetchOverHTTP(t *testing.T) {
 		if !errors.As(err, &ce) || ce.Code != code || errors.Is(err, contract.ErrOutcomeUnknown) {
 			t.Errorf("%s: %v", code, err)
 		}
+	}
+}
+
+// rebuild_docs über HTTP (Task 033): /v1/rebuild_docs, Anmeldung in Headern,
+// Antwort; ein Code des Vertrags ist eindeutig, auch generated_file (403);
+// ein 5xx ist unklar und wird nicht wiederholt.
+func TestRebuildDocsOverHTTP(t *testing.T) {
+	hub := &echoHub{}
+	var calls int
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		path = r.URL.Path
+		NewHandler(hub).ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv.URL)
+	req := contract.RebuildDocsRequest{Version: 1, Auth: auth, Account: contract.AccountAuth{Account: "bob", Token: "t"},
+		Collection: "wissen"}
+	resp, err := c.RebuildDocs(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != contract.RebuildRebuilt || resp.Created != 3 || resp.Collection != "wissen" || hub.auth != auth ||
+		path != "/v1/rebuild_docs" {
+		t.Errorf("Antwort %+v, Anmeldung %+v, Pfad %s", resp, hub.auth, path)
+	}
+	if got, ok := hub.last.(contract.RebuildDocsRequest); !ok || got.Account.Account != "bob" || got.Collection != "wissen" {
+		t.Errorf("Anfrage am Hub: %+v", hub.last)
+	}
+	if Status(contract.CodeGeneratedFile) != http.StatusForbidden {
+		t.Errorf("Status von generated_file: %d", Status(contract.CodeGeneratedFile))
+	}
+	hub.err = &contract.Error{Code: contract.CodeForbidden, Message: "Quelle"}
+	if _, err := c.RebuildDocs(context.Background(), req); !errors.Is(err, contract.ErrForbidden) ||
+		errors.Is(err, contract.ErrOutcomeUnknown) {
+		t.Errorf("forbidden: %v", err)
+	}
+	calls = 0
+	hub.err = errors.New("Datenbank weg")
+	if _, err := c.RebuildDocs(context.Background(), req); !errors.Is(err, contract.ErrOutcomeUnknown) || calls != 1 {
+		t.Errorf("5xx: %v nach %d Aufrufen", err, calls)
 	}
 }
 

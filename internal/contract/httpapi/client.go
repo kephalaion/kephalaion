@@ -174,6 +174,16 @@ func (c *Client) Fetch(ctx context.Context, req contract.FetchRequest) (contract
 	return resp, nil
 }
 
+// RebuildDocs lässt den Hub docs/ neu bauen, genau einmal; Ausgang wie bei
+// Fetch.
+func (c *Client) RebuildDocs(ctx context.Context, req contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	var resp contract.RebuildDocsResponse
+	if err := c.call(ctx, OpRebuildDocs, req.Version, req.Auth, req, &resp, false, c.ShortTimeout); err != nil {
+		return contract.RebuildDocsResponse{}, err
+	}
+	return resp, nil
+}
+
 // checkUTF8 lehnt einen Namen oder Inhalt ab, der kein gültiges UTF-8 ist:
 // encoding/json ersetzte die Bytes still durch U+FFFD, der Hub schriebe
 // einen anderen Namen oder Inhalt als gemeint. Die Antwort ist dieselbe wie

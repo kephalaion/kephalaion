@@ -283,6 +283,13 @@ func (f failWriteAfterCommit) Fetch(ctx context.Context, req contract.FetchReque
 	return contract.FetchResponse{}, errDBGone
 }
 
+func (f failWriteAfterCommit) RebuildDocs(ctx context.Context, req contract.RebuildDocsRequest) (contract.RebuildDocsResponse, error) {
+	if _, err := f.Hub.RebuildDocs(ctx, req); err != nil {
+		return contract.RebuildDocsResponse{}, err
+	}
+	return contract.RebuildDocsResponse{}, errDBGone
+}
+
 // Über local ist ein Fehler eines Schreibvorgangs, der kein Fehler des
 // Vertrags ist, ein unklarer Ausgang — der Hub kann geschrieben haben, wie
 // über HTTP bei 500. Ein Fehler des Vertrags bleibt eindeutig.
