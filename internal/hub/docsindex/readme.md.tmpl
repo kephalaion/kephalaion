@@ -24,7 +24,8 @@ English.
 
 `docs/README.md` (this file) and every `index.md` below `docs/` are written by Kephalaion only,
 whenever `docs/` is rebuilt (`rebuild_docs`). Writing them is refused with `generated_file`,
-for the admin as well; a rebuild overwrites them.
+for the admin as well; a rebuild overwrites them. Below `docs/`, `index.md` and `README.md` are
+file names only, never directory names: a name like `docs/index.md/x.md` is refused the same way.
 
 ## Directories
 

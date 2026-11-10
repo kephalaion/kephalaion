@@ -402,9 +402,10 @@ Der Hub prüft in dieser Reihenfolge, wie bei `rotate`:
      Verzeichnis gilt das je Dokument darunter, bei `rename` mit altem **und** neuem Namen; ein
      einziges verbotenes lässt den ganzen Vorgang scheitern. Sonst `forbidden`, die Meldung
      nennt den Grund („gehört admin, supersede fehlt“, „Scope vendor/k-playbook fehlt“). Eine
-     erzeugte Datei unter `docs/` schreibt niemand, unabhängig von allen Rechten: `generated_file`;
-     eine Mahnung ersetzt jeder mit `write`, und Verzeichnisvorgänge behandeln beide eigens
-     (siehe „Erzeugte Dateien unter `docs/`“).
+     erzeugte Datei unter `docs/` schreibt niemand, unabhängig von allen Rechten: `generated_file`,
+     ebenso einen neuen Namen, der `index.md` oder `README.md` unter `docs/` als Verzeichnis
+     nutzte; eine Mahnung ersetzt jeder mit `write`, und Verzeichnisvorgänge behandeln beide
+     eigens (siehe „Erzeugte Dateien unter `docs/`“).
    - **Name und Vorbedingung** je Vorgang, siehe unten. `base_revision` weicht von der Revision
      des lebenden Dokuments ab: `stale_revision`, die Meldung nennt die aktuelle. Die Revision
      ist global und steigt nur, Gleichheit genügt. Ohne `base_revision` gilt keine
@@ -456,8 +457,20 @@ erzeugten Datei oder Mahnung darunter ist dabei dasselbe wie das Recht, eine Mah
   im Verzeichnis, die zu `docs/README.md` würde. Die Meldung nennt das erste solche Dokument.
   Sonst geht es wie jedes `rename`.
 
-Die Sperre gilt über einen Node und für den Admin: `hub doc put|rm` lehnt eine erzeugte Datei ab;
-`hub import` übergeht sie und nennt sie in seiner Ausgabe — der Neubau stellt sie her.
+**Kein Verzeichnis namens `index.md` oder `README.md` unter `docs/`.** Auf diese Namen legt der
+Neubau eine Datei — `docs/README.md`, die `index.md` jedes Verzeichnisses, die Mahnung, wo die
+`README.md` fehlt —, und ein Verzeichnis gleichen Namens ließe ihr keinen Platz
+(`contract.ReservedDirOf`). Ein **neuer Name**, der `index.md` oder `README.md` unter `docs/` als
+Verzeichnis nutzte (`docs/index.md/x.md`, `docs/a/README.md/b/c.md`), ist deshalb
+`generated_file`, gleich mit welchen Rechten: bei `create` und als neuer Name eines `rename` —
+auch für jedes Dokument eines Verzeichnisses, das umzieht, und innerhalb eines solchen
+Verzeichnisses. Die Meldung nennt das Dokument und das Verzeichnis, das entstünde. Ein Dokument,
+das schon so heißt (aus der Zeit vor dieser Regel), bleibt änderbar und löschbar und lässt sich
+unter einen anderen Namen umbenennen; der Neubau übergeht es (siehe „rebuild_docs“).
+
+Die Sperre gilt über einen Node und für den Admin: `hub doc put|rm` lehnt eine erzeugte Datei ab,
+`hub doc put` auch ein neues Dokument unter einem Namen nach dem Absatz davor; `hub import`
+übergeht beides und nennt es in seiner Ausgabe — der Neubau stellt die erzeugten Dateien her.
 
 ### create
 
@@ -513,8 +526,9 @@ belegt sie es selbst:
 
 Reihenfolge nach der Lesbarkeit: `not_found`; bei einem Verzeichnis die neuen Namen und
 `base_revision` (`invalid`); das Recht — mit `generated_file` für eine erzeugte Datei als altem
-oder neuem Namen, eine einzelne Mahnung und ein Verzeichnis, das nach `docs/` hinein eine erzeugte
-Datei brächte —; bei einem Dokument `base_revision`; zuletzt das Ziel.
+oder neuem Namen, eine einzelne Mahnung, ein Verzeichnis, das nach `docs/` hinein eine erzeugte
+Datei brächte, und einen neuen Namen, der `index.md` oder `README.md` unter `docs/` als
+Verzeichnis nutzte —; bei einem Dokument `base_revision`; zuletzt das Ziel.
 
 ### Antwort
 
@@ -674,6 +688,14 @@ Eine `README.md` von Hand ersetzt der Neubau nie; er legt eine Mahnung nur an, w
 `README.md` liegt. Zählt ein Verzeichnis nur noch über erzeugte Dateien und Mahnungen, gilt es
 als leer.
 
+Ein Dokument, das `index.md` oder `README.md` unter `docs/` als Verzeichnis nutzt (aus der Zeit
+vor der Regel in „Erzeugte Dateien unter `docs/`“, etwa `docs/index.md/x.md`), übergeht der
+Neubau: Es zählt für kein Verzeichnis und steht in keinem Index. Auf einen Namen, den ein solches
+Verzeichnis belegt, legt er keine Datei; dort fehlen dann `docs/README.md`, die `index.md` oder
+die Mahnung, bis das Dokument entfernt oder umbenannt ist. Eine erzeugte Datei oder Mahnung
+darunter ist verwaist und wird gelöscht. Der Neubau scheitert so nie an einem Namen, der
+zugleich Datei und Verzeichnis wäre.
+
 Antwort:
 
 | Feld | JSON | Bedeutung |
@@ -744,7 +766,7 @@ nichts geändert.
 | `no_shared_collection` | 409 | der Account hat keine der Collections, die der Node abgleichen darf (`rotate`) |
 | `not_readable` | 403 | die Collection gibt es nicht, der Node darf sie nicht abgleichen, oder der Account hat keine lebende Zeile in ihr und sie ist nicht öffentlich — dieselbe Meldung für alle drei (Schreibvorgänge, `fetch`, `rebuild_docs`) |
 | `forbidden` | 403 | dem Account fehlt das Recht: `write` für Neues und Eigenes, `supersede` für Fremdes (beides nicht nötig unter einem Verzeichnis-Scope), unter `vendor/<name>/` der Scope `vendor/<name>`; direkt in `vendor/` schreibt niemand, in einer Collection mit Quelle ebenso (auch `rebuild_docs`); ohne Zeile in einer öffentlichen Collection hat er keines. Die Meldung nennt den Grund |
-| `generated_file` | 403 | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md` darunter) schreibt nur das System: `create`, `write`, `delete` und `rename` darauf als Einzelvorgang, ein `rename` eines Verzeichnisses nach `docs/` hinein, das eine erzeugte Datei mitbrächte, und ein `rename` einer einzelnen Mahnung. Die Meldung nennt das Dokument |
+| `generated_file` | 403 | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md` darunter) schreibt nur das System: `create`, `write`, `delete` und `rename` darauf als Einzelvorgang, ein `rename` eines Verzeichnisses nach `docs/` hinein, das eine erzeugte Datei mitbrächte, ein `rename` einer einzelnen Mahnung, und ein neuer Name, der `index.md` oder `README.md` unter `docs/` als Verzeichnis nutzte (`create`, `rename`). Die Meldung nennt das Dokument |
 | `not_found` | 404 | kein lebendes Dokument mit dem Namen (`write`), bei `delete` und `rename` auch kein Verzeichnis |
 | `name_taken` | 409 | ein lebendes Dokument trägt den Namen schon (`create`, `rename`), oder das Verzeichnis gibt es schon (`rename` eines Verzeichnisses) |
 | `path_conflict` | 409 | der Name wäre zugleich Datei und Verzeichnis (`create`, `rename`) |

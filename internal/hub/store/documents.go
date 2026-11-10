@@ -91,11 +91,15 @@ type PutResult struct {
 // PutResult in derselben Reihenfolge und die eine Revision des Vorgangs — 0,
 // wenn sich nichts geändert hat. Generated sind die Namen erzeugter Dateien
 // unter docs/ (contract.IsGenerated), die der Import übergangen hat, in der
-// Reihenfolge der Eingabe; der Neubau von docs/ stellt sie her.
+// Reihenfolge der Eingabe; der Neubau von docs/ stellt sie her. Reserved
+// sind die Namen, die neu entstünden und dabei unter docs/ index.md oder
+// README.md als Verzeichnis nutzten (contract.ReservedDirOf), ebenfalls
+// übergangen, in der Reihenfolge der Eingabe.
 type ImportResult struct {
 	Revision  int64
 	Results   []PutResult
 	Generated []string
+	Reserved  []string
 }
 
 // generatedByAdmin ist die Ablehnung einer erzeugten Datei für den Admin:
@@ -255,6 +259,21 @@ func (w *docTx) put(ctx context.Context, collection string, d DocumentInput) (Pu
 	return w.replace(ctx, cur, d.Content)
 }
 
+// newReserved sagt, ob name neu entstünde und dabei unter docs/ index.md
+// oder README.md als Verzeichnis nutzte (contract.ReservedDirOf) — für die
+// CLI am Hub, die anlegt oder ersetzt. Ein Dokument, das so schon heißt
+// (aus der Zeit vor der Sperre), ersetzt sie weiter.
+func (w *docTx) newReserved(ctx context.Context, collection, name string) (bool, error) {
+	if contract.ReservedDirOf(name) == "" {
+		return false, nil
+	}
+	_, err := liveDocument(ctx, w.tx, collection, name)
+	if errors.Is(err, ErrNotFound) {
+		return true, nil
+	}
+	return false, err
+}
+
 // create legt ein Dokument neu an, mit neuer id. Den Namen darf kein
 // lebendes Dokument tragen; das prüft der Aufrufer. Hier geprüft wird, dass
 // der Name nicht zugleich Datei und Verzeichnis wäre.
@@ -385,6 +404,11 @@ func (s *sqliteStore) PutDocument(ctx context.Context, collection, name, content
 	}
 	var res PutResult
 	err := s.writeDocs(ctx, collection, func(w *docTx) error {
+		if reserved, err := w.newReserved(ctx, collection, name); err != nil {
+			return err
+		} else if reserved {
+			return reservedDir(name, fmt.Sprintf("Dokument %s in %s schreiben", name, collection))
+		}
 		var err error
 		res, err = w.put(ctx, collection, in)
 		return err
@@ -411,6 +435,12 @@ func (s *sqliteStore) ImportDocuments(ctx context.Context, collection string, do
 		for _, d := range docs {
 			if contract.IsGenerated(d.Name) {
 				out.Generated = append(out.Generated, d.Name)
+				continue
+			}
+			if reserved, err := w.newReserved(ctx, collection, d.Name); err != nil {
+				return err
+			} else if reserved {
+				out.Reserved = append(out.Reserved, d.Name)
 				continue
 			}
 			res, err := w.put(ctx, collection, d)

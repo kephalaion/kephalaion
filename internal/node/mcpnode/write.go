@@ -198,7 +198,8 @@ type WriteError struct {
 }
 
 const createDescription = "Legt ein Dokument an, über den Hub. Ein lebendes Dokument mit dem Namen: name_taken. " +
-	"docs/README.md und jede index.md unter docs/ schreibt nur das System: generated_file. " +
+	"docs/README.md und jede index.md unter docs/ schreibt nur das System: generated_file; ebenso ein Name, der " +
+	"unter docs/ index.md oder README.md als Verzeichnis nutzte (docs/index.md/x.md). " +
 	"Antwort: Adresse, Name, id, Revision, angelegt, geändert, Größe; bei einer .md frontmatter_error, wenn sich " +
 	"das Frontmatter nicht lesen lässt, und frontmatter_hints, wenn ein unquotierter Wert an einem Kommentar endet " +
 	"(gespeichert ist trotzdem); ein Fehler trägt error.code. request_id: " +
@@ -218,8 +219,9 @@ const deleteDescription = "Löscht ein Dokument, über den Hub (Löschmarke). ba
 const renameDescription = "Benennt ein Dokument oder ein Verzeichnis um, über den Hub, in derselben Collection; die " +
 	"id bleibt, ein Verzeichnis alles oder nichts. Ist das Ziel belegt: name_taken, nichts wird überschrieben. " +
 	"base_revision wie bei write, nur für Dokumente. Unter docs/ wandern index.md und Mahnungen nicht mit, der Hub " +
-	"löscht sie; rebuild_docs stellt sie her. Antwort wie create unter dem neuen Namen; bei einem " +
-	"Verzeichnis kind directory und count. request_id wie bei create."
+	"löscht sie; rebuild_docs stellt sie her. Für den neuen Namen gilt generated_file wie bei create. " +
+	"Antwort wie create unter dem neuen Namen; bei einem Verzeichnis kind directory und count. request_id wie " +
+	"bei create."
 
 // writeOp ist ein Aufruf eines Werkzeugs, das schreibt: Werkzeug, Adresse,
 // Name und der Vorgang am Hub. newName ist bei rename der neue Name; um ihn

@@ -568,7 +568,7 @@ dem Code, nicht nach der Meldung:
 | `path_conflict` | der Name wäre zugleich Datei und Verzeichnis |
 | `not_found` | kein solches Dokument, bei `delete` und `rename` auch kein Verzeichnis |
 | `forbidden` | das Recht fehlt; die Meldung nennt den Grund („gehört admin, supersede fehlt“) |
-| `generated_file` | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md`) schreibt nur das System; ebenso ein `rename` nach `docs/` hinein, das eine mitbrächte, und das Umbenennen einer einzelnen Mahnung |
+| `generated_file` | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md`) schreibt nur das System; ebenso ein `rename` nach `docs/` hinein, das eine mitbrächte, das Umbenennen einer einzelnen Mahnung und ein neuer Name, der `index.md` oder `README.md` unter `docs/` als Verzeichnis nutzte (`docs/index.md/x.md`) |
 | `not_readable` | nicht lesbar, wie beim Lesen — auch ein Account, den der Hub nicht (mehr) annimmt |
 | `invalid` | ungültig: Name, Inhalt (kein UTF-8, ein NUL-Byte, über 1 MiB), ein Verzeichnis ohne `recursive` |
 | `unreachable` | der Hub ist nicht erreicht worden, nichts gespeichert; gelesen wird weiter |
@@ -587,7 +587,8 @@ Schreibvorgang ist `forbidden`.
 **`docs/` einer Collection** ist der Ort für Doku, englisch
 ([`docs/indizierung.md`](docs/indizierung.md)). `docs/README.md` und jede `index.md` darunter
 schreibt nur das System — jeder Schreibvorgang darauf ist `generated_file`, auch für den Admin
-(`hub doc put|rm`; `hub import` übergeht sie). **`rebuild_docs`** (`collection`) lässt den Hub
+(`hub doc put|rm`; `hub import` übergeht sie); ebenso ein neuer Name, der `index.md` oder
+`README.md` unter `docs/` als Verzeichnis nutzte. **`rebuild_docs`** (`collection`) lässt den Hub
 `docs/` neu bauen: `docs/README.md`, die festen Verzeichnisse `manual/` und `generated/`, je
 Verzeichnis eine `index.md` (eine Ebene, Titel und Beschreibung aus dem Frontmatter) und eine
 **Mahnung** (`README.md`), wo einem Verzeichnis die `README.md` fehlt; die Mahnung ersetzt jeder

@@ -123,3 +123,92 @@ func TestRebuildDocs(t *testing.T) {
 		t.Errorf("docs/generated/index.md: %v", err)
 	}
 }
+
+// putLegacy legt ein Dokument an wie ein Bestand aus der Zeit vor der
+// Sperre: ohne die Prüfungen der Schreibwege, nur mit der Pfadregel.
+func putLegacy(t *testing.T, s *sqliteStore, collection, name, by string) {
+	t.Helper()
+	ctx := context.Background()
+	sqlTx, tx, err := s.begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sqlTx.Rollback() }()
+	w := newDocTx(tx, by, Admin, "")
+	if _, err := w.create(ctx, collection, DocumentInput{Name: name, Content: "# " + name + "\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review-Befund zu Task 033: Ein Bestand, der unter docs/ index.md oder
+// README.md als Verzeichnis nutzt, blockiert den Neubau nicht mehr. Der
+// Neubau übergeht diese Dokumente und legt auf die belegten Namen keine
+// Datei; alles andere baut er. Die Dokumente bleiben änderbar, löschbar und
+// lassen sich hinaus umbenennen; danach stellt der Neubau her, was fehlte.
+func TestRebuildDocsReservedLegacy(t *testing.T) {
+	f := newWriteStore(t)
+	ctx := context.Background()
+	s := f.s
+	by := source.Actor{Account: "bob", Carrier: "laptop"}
+	for _, n := range []string{"docs/index.md/x.md", "docs/README.md/y.md", "docs/a/x.md", "docs/a/index.md/z.md",
+		"docs/b/README.md/w.md", "docs/c/y.md", "docs/c/README.md/v.md"} {
+		putLegacy(t, s, "a", n, "kleist")
+	}
+	// Eine alte index.md und eine Mahnung darunter: Dokumente des Systems,
+	// die der Neubau als verwaist löscht.
+	putLegacy(t, s, "a", "docs/a/index.md/index.md", "kleist")
+	putLegacy(t, s, "a", "docs/c/README.md/README.md", contract.SystemAuthor)
+
+	res, err := s.RebuildDocs(ctx, "a", by)
+	if err != nil {
+		t.Fatalf("Neubau mit Bestand: %v", err)
+	}
+	if res.Deleted != 2 || res.Revision == 0 {
+		t.Errorf("Neubau mit Bestand: %+v", res)
+	}
+	want := []string{"docs/README.md/y.md", "docs/a/README.md", "docs/a/index.md/z.md", "docs/a/x.md",
+		"docs/b/README.md/w.md", "docs/c/README.md/v.md", "docs/c/index.md", "docs/c/y.md",
+		"docs/generated/README.md", "docs/generated/index.md", "docs/index.md/x.md", "docs/manual/README.md",
+		"docs/manual/index.md"}
+	if got := liveUnder(t, s, "a", "docs"); !reflect.DeepEqual(got, want) {
+		t.Errorf("docs/:\n%v\nerwartet\n%v", got, want)
+	}
+	again, err := s.RebuildDocs(ctx, "a", by)
+	if err != nil || again.Revision != 0 {
+		t.Errorf("zweiter Neubau: %+v, %v", again, err)
+	}
+
+	// bob (User kleist) räumt auf: ändern, löschen, hinaus umbenennen.
+	if _, err := s.WriteDocumentAs(ctx, f.as("bob"), "a", "docs/index.md/x.md", "neu", nil); err != nil {
+		t.Errorf("write: %v", err)
+	}
+	if _, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "docs/index.md/x.md", "docs/x.md", nil); err != nil {
+		t.Errorf("rename hinaus: %v", err)
+	}
+	if _, err := s.DeleteDocumentAs(ctx, f.as("bob"), "a", "docs/README.md", nil, true); err != nil {
+		t.Errorf("delete: %v", err)
+	}
+	if _, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "docs/a/index.md", "docs/a/sub", nil); err != nil {
+		t.Errorf("rename Verzeichnis: %v", err)
+	}
+	// Innerhalb des belegten Namens entsteht nichts Neues.
+	_, err = s.RenameDocumentAs(ctx, f.as("bob"), "a", "docs/c/README.md/v.md", "docs/c/README.md/u.md", nil)
+	wantKind(t, "rename innerhalb", err, ErrGenerated, "docs/c/README.md wäre ein Verzeichnis")
+
+	if _, err := s.RebuildDocs(ctx, "a", by); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"docs/index.md", "docs/README.md", "docs/a/index.md", "docs/a/sub/index.md"} {
+		if d, err := s.Document(ctx, "a", n); err != nil || d.UpdatedBy != contract.SystemAuthor {
+			t.Errorf("%s: %+v, %v", n, d, err)
+		}
+	}
+	idx, _ := s.Document(ctx, "a", "docs/index.md")
+	if !strings.Contains(idx.Content, "* [a](a/)") || !strings.Contains(idx.Content, "* [c](c/) - *no description*") ||
+		!strings.Contains(idx.Content, "(x.md)") || strings.Contains(idx.Content, "(b/)") {
+		t.Errorf("docs/index.md:\n%s", idx.Content)
+	}
+}

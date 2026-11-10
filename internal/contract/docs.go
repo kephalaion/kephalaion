@@ -58,6 +58,30 @@ func IsNotice(name, updatedBy string) bool {
 	return updatedBy == SystemAuthor && IsNoticeName(name)
 }
 
+// ReservedDirOf liefert für einen Namen unter docs/ den Präfix, mit dem er
+// eine Stelle des Systems als Verzeichnis belegte: bis zum ersten Pfadteil
+// index.md oder README.md, der nicht der letzte ist (docs/index.md/x.md →
+// docs/index.md, docs/a/README.md/b/c.md → docs/a/README.md); sonst leer.
+// Auf diese Namen legt der Neubau eine Datei — docs/README.md, die index.md
+// jedes Verzeichnisses, die Mahnung, wo die README.md fehlt —, und ein
+// Verzeichnis gleichen Namens ließe ihr keinen Platz. Ein solcher Name
+// entsteht deshalb nicht neu (Code generated_file); ein Dokument aus der
+// Zeit davor übergeht der Neubau. Die Regel steht bewusst nicht in
+// Rights.MayWrite: Die gilt auch für den alten Namen bei write, delete und
+// rename, und ein solcher Bestand ließe sich dann nicht mehr aufräumen.
+func ReservedDirOf(name string) string {
+	if !InDocs(name) {
+		return ""
+	}
+	segs := strings.Split(name, "/")
+	for i := 1; i < len(segs)-1; i++ {
+		if segs[i] == IndexName || segs[i] == ReadmeName {
+			return strings.Join(segs[:i+1], "/")
+		}
+	}
+	return ""
+}
+
 // IsSystemDoc sagt, ob ein lebendes Dokument dem System unter docs/ gehört:
 // eine erzeugte Datei oder eine Mahnung. Ein Verzeichnisvorgang nimmt solche
 // Dokumente mit, statt an ihnen zu scheitern, und rename trägt sie nicht

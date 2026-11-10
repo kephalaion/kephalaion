@@ -115,13 +115,35 @@ type File struct {
 // Eine neue Mahnung trägt at (UTC, auf Sekunden) in generated.at; eine
 // bestehende behält ihren Zeitpunkt, so dass ein Neubau ohne Änderung nichts
 // schreibt. Dokumente außerhalb von docs/ übergeht Build.
+//
+// Ein Dokument, das index.md oder README.md als Verzeichnis nutzt
+// (contract.ReservedDirOf, etwa docs/index.md/x.md aus der Zeit vor der
+// Sperre), übergeht Build ebenfalls: Es zählt für kein Verzeichnis und
+// steht in keinem Index. Auf einen Namen, der nach dem Neubau ein
+// Verzeichnis bleibt — eines über einem Dokument, das nicht dem System
+// gehört —, legt Build keine Datei; dort fehlen dann index.md, Mahnung oder
+// docs/README.md, bis das Dokument entfernt oder umbenannt ist. Der Neubau
+// scheitert so nie daran, dass ein Name zugleich Datei und Verzeichnis
+// wäre.
 func Build(docs []Doc, at time.Time) []File {
 	stamp := at.UTC().Truncate(time.Second).Format(time.RFC3339)
 	regular := map[string]Doc{}
 	notices := map[string]Doc{}
+	// taken sind die Verzeichnisse, die der Neubau nicht berührt: die über
+	// jedem Dokument, das nicht dem System gehört. Dokumente des Systems,
+	// die Build nicht vorschlägt, löscht der Store vor dem Anlegen.
+	taken := map[string]bool{}
 	for _, d := range docs {
+		if !contract.InDocs(d.Name) {
+			continue
+		}
+		if !contract.IsSystemDoc(d.Name, d.UpdatedBy) {
+			for dir := path.Dir(d.Name); dir != contract.DocsDir && dir != "."; dir = path.Dir(dir) {
+				taken[dir] = true
+			}
+		}
 		switch {
-		case !contract.InDocs(d.Name):
+		case contract.ReservedDirOf(d.Name) != "":
 		case contract.IsNotice(d.Name, d.UpdatedBy):
 			notices[path.Dir(d.Name)] = d
 		case !contract.IsGenerated(d.Name):
@@ -144,9 +166,13 @@ func Build(docs []Doc, at time.Time) []File {
 		}
 	}
 
-	out := []File{{Name: contract.DocsReadme, Content: readme()}}
+	var out []File
+	if !taken[contract.DocsReadme] {
+		out = append(out, File{Name: contract.DocsReadme, Content: readme()})
+	}
 	// readmes ist der Inhalt der README.md je Verzeichnis unterhalb von
-	// docs/: die des Users oder die Mahnung des Soll-Zustands.
+	// docs/: die des Users oder die Mahnung des Soll-Zustands; keiner, wo
+	// ein Verzeichnis den Namen belegt.
 	readmes := map[string]string{}
 	for dir := range dirs {
 		if dir == contract.DocsDir {
@@ -155,6 +181,9 @@ func Build(docs []Doc, at time.Time) []File {
 		name := dir + "/" + contract.ReadmeName
 		if d, ok := regular[name]; ok {
 			readmes[dir] = d.Content
+			continue
+		}
+		if taken[name] {
 			continue
 		}
 		when := stamp
@@ -169,7 +198,11 @@ func Build(docs []Doc, at time.Time) []File {
 		out = append(out, File{Name: name, Content: content})
 	}
 	for dir := range dirs {
-		out = append(out, File{Name: dir + "/" + contract.IndexName, Content: index(dir, dirs, regular, readmes)})
+		name := dir + "/" + contract.IndexName
+		if taken[name] {
+			continue
+		}
+		out = append(out, File{Name: name, Content: index(dir, dirs, regular, readmes)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

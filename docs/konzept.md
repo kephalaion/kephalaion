@@ -1116,7 +1116,9 @@ Abschnitt), „Was ist neu?“ über `changes`. Das Wichtigste:
   jeder Node selbst, in derselben Transaktion, in der er Zeilen in seine Replica schreibt.
 - **Erzeugte Dateien** (`docs/README.md`, jede `index.md` unter `docs/`) schreibt nur das
   System, auch der Admin nicht; Code `generated_file`. Fehlt einem Verzeichnis die `README.md`,
-  legt der Neubau eine **Mahnung** an, die jeder mit `write` ersetzt (2026-11-10).
+  legt der Neubau eine **Mahnung** an, die jeder mit `write` ersetzt (2026-11-10). `index.md` und
+  `README.md` sind unter `docs/` nie ein Verzeichnis; einen solchen Namen von früher übergeht der
+  Neubau.
 - **Feste Verzeichnisse** sind nur `docs/manual/` und `docs/generated/`; alles darunter gehört
   den Nutzern.
 - **Kein automatischer Neubau** (zurückgestellt): Den Neubau stößt ein Account an — k-playbook,

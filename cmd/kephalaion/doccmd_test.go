@@ -122,7 +122,8 @@ func TestHubImport(t *testing.T) {
 }
 
 // Erzeugte Dateien unter docs/ (Task 033): put und rm lehnen sie ab, der
-// Import übergeht sie und nennt sie.
+// Import übergeht sie und nennt sie; ebenso einen neuen Namen, der index.md
+// oder README.md unter docs/ als Verzeichnis nutzte.
 func TestHubDocGenerated(t *testing.T) {
 	dir := isolate(t)
 	c := "--config=" + setup(t, dir)
@@ -130,16 +131,21 @@ func TestHubDocGenerated(t *testing.T) {
 	runIn(t, "x", "hub", "doc", "put", "team-x", "docs/index.md", c).want(t, 1, "erzeugte Datei", "rebuild-docs")
 	runT(t, "hub", "doc", "rm", "team-x", "docs/README.md", c).want(t, 1, "erzeugte Datei")
 	runIn(t, "x", "hub", "doc", "put", "team-x", "notizen/index.md", c).want(t, 0)
+	// index.md und README.md sind unter docs/ nie ein Verzeichnis
+	// (Review-Befund zu Task 033).
+	runIn(t, "x", "hub", "doc", "put", "team-x", "docs/index.md/x.md", c).want(t, 1, "docs/index.md wäre ein Verzeichnis")
 
 	src := filepath.Join(dir, "quelle")
 	writeFile(t, filepath.Join(src, "index.md"), "alt")
 	writeFile(t, filepath.Join(src, "README.md"), "alt")
 	writeFile(t, filepath.Join(src, "sub", "index.md"), "alt")
 	writeFile(t, filepath.Join(src, "sub", "x.md"), "x")
+	writeFile(t, filepath.Join(src, "sub", "README.md", "y.md"), "y")
 	runT(t, "hub", "import", "team-x", src, "--prefix", "docs", c).want(t, 0,
 		"übersprungen: docs/index.md (erzeugte Datei", "übersprungen: docs/sub/index.md (erzeugte Datei",
 		"übersprungen: docs/README.md (erzeugte Datei", "angelegt: docs/sub/x.md",
-		"1 angelegt, 0 ersetzt, 0 unverändert, 3 übersprungen")
+		"übersprungen: docs/sub/README.md/y.md (docs/sub/README.md wäre ein Verzeichnis",
+		"1 angelegt, 0 ersetzt, 0 unverändert, 4 übersprungen")
 	runT(t, "hub", "doc", "get", "team-x", "docs/index.md", c).want(t, 1, "gibt es")
 
 	// Neubau als Admin: legt index.md, Mahnungen und docs/README.md an.

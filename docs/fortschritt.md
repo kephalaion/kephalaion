@@ -435,7 +435,10 @@ ist Nacharbeit des Nutzers)
     (`contract.IsGenerated`, `MayWrite`/`DenyGenerated`, auch der Admin; `hub import` übergeht
     sie); Mahnung erkannt an Name und Urheber `system`, ersetzt mit `write` (übernommen),
     löschen ja, einzeln umbenennen nein; `delete` mit `recursive` nimmt sie mit, `rename` eines
-    Verzeichnisses entfernt sie, nach `docs/` hinein mit `index.md` abgelehnt;
+    Verzeichnisses entfernt sie, nach `docs/` hinein mit `index.md` abgelehnt; nach dem Review
+    kein neuer Name, der `index.md` oder `README.md` unter `docs/` als Verzeichnis nutzt
+    (`contract.ReservedDirOf`, `generated_file`), und der Neubau übergeht einen solchen Bestand,
+    statt an `path_conflict` zu scheitern;
   - Hub: `internal/hub/docsindex` (`Build`, `layout.yaml` mit `manual/` und `generated/`,
     Vorlage für `docs/README.md`, Golden-Tests), `Store.RebuildDocs` unter Sperre der
     Collection; CLI `hub collection rebuild-docs`, MCP-Werkzeug `rebuild_docs`;

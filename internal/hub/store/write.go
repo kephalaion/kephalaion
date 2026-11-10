@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"path"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/hub/source"
@@ -46,7 +47,9 @@ import (
 // sie sich einzeln nicht. delete mit recursive nimmt beide mit, rename eines
 // Verzeichnisses setzt auf sie eine Löschmarke, statt sie umzubenennen; ein
 // rename nach docs/ hinein, das eine erzeugte Datei brächte, ist
-// ErrGenerated.
+// ErrGenerated. Ebenso ein neuer Name (create, rename), der unter docs/
+// index.md oder README.md als Verzeichnis nutzte (contract.ReservedDirOf,
+// reservedDir) — er nähme dem Neubau den Platz.
 //
 // delete und rename nehmen auch ein Verzeichnis — alle lebenden Dokumente
 // darunter, als Ganzes: eine Revision, das Recht je Dokument (bei rename mit
@@ -82,8 +85,9 @@ var (
 	ErrStaleRevision = errors.New("Revision veraltet")
 	// ErrGenerated: eine erzeugte Datei unter docs/ schreibt nur das System
 	// — ein Einzelvorgang darauf, ein rename nach docs/ hinein, das eine
-	// mitbrächte, oder ein rename einer einzelnen Mahnung (Task 033). Auch
-	// der Admin schreibt sie nicht (PutDocument, DeleteDocument).
+	// mitbrächte, ein rename einer einzelnen Mahnung, oder ein neuer Name,
+	// der unter docs/ index.md oder README.md als Verzeichnis nutzte (Task
+	// 033). Auch der Admin schreibt sie nicht (PutDocument, DeleteDocument).
 	ErrGenerated = errors.New("erzeugte Datei")
 )
 
@@ -287,12 +291,32 @@ func denial(d *contract.WriteDenial, msg string) error {
 // mayCreate prüft das Recht, name in collection anzulegen: Neues zählt wie
 // Eigenes (write), unter vendor/<name>/ der Scope, unter einem
 // Verzeichnis-Scope ohne write; eine erzeugte Datei unter docs/ legt niemand
-// an (ErrGenerated).
+// an, ebenso keinen Namen, der dort index.md oder README.md als Verzeichnis
+// nutzte (ErrGenerated).
 func mayCreate(collection, name string, rights contract.Rights) error {
+	if err := reservedDir(name, fmt.Sprintf("Dokument %s in %s anlegen", name, collection)); err != nil {
+		return err
+	}
 	if d := rights.MayWrite(name, true); d != nil {
 		return denial(d, fmt.Sprintf("Dokument %s in %s anlegen: %v", name, collection, d))
 	}
 	return nil
+}
+
+// reservedDir lehnt einen neuen Namen ab, der unter docs/ index.md oder
+// README.md als Verzeichnis nutzte (contract.ReservedDirOf): ErrGenerated,
+// gleich mit welchem Recht, auch für den Admin. Auf diesen Namen legt der
+// Neubau eine Datei; ein Verzeichnis dort ließe ihr keinen Platz. what
+// beginnt die Meldung. Ein Dokument, das so schon heißt, bleibt änderbar,
+// löschbar und lässt sich unter einen anderen Namen umbenennen.
+func reservedDir(name, what string) error {
+	dir := contract.ReservedDirOf(name)
+	if dir == "" {
+		return nil
+	}
+	return &kindError{ErrGenerated, fmt.Sprintf(
+		"%s: %s wäre ein Verzeichnis; unter %s/ ist %s der Name einer Datei, die das System schreibt "+
+			"(rebuild_docs), nie ein Verzeichnis", what, dir, contract.DocsDir, path.Base(dir))}
 }
 
 // mayTakeAlong prüft das Recht an einem Dokument des Systems unter docs/
@@ -556,6 +580,15 @@ func (s *sqliteStore) RenameDocumentAs(ctx context.Context, auth WriteAuth, coll
 			return WriteResult{}, &kindError{ErrGenerated, fmt.Sprintf(
 				"Dokument %s in %s umbenennen: eine Mahnung des Systems wandert nicht unter einen neuen Namen; "+
 					"mit write ersetzen oder löschen", docs[0].Name, collection)}
+		}
+		// Kein neuer Name nutzt unter docs/ index.md oder README.md als
+		// Verzeichnis — auch nicht innerhalb eines solchen Verzeichnisses
+		// aus der Zeit davor; heraus geht es immer.
+		for i, d := range docs {
+			if err := reservedDir(renamed[i], fmt.Sprintf("Dokument %s in %s nach %s umbenennen",
+				d.Name, collection, renamed[i])); err != nil {
+				return WriteResult{}, err
+			}
 		}
 		// Das Recht am alten und am neuen Namen, je Dokument: hinein, heraus
 		// und innerhalb von vendor/ ohne Sonderfall.

@@ -50,6 +50,34 @@ func TestDocsNames(t *testing.T) {
 	}
 }
 
+// Ein Name unter docs/, der index.md oder README.md als Verzeichnis nutzt,
+// belegt die Stelle einer Datei des Systems (Review-Befund zu Task 033).
+func TestReservedDirOf(t *testing.T) {
+	for name, want := range map[string]string{
+		"docs/index.md/x.md":        "docs/index.md",
+		"docs/README.md/x.md":       "docs/README.md",
+		"docs/a/index.md/b.md":      "docs/a/index.md",
+		"docs/a/README.md/b/c.md":   "docs/a/README.md",
+		"docs/a/index.md/README.md": "docs/a/index.md",
+		"docs/a/README.md/index.md": "docs/a/README.md",
+		"docs/index.md":             "",
+		"docs/README.md":            "",
+		"docs/a/index.md":           "",
+		"docs/a/README.md":          "",
+		"docs/a/b.md":               "",
+		"docs/a/Index.md/b.md":      "",
+		"docs/a/readme.md/b.md":     "",
+		"index.md/x.md":             "",
+		"a/docs/index.md/x.md":      "",
+		"docs2/index.md/x.md":       "",
+		"docs":                      "",
+	} {
+		if got := ReservedDirOf(name); got != want {
+			t.Errorf("ReservedDirOf(%q) = %q, erwartet %q", name, got, want)
+		}
+	}
+}
+
 // Erzeugte Dateien schreibt über einen Node niemand, auch nicht mit einem
 // Verzeichnis-Scope; eine Mahnung und die Dokumente des Systems in einem
 // Verzeichnisvorgang nimmt mit, wer write oder supersede hat.

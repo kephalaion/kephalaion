@@ -609,7 +609,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   den Admin (`hub doc put|rm`); `hub import` übergeht sie und nennt sie. `delete` mit
   `recursive` und `rename` eines Verzeichnisses nehmen sie mit, siehe dort. `writable` ist für
   sie nie wahr. Kein Treffer von **search**. Die **notice** ist keine erzeugte Datei in diesem
-  Sinn.
+  Sinn. Unter **docs/** sind `index.md` und `README.md` nie ein Verzeichnis: Ein neuer Name wie
+  `docs/index.md/x.md` oder `docs/a/README.md/b.md` nähme dem **rebuild_docs** den Platz und ist
+  ebenfalls **generated_file** (`contract.ReservedDirOf`; `create`, neuer Name eines `rename`,
+  `hub doc put`; `hub import` übergeht ihn). Ein solches Dokument von früher bleibt änderbar,
+  löschbar und lässt sich hinaus umbenennen; der **rebuild_docs** übergeht es.
 - **notice** (Mahnung) — eine `README.md` unterhalb von **docs/** (nicht `docs/README.md`), die
   zuletzt **system** geschrieben hat (`updated_by`); erkannt an Name und Urheber, nicht am
   Frontmatter (`contract.IsNotice`). Der **rebuild_docs** legt sie an, wo einem Verzeichnis die
@@ -625,10 +629,11 @@ Ausführlich: [`konzept.md`](konzept.md).
   Collection neu — `docs/README.md` aus der Vorlage im Binary, die **fixed directories**, eine
   **notice**, wo eine `README.md` fehlt, und jede **index.md** —, in einer Transaktion unter
   einer Revision, Urheber **system**; nur Geändertes wird geschrieben, eine verwaiste `index.md`
-  oder Mahnung gelöscht. Nur, wo `docs/` schon existiert; sonst nichts zu tun. Anstoßen darf
-  jeder Account, der die Collection lesen darf; eine Collection mit Quelle nicht. Kein
-  automatischer Neubau: Bis zum nächsten Aufruf veraltet `index.md`, und nach einem `rename`
-  eines Verzeichnisses fehlt sie dort.
+  oder Mahnung gelöscht. Nur, wo `docs/` schon existiert; sonst nichts zu tun. Ein Dokument, das
+  `index.md` oder `README.md` als Verzeichnis nutzt, übergeht er, und auf den belegten Namen legt
+  er keine Datei. Anstoßen darf jeder Account, der die Collection lesen darf; eine Collection mit
+  Quelle nicht. Kein automatischer Neubau: Bis zum nächsten Aufruf veraltet `index.md`, und nach
+  einem `rename` eines Verzeichnisses fehlt sie dort.
 - **section** (Abschnitt) — Teil eines Dokuments unter **docs/** für **search** und `read` mit
   `section`: eine Markdown-Überschrift samt Text bis zur nächsten Überschrift, außerhalb von
   Codeblöcken; Text vor der ersten Überschrift ist ein eigener Abschnitt. Er trägt die
@@ -691,7 +696,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   — aus `docs/` hinaus wie innerhalb — entfernt sie im selben Vorgang, statt sie unter den neuen
   Namen mitzunehmen (der nächste **rebuild_docs** stellt her, was fehlt); ein `rename` von
   außerhalb nach `docs/` hinein, das eine `index.md` mitbrächte oder eine `README.md`, die zu
-  `docs/README.md` würde, ist **generated_file**. Eine **notice** ersetzt jeder mit `write`.
+  `docs/README.md` würde, ist **generated_file**, ebenso ein neuer Name, der `index.md` oder
+  `README.md` unter `docs/` als Verzeichnis nutzte. Eine **notice** ersetzt jeder mit `write`.
 - **base_revision** — Die Revision, auf der ein `write`, `delete` oder `rename` beruht,
   wahlweise, mindestens 1. Weicht die des Dokuments am Hub ab, lehnt er ab (`stale_revision`),
   geprüft vor dem Vergleich des Inhalts. Nur für Dokumente; bei einem Verzeichnis ist sie
@@ -727,7 +733,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   `source_missing` (an der Quelle nicht vorhanden), `source_invalid` (Archiv nicht übernehmbar)
   und `source_unreachable` (Quelle nicht erreichbar), alle mit einem Status unter 500. Unter
   **docs/** dazu **generated_file** (Task 033, 403): eine **generated file** schreibt nur das
-  System, oder eine **notice** soll einzeln umbenannt werden. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
+  System, eine **notice** soll einzeln umbenannt werden, oder ein neuer Name nutzte `index.md`
+  oder `README.md` unter **docs/** als Verzeichnis. `account_unauthenticated` des Hubs meldet der Node als `not_readable`,
   `unauthenticated` und `unsupported_version` reicht er durch. Die Werkzeuge melden einen
   Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
   `message`; Clients entscheiden nach dem Code, nicht nach der Meldung. `frontmatter_error` und

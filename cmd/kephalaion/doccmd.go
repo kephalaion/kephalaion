@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/kephalaion/kephalaion/internal/contract"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/ident"
 )
@@ -219,6 +220,10 @@ func runHubImport(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "übersprungen: %s (erzeugte Datei; neu bauen mit kephalaion hub collection "+
 				"rebuild-docs %s)\n", name, pos[0])
 		}
+		for _, name := range res.Reserved {
+			fmt.Fprintf(stderr, "übersprungen: %s (%s wäre ein Verzeichnis; unter %s/ ist das der Name einer "+
+				"Datei des Systems)\n", name, contract.ReservedDirOf(name), contract.DocsDir)
+		}
 		counts := map[hubstore.Outcome]int{}
 		for _, r := range res.Results {
 			counts[r.Outcome]++
@@ -232,7 +237,7 @@ func runHubImport(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "Import nach %s: %d angelegt, %d ersetzt, %d unverändert, %d übersprungen — %s.\n",
 			pos[0], counts[hubstore.Created], counts[hubstore.Replaced], counts[hubstore.Unchanged],
-			len(skipped)+len(res.Generated), rev)
+			len(skipped)+len(res.Generated)+len(res.Reserved), rev)
 		return nil
 	})
 }

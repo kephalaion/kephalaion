@@ -84,3 +84,35 @@ func TestRebuildDocs(t *testing.T) {
 		})
 	}
 }
+
+// Review-Befund zu Task 033: Ein Name, der unter docs/ index.md oder
+// README.md als Verzeichnis nutzte, ist über local und HTTP generated_file
+// (Status unter 500, kein unklarer Ausgang) — bei create wie bei rename —,
+// und der Neubau danach gelingt.
+func TestRebuildDocsReservedDir(t *testing.T) {
+	for _, tr := range transports {
+		t.Run(tr, func(t *testing.T) {
+			f, _, acc := fetchFixture(t, tr)
+			ctx := context.Background()
+			bob := acc["bob"]
+			if _, err := f.api().Create(ctx, f.createReq(bob, "a", "docs/x/y.md", "# Y\n")); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"docs/index.md/x.md", "docs/README.md/x.md", "docs/x/index.md/z.md",
+				"docs/x/README.md/z.md"} {
+				_, err := f.api().Create(ctx, f.createReq(bob, "a", name, "x"))
+				if !errors.Is(err, contract.ErrGeneratedFile) {
+					t.Errorf("create %s: %v", name, err)
+				}
+				_, err = f.api().Rename(ctx, f.renameReq(bob, "a", "docs/x/y.md", name, nil))
+				if !errors.Is(err, contract.ErrGeneratedFile) {
+					t.Errorf("rename nach %s: %v", name, err)
+				}
+			}
+			resp, err := f.rebuild(acc["leser"], "a")
+			if err != nil || resp.Status != contract.RebuildRebuilt || resp.Created != 8 {
+				t.Errorf("Neubau: %+v, %v", resp, err)
+			}
+		})
+	}
+}

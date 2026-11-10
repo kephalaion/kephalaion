@@ -174,7 +174,9 @@ type Store interface {
 	// PutDocument legt ein Dokument an oder ersetzt seinen Inhalt — der
 	// Admin-Upsert der CLI. Unveränderter Inhalt schreibt nichts und zählt
 	// keine Revision. Eine erzeugte Datei unter docs/ ist ErrGenerated, wie
-	// bei DeleteDocument (Task 033).
+	// bei DeleteDocument (Task 033); ebenso ein neues Dokument, dessen Name
+	// unter docs/ index.md oder README.md als Verzeichnis nutzte
+	// (contract.ReservedDirOf).
 	PutDocument(ctx context.Context, collection, name, content string) (PutResult, error)
 	// Document liest ein lebendes Dokument; eine Löschmarke gilt als nicht
 	// vorhanden.
@@ -188,7 +190,9 @@ type Store interface {
 	DeleteDocument(ctx context.Context, collection, name string) (Document, error)
 	// ImportDocuments legt an oder ersetzt wie PutDocument, alle Dokumente in
 	// einer Transaktion und unter einer Revision. Was fehlt, bleibt. Erzeugte
-	// Dateien unter docs/ übergeht es und nennt sie in Generated.
+	// Dateien unter docs/ übergeht es und nennt sie in Generated, neue Namen,
+	// die unter docs/ index.md oder README.md als Verzeichnis nutzten, in
+	// Reserved.
 	ImportDocuments(ctx context.Context, collection string, docs []DocumentInput) (ImportResult, error)
 
 	// Schreiben über einen Node (write.go): im Namen von auth.Account, mit

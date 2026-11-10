@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kephalaion/kephalaion/internal/contract"
+	"github.com/kephalaion/kephalaion/internal/hub/source"
 )
 
 // Schreibschutz unter docs/ (Task 033): erzeugte Dateien, Mahnungen und die
@@ -298,5 +299,72 @@ func TestGeneratedAdmin(t *testing.T) {
 	}
 	if d, _ := s.Document(ctx, "a", "docs/README.md"); d.Content != "x" || d.UpdatedBy != contract.SystemAuthor {
 		t.Errorf("docs/README.md überschrieben: %+v", d)
+	}
+}
+
+// Review-Befund zu Task 033: Ein neuer Name, der unter docs/ index.md oder
+// README.md als Verzeichnis nutzt, nähme dem Neubau den Platz und ließe ihn
+// an path_conflict scheitern. create, rename (auch eines Verzeichnisses) und
+// hub doc put lehnen ihn mit ErrGenerated ab, der Import übergeht ihn;
+// außerhalb von docs/ ist er frei. Danach läuft der Neubau durch.
+func TestReservedDirNames(t *testing.T) {
+	f := newWriteStore(t)
+	ctx := context.Background()
+	s := f.s
+	for _, n := range []string{"docs/a/x.md", "notizen/index.md/x.md", "entwurf/index.md/y.md", "lose.md"} {
+		if _, err := s.CreateDocumentAs(ctx, f.as("bob"), "a", n, "x"); err != nil {
+			t.Fatalf("%s: %v", n, err)
+		}
+	}
+	for name, dir := range map[string]string{
+		"docs/index.md/x.md":      "docs/index.md",
+		"docs/README.md/x.md":     "docs/README.md",
+		"docs/a/index.md/y.md":    "docs/a/index.md",
+		"docs/neu/index.md/y.md":  "docs/neu/index.md",
+		"docs/a/README.md/z.md":   "docs/a/README.md",
+		"docs/a/README.md/b/c.md": "docs/a/README.md",
+	} {
+		// Gleich mit welchem Recht: bob hat write, eve nur supersede.
+		for _, acc := range []string{"bob", "eve"} {
+			_, err := s.CreateDocumentAs(ctx, f.as(acc), "a", name, "x")
+			wantKind(t, acc+" create "+name, err, ErrGenerated, dir+" wäre ein Verzeichnis")
+		}
+		_, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "lose.md", name, nil)
+		wantKind(t, "rename nach "+name, err, ErrGenerated, dir+" wäre ein Verzeichnis")
+		_, err = s.PutDocument(ctx, "a", name, "x")
+		wantKind(t, "put "+name, err, ErrGenerated, dir+" wäre ein Verzeichnis")
+	}
+	// Ein Verzeichnis nach docs/ hinein, das index.md als Verzeichnis
+	// mitbrächte, oder eines, das selbst zu docs/index.md würde.
+	_, err := s.RenameDocumentAs(ctx, f.as("bob"), "a", "entwurf", "docs/entwurf", nil)
+	wantKind(t, "Verzeichnis hinein", err, ErrGenerated, "entwurf/index.md/y.md")
+	_, err = s.RenameDocumentAs(ctx, f.as("bob"), "a", "docs/a", "docs/README.md", nil)
+	wantKind(t, "Verzeichnis zu docs/README.md", err, ErrGenerated, "docs/README.md wäre ein Verzeichnis")
+	// Der Import übergeht solche Namen und nennt sie.
+	res, err := s.ImportDocuments(ctx, "a", []DocumentInput{
+		{Name: "docs/b/x.md", Content: "x"}, {Name: "docs/b/index.md/y.md", Content: "y"},
+		{Name: "docs/README.md/z.md", Content: "z"}, {Name: "frei/index.md/z.md", Content: "z"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"docs/b/index.md/y.md", "docs/README.md/z.md"}; !reflect.DeepEqual(res.Reserved, want) {
+		t.Errorf("Reserved: %v", res.Reserved)
+	}
+	if len(res.Results) != 2 || res.Results[0].Name != "docs/b/x.md" || res.Results[1].Name != "frei/index.md/z.md" {
+		t.Errorf("Results: %+v", res.Results)
+	}
+	if got := liveUnder(t, s, "a", "docs"); !reflect.DeepEqual(got, []string{"docs/a/x.md", "docs/b/x.md"}) {
+		t.Errorf("docs/: %v", got)
+	}
+	// Der Neubau, an dem der Befund scheiterte, läuft durch.
+	rb, err := s.RebuildDocs(ctx, "a", source.Actor{Account: "bob"})
+	if err != nil || rb.Revision == 0 {
+		t.Fatalf("Neubau: %+v, %v", rb, err)
+	}
+	for _, n := range []string{"docs/index.md", "docs/README.md", "docs/a/index.md", "docs/a/README.md"} {
+		if _, err := s.Document(ctx, "a", n); err != nil {
+			t.Errorf("%s: %v", n, err)
+		}
 	}
 }

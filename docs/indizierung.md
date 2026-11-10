@@ -29,7 +29,8 @@ Tasks (siehe „Entschieden am 2026-11-10“). Was das Konzept betrifft, steht m
   funktioniert, welche Indizes es gibt, dass `index.md` der Index ist und dass hier nichts von
   Hand geschrieben wird.
 - **Erzeugte Dateien schreibt niemand außer dem System**, auch der Admin nicht: `docs/README.md`
-  und jede `index.md` unter `docs/`. Eine Ablehnung trägt den Code `generated_file`.
+  und jede `index.md` unter `docs/`. Eine Ablehnung trägt den Code `generated_file`. Unter `docs/`
+  sind `index.md` und `README.md` nie ein Verzeichnis (siehe „Schreibschutz“).
 - **In jedem Unterverzeichnis eine beschreibbare `README.md`** mit der Beschreibung des
   Verzeichnisses; k-playbook schreibt sie aus Vorlagen. Fehlt sie, legt das System eine
   **Mahnung** an, die das Fehlen anmahnt; jeder mit `write` ersetzt sie mit `write`.
@@ -213,7 +214,10 @@ So knapp wie möglich und ausreichend genau. Beispiel `docs/generated/index.md`:
   andere keine. Fehlt sie, steht `*no description*`. Kein Ersatz aus dem ersten Satz.
 - **Welche Verzeichnisse:** Ein Verzeichnis zählt nur über Dokumente, die nicht erzeugt sind —
   keine `index.md`, keine Mahnung; die festen Verzeichnisse zählen immer. Ein Verzeichnis, das
-  nur noch erzeugte Dateien und Mahnungen trägt, verliert sie beim nächsten Neubau.
+  nur noch erzeugte Dateien und Mahnungen trägt, verliert sie beim nächsten Neubau. Ein Dokument,
+  das `index.md` oder `README.md` als Verzeichnis nutzt (`docs/index.md/x.md`, aus der Zeit vor
+  der Sperre), zählt nicht und steht in keinem Index; auf den belegten Namen legt der Neubau keine
+  Datei (siehe „Schreibschutz“).
 - **Keine Einträge** für `index.md` und `README.md` des Verzeichnisses selbst; die Beschreibung des
   Verzeichnisses steht im Eintrag darüber, die README findet `search`.
 - **Andere Dateien als `.md`** erscheinen unter `Documents` mit dem Dateinamen, ohne Beschreibung.
@@ -428,6 +432,24 @@ erkennt); für den Admin kommt eine Prüfung in `writeDocs` dazu, wie bei der Qu
 import`), der eine solche Datei enthält, übergeht sie und nennt sie in seiner Ausgabe; der Neubau
 stellt sie her (entschieden in Task 033, Etappe 2). Ablehnen hätte jeden Import eines Verzeichnisses
 mit einer alten `index.md` scheitern lassen; übernehmen hätte die Sperre umgangen.
+
+**Kein Verzeichnis namens `index.md` oder `README.md` unter `docs/`** (Task 033, nach einem
+Befund des Reviews). Wer `write` hat, konnte ein Dokument wie `docs/index.md/x.md` oder
+`docs/a/README.md/b.md` anlegen. Damit war der Name, auf den der Neubau eine Datei legt
+(`docs/README.md`, die `index.md` eines Verzeichnisses, die Mahnung), ein Verzeichnis. Der Neubau
+der ganzen Collection scheiterte daran (`path_conflict` im Store, über HTTP ein 500), bis jemand
+das Dokument entfernte. Seitdem gilt:
+
+- **Ein solcher Name entsteht nicht neu.** `create`, ein `rename` auf ihn (auch jedes Dokument
+  eines Verzeichnisses, das umzieht) und `hub doc put` eines neuen Dokuments sind
+  `generated_file`, gleich mit welchen Rechten; `hub import` übergeht ihn und nennt ihn. Erkannt
+  am Namen (`contract.ReservedDirOf`): ein Pfadteil `index.md` oder `README.md` unter `docs/`,
+  der nicht der letzte ist. Der Code ist derselbe wie für die erzeugten Dateien, weil es um
+  dieselben Namen geht: Nur das System legt dort etwas an.
+- **Ein Bestand blockiert nicht.** Ein Dokument, das schon so heißt, bleibt änderbar und
+  löschbar und lässt sich hinaus umbenennen. Der Neubau übergeht es und legt auf den belegten
+  Namen keine Datei; dort fehlen `index.md`, Mahnung oder `docs/README.md`, bis es fort ist.
+  Alles Übrige baut er wie sonst.
 
 ## Unterverzeichnisse und ihre `README.md`
 

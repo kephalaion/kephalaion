@@ -43,7 +43,10 @@ type RebuildResult struct {
 //     actions für den ganzen Vorgang.
 //
 // Eine README.md des Users ersetzt der Neubau nie: Build legt eine Mahnung
-// nur an, wo keine liegt.
+// nur an, wo keine liegt. Auf einen Namen, der nach dem Löschen ein
+// Verzeichnis bleibt (ein Bestand wie docs/index.md/x.md,
+// contract.ReservedDirOf), schlägt Build nichts vor; das Anlegen scheitert
+// so nicht an ErrPathConflict.
 func (s *sqliteStore) RebuildDocs(ctx context.Context, collection string, by source.Actor) (RebuildResult, error) {
 	if by.Account == "" {
 		by.Account = Admin

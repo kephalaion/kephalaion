@@ -540,8 +540,10 @@ const (
 	CodeStaleRevision Code = "stale_revision"
 	// CodeGeneratedFile: eine erzeugte Datei unter docs/ (IsGenerated)
 	// schreibt nur das System — ein Einzelvorgang darauf, ein rename eines
-	// Verzeichnisses nach docs/ hinein, das eine mitbrächte, oder ein rename
-	// einer einzelnen Mahnung (Task 033). Die Meldung nennt das Dokument.
+	// Verzeichnisses nach docs/ hinein, das eine mitbrächte, ein rename
+	// einer einzelnen Mahnung, oder ein neuer Name, der unter docs/ index.md
+	// oder README.md als Verzeichnis nutzte (ReservedDirOf; create, rename)
+	// (Task 033). Die Meldung nennt das Dokument.
 	CodeGeneratedFile Code = "generated_file"
 
 	// Codes von fetch; alle endgültig, der Hub hat nichts geändert.
