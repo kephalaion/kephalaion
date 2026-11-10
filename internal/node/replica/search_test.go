@@ -9,10 +9,10 @@ import (
 
 func TestMatchQuery(t *testing.T) {
 	for in, want := range map[string]string{
-		"How do I install it?":      `"How" OR "do" OR "I" OR "install" OR "it"`,
+		"How do I install it?":     `"How" OR "do" OR "I" OR "install" OR "it"`,
 		`NEAR("a" b) OR -x* col:y`: `"NEAR" OR "a" OR "b" OR "OR" OR "x" OR "col" OR "y"`,
-		"Größe der index.md":        `"Größe" OR "der" OR "index" OR "md"`,
-		" ?! ":                      "",
+		"Größe der index.md":       `"Größe" OR "der" OR "index" OR "md"`,
+		" ?! ":                     "",
 	} {
 		if got := MatchQuery(in); got != want {
 			t.Errorf("MatchQuery(%q) = %s", in, got)
