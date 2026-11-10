@@ -1,11 +1,12 @@
 ---
 title: Kephalaion — Indizierung von docs/
-description: Entwurf vom 2026-10-16, entschieden bis 2026-11-10 (Task 033) — Kephalaion indiziert das Verzeichnis docs/ einer Collection für den Zugriff der KI über MCP, Volltext mit FTS5 im Node und Navigation über eine index.md je Verzeichnis nach Google OKF v0.2, dazu eine erzeugte README.md als Anleitung, Mahnungen und Schreibschutz; was entschieden ist, was OKF festlegt und offen lässt, was zurückgestellt ist.
+description: Entwurf vom 2026-10-16, entschieden bis 2026-11-10 und gebaut in Task 033 — Kephalaion indiziert das Verzeichnis docs/ einer Collection für den Zugriff der KI über MCP, Volltext mit FTS5 im Node und Navigation über eine index.md je Verzeichnis nach Google OKF v0.2, dazu eine erzeugte README.md als Anleitung, Mahnungen und Schreibschutz; was entschieden ist, was OKF festlegt und offen lässt, was zurückgestellt ist.
 ---
 
 # Indizierung von `docs/`
 
-**Stand: entschieden, Task 033 in Arbeit** (2026-10-16,
+**Stand: gebaut in Task 033, Etappen 1–7 am 2026-11-10; Release und Nachricht an k-playbook
+offen** (2026-10-16,
 `keph:/user/kamran/tasks/033-docs-index-und-suche.md`), nachgezogen am 2026-11-09 nach der
 Übergabe aus k-playbook (siehe „Entschieden am 2026-11-09“) und am 2026-11-10 bei der Prüfung des
 Tasks (siehe „Entschieden am 2026-11-10“). Was das Konzept betrifft, steht mit seinem Datum in

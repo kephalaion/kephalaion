@@ -1,6 +1,7 @@
 # Fortschritt
 
-Stand: 2026-10-08 (Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
+Stand: 2026-11-10 (Task 033 Etappen 1–7 ausgeführt, Release und Nachricht an k-playbook offen;
+Stand 2026-10-08: Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
 ausgeführt, die Weboberfläche zeigt die Accounts des Users der Anmeldung des Proxys — auf der VM
@@ -425,6 +426,27 @@ ist Nacharbeit des Nutzers)
     der des Binarys. Tests hermetisch (kein 127.0.0.1:7433, kein echtes Token-Verzeichnis).
     Abnahme an den drei Orten und Mindestversion: siehe „Zu testen“.
 
+- **Task 033 — Indizierung von `docs/`: `index.md` je Verzeichnis und `search`** (2026-11-10,
+  Etappen 1–7 ausgeführt; `keph:/user/kamran/tasks/033-docs-index-und-suche.md`, Entwurf
+  `indizierung.md`, Abgleich mit k-playbook in `keph:/user/kamran/workbench/001-docs-indizierung.md`):
+  - Vertrag: Vorgang `rebuild_docs` (`rebuilt`, `current`, `no_docs`; nie wiederholt,
+    idempotent) und Code `generated_file` (403), ohne neue Fassung (`vertrag.md`);
+  - Schreibschutz: `docs/README.md` und jede `index.md` unter `docs/` schreibt nur das System
+    (`contract.IsGenerated`, `MayWrite`/`DenyGenerated`, auch der Admin; `hub import` übergeht
+    sie); Mahnung erkannt an Name und Urheber `system`, ersetzt mit `write` (übernommen),
+    löschen ja, einzeln umbenennen nein; `delete` mit `recursive` nimmt sie mit, `rename` eines
+    Verzeichnisses entfernt sie, nach `docs/` hinein mit `index.md` abgelehnt;
+  - Hub: `internal/hub/docsindex` (`Build`, `layout.yaml` mit `manual/` und `generated/`,
+    Vorlage für `docs/README.md`, Golden-Tests), `Store.RebuildDocs` unter Sperre der
+    Collection; CLI `hub collection rebuild-docs`, MCP-Werkzeug `rebuild_docs`;
+  - Node: `internal/sections`, Replica Schema 6 mit FTS5 (`sections`, `sections_fts`, `porter
+    unicode61`), nachgezogen in `apply`; Werkzeug `search`, `read` mit `section`
+    (`section_not_found`), `changes` mit `frontmatter`;
+  - Doku: `begriffe.md`, `vertrag.md`, `konzept.md` („Indizierung“, „Allgemein — lesen“,
+    „Stufen“), `indizierung.md` (Stand: gebaut), README, `k-playbook-local/k-playbook.md`;
+  - Durchlauf mit lokalem `serve` (isoliert, eigene config und Ports) am 2026-11-10. Offen:
+    Release und Nachricht an die k-playbook-Sitzung (Workbench).
+
 ## In Arbeit
 
 - **Task 032 — Idempotenzschlüssel für die Schreibvorgänge** (2026-10-15, Etappen 1–5
@@ -598,9 +620,8 @@ ist Nacharbeit des Nutzers)
   Zusammenspiel gleich bei der Einrichtung. Kommt erst, wenn `rotate` gebaut ist. Grundsatz: Nodes werden wie Accounts behandelt, außer wo es anders sinnvoll
   ist (`konzept.md`, „Offene Punkte“, Token-Rotation).
 - **Danach (Konzept, „Stufen“):**
-  - Stufe 1: Zerlegung in Abschnitte, FTS5-Index, MCP-Werkzeug `search`, Abschnitte in
-    `read`; Ereignisstrom (SSE/Long-Polling, Todo #10); dabei die Tokenisierung für Deutsch
-    entscheiden (`konzept.md`, „Indizierung“, „Deutsche Texte“);
+  - Stufe 1, Rest nach Task 033: Ereignisstrom (SSE/Long-Polling, Todo #10); automatischer
+    Neubau von `docs/` (zurückgestellt, `indizierung.md`, „Zurückgestellt“);
   - Stufe 2, Rest nach Task 014: `create_numbered`;
   - Stufe 3: `append`, `replace_section`, `supersede`, `replace_directory`;
   - Transport `ssh` (Entwurf geparkt in `k-playbook-local/inbox/chat/`, derselbe Anschluss
@@ -880,8 +901,9 @@ ist Nacharbeit des Nutzers)
 - **Task 014, PostgreSQL:** `rename` eines Verzeichnisses kommt zeilenweise ohne Zwischennamen
   aus — nur mit SQLite geprüft, für PostgreSQL aus der Überlegung (Befund
   `material/befunde/rename-verzeichnisse.md`, unbestätigt).
-- **Ranking mit FTS5:** Korrektur aus k-playbook Task 056 (Zeiger vor Zielen) neu nachweisen,
-  sobald die Suche steht.
+- **Ranking mit FTS5:** Korrektur aus k-playbook Task 056 (Zeiger vor Zielen) neu nachweisen —
+  die Suche steht seit Task 033; dabei die Gewichte in `bm25()` (8/3/1, `replica/search.go`)
+  an echter Doku messen und nachstellen.
 
 ## Zu besprechen
 

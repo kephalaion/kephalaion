@@ -2333,7 +2333,7 @@ darauf ab.
 
 | Werkzeug | Zweck | Anmerkungen |
 |---|---|---|
-| `search` | Volltextsuche über `docs/` | Collections wählbar; getrennte Trefferlisten je Collection, Rang ab 1, kein Punktwert; Treffer je Abschnitt. Entschieden in Task 033, siehe unten |
+| `search` | Volltextsuche über `docs/` | Collections wählbar; getrennte Trefferlisten je Collection, Rang ab 1, kein Punktwert; Treffer je Abschnitt. Gebaut in Task 033, siehe unten |
 | `read` | ein Dokument lesen | per Name oder `id`; wahlweise ein Abschnitt (`section`, Task 033); mit `content: false` nur die Angaben dazu, siehe unten. Gebaut in Task 009 |
 | `list` | Inhalt eines Verzeichnisses | siehe unten. Gebaut in Task 009 |
 | `changes` | was sich seit einer Revision oder einem Zeitpunkt geändert hat | siehe unten; neu am 2026-09-26. Gebaut in Task 009 |
@@ -2726,6 +2726,9 @@ sie auf den allgemeinen aufsetzen oder in k-playbook bleiben:
 ## Stufen
 
 1. **Nur lesen.** Node liefert Suchen, Lesen, Abgleich; eine Collection, ein Token, ein Recht.
+   Teilweise gebaut: Lesen und Abgleich (Tasks 004–015), Suchen über `docs/` mit Index und
+   `index.md` je Verzeichnis (Task 033); offen sind der Ereignisstrom und der automatische
+   Neubau von `docs/`.
 2. **Schreiben mit Rechten, ohne KI.** Dateien werden deterministisch abgelegt, der Hub prüft
    Recht und Form. Accounts, `rotate`, Ablehnungen, Fehlschläge; dazu Umbenennen, vorgezogen
    aus Stufe 3. Gebaut bis auf `create_numbered`: Accounts und `rotate` in Tasks 005–007,

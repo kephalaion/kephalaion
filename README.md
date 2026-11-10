@@ -21,10 +21,11 @@ Nodes und Accounts mit Rechten je Collection, am Node seine Hubs und die gewüns
 Collections. Der Hub nimmt Dokumente auf (`hub doc`, `hub import`), der Node gleicht sie in
 seine Replica ab (`node sync`) und zeigt sie an (`node doc`), über `transport local` oder
 `http` auf diesem Rechner. `kephalaion serve` lauscht je Rolle: der Hub für Nodes, der Node als
-MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read` und `changes` — gelesen
-wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und `rename` — geschrieben
-wird über den Hub, mit Rechten je Collection —, dazu `fetch_release` (der Hub holt das neueste
-Release einer Collection mit Quelle, etwa `k-playbook`), und gleicht als Node im Hintergrund ab.
+MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read`, `changes` und `search` —
+gelesen und gesucht wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und
+`rename` — geschrieben wird über den Hub, mit Rechten je Collection —, dazu `fetch_release` (der
+Hub holt das neueste Release einer Collection mit Quelle, etwa `k-playbook`) und `rebuild_docs`
+(der Hub baut den Index von `docs/` neu), und gleicht als Node im Hintergrund ab.
 Öffentliche Collections liest jeder Account des Hubs.
 Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
@@ -32,8 +33,11 @@ list`); am eigenen Node tauscht `node account rotate` ein Token; `node whoami` z
 Node kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
 ein, zum Lesen und Schreiben. Ein Node auf einem anderen Rechner erreicht den Hub über
 `https`: TLS beendet ein Reverse-Proxy vor dem Hub, der auf Loopback bleibt
-([`docs/installation.md`](docs/installation.md)). Noch nicht gebaut: `ssh`, Suche, weitere
-Werkzeuge (`create_numbered`, `append`, `replace_section`, `supersede`, `replace_directory`).
+([`docs/installation.md`](docs/installation.md)). Für das Verzeichnis `docs/` einer Collection
+schreibt der Hub je Verzeichnis eine `index.md` nach Google OKF und `docs/README.md` als
+Anleitung, der Node hält einen Volltextindex für `search` ([`docs/indizierung.md`](docs/indizierung.md)).
+Noch nicht gebaut: `ssh`, semantische Suche, weitere Werkzeuge (`create_numbered`, `append`,
+`replace_section`, `supersede`, `replace_directory`).
 
 ## Was gebraucht wird (grob)
 
@@ -55,8 +59,7 @@ im Konzept.
   `write`, `append`, `replace_section`, `rename`, `supersede`, `delete`,
   `replace_directory`), dazu eigene für k-playbook (Eingang, Warteschlange, Todos, Tasks).
 - **Kommandozeile** — `init`, `status`, `config`, Verwaltung von Collections, Nodes, Accounts
-  und Hubs, Dokumente am Hub, `node sync`, `node account setup|list|rotate`, `serve`; später
-  `search`.
+  und Hubs, Dokumente am Hub, `node sync`, `node account setup|list|rotate`, `serve`.
 - **Stufen** — 1 lesen, 2 schreiben mit Rechten, 3 Vorgänge auf Dateien, 4 Schnipsel
   (zurückgestellt), 5 semantische Suche.
 
@@ -509,7 +512,16 @@ Node einen Hub noch nie abgeglichen, sagt die Meldung das.
   dem `cursor` der letzten Antwort lückenlos alles danach — je Dokument einmal, Löschmarken
   eingeschlossen. `reset` nennt Hubs, deren Replica neu angelegt wurde (neu mit `list` lesen),
   `dropped` Collections, die nicht mehr lesbar sind. `since` (RFC 3339) statt `cursor` fragt
-  nach der Zeit des Hubs, nicht lückenlos.
+  nach der Zeit des Hubs, nicht lückenlos. Mit `frontmatter` trägt jedes geänderte
+  `.md`-Dokument sein Frontmatter, wie bei `list`.
+- **`search`** — Volltextsuche über `docs/` der lesbaren Collections: `query` mit einfachen
+  englischen Wörtern (Fragen gehen, keine Suchsyntax), wahlweise `collection`, `path` (unter
+  `docs/`) und `limit` (Standard 10, höchstens 50, je Collection). Treffer sind Abschnitte: je
+  Collection eine Liste `hits` mit `rank`, `name`, `title`, `description`, `section`
+  (`heading`, `headings`, `anchor`) und `excerpt`, höchstens drei je Dokument; ohne Treffer ein
+  `hint` auf `docs/index.md`. `read` mit `name` und `section` (dem Anker) liefert dann genau
+  diesen Abschnitt; einen unbekannten Anker beantwortet es mit `error.code`
+  `section_not_found`. `index.md`, `docs/README.md` und Mahnungen sind nie Treffer.
 
 Löschmarken erscheinen nur in `changes`, `SYSTEM:`-Namen nie. Eine Replica, die sich nicht
 lesen lässt, betrifft nur ihren Hub (`unreadable_hubs`).
@@ -556,6 +568,7 @@ dem Code, nicht nach der Meldung:
 | `path_conflict` | der Name wäre zugleich Datei und Verzeichnis |
 | `not_found` | kein solches Dokument, bei `delete` und `rename` auch kein Verzeichnis |
 | `forbidden` | das Recht fehlt; die Meldung nennt den Grund („gehört admin, supersede fehlt“) |
+| `generated_file` | eine erzeugte Datei unter `docs/` (`docs/README.md`, jede `index.md`) schreibt nur das System; ebenso ein `rename` nach `docs/` hinein, das eine mitbrächte, und das Umbenennen einer einzelnen Mahnung |
 | `not_readable` | nicht lesbar, wie beim Lesen — auch ein Account, den der Hub nicht (mehr) annimmt |
 | `invalid` | ungültig: Name, Inhalt (kein UTF-8, ein NUL-Byte, über 1 MiB), ein Verzeichnis ohne `recursive` |
 | `unreachable` | der Hub ist nicht erreicht worden, nichts gespeichert; gelesen wird weiter |
@@ -570,6 +583,21 @@ nächsten Abgleich; hat der Node den Hub noch nie abgeglichen, nennt die Meldung
 `kephalaion node sync <hub>` als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
 Admins am Hub, ohne Node. In einer Collection mit Quelle (`k-playbook`) schreibt niemand: Jeder
 Schreibvorgang ist `forbidden`.
+
+**`docs/` einer Collection** ist der Ort für Doku, englisch
+([`docs/indizierung.md`](docs/indizierung.md)). `docs/README.md` und jede `index.md` darunter
+schreibt nur das System — jeder Schreibvorgang darauf ist `generated_file`, auch für den Admin
+(`hub doc put|rm`; `hub import` übergeht sie). **`rebuild_docs`** (`collection`) lässt den Hub
+`docs/` neu bauen: `docs/README.md`, die festen Verzeichnisse `manual/` und `generated/`, je
+Verzeichnis eine `index.md` (eine Ebene, Titel und Beschreibung aus dem Frontmatter) und eine
+**Mahnung** (`README.md`), wo einem Verzeichnis die `README.md` fehlt; die Mahnung ersetzt jeder
+mit `write` (nicht `create`). Antwort `status` `rebuilt`, `current` oder `no_docs` (ohne `docs/`
+nichts zu tun), dazu `revision` und Zahlen; jeder Account mit Lesezugriff darf es, eine Collection
+mit Quelle nicht. Einen automatischen Neubau gibt es noch nicht: Nach Änderungen unter `docs/`
+ist `rebuild_docs` anzustoßen — bis dahin zeigt `index.md` den alten Stand, und nach `rename`
+eines Verzeichnisses fehlt sie dort (`delete` mit `recursive` und `rename` eines Verzeichnisses
+nehmen erzeugte Dateien und Mahnungen mit bzw. entfernen sie). Am Hub als Admin: `kephalaion hub
+collection rebuild-docs <collection>`.
 
 **`fetch_release`** (`collection`: `<hub>:<collection>`) lässt den Hub das neueste Release der
 Quelle einer Collection nach `defaults/` holen und stößt danach den Abgleich an; es liest keine
