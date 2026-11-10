@@ -1,6 +1,6 @@
 # Fortschritt
 
-Stand: 2026-11-10 (Task 033 abgeschlossen, Release v0.4.0; Nachricht an k-playbook offen;
+Stand: 2026-11-10 (Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
 Stand 2026-10-08: Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
@@ -448,7 +448,7 @@ ist Nacharbeit des Nutzers)
   - Doku: `begriffe.md`, `vertrag.md`, `konzept.md` („Indizierung“, „Allgemein — lesen“,
     „Stufen“), `indizierung.md` (Stand: gebaut), README, `k-playbook-local/k-playbook.md`;
   - Durchlauf mit lokalem `serve` (isoliert, eigene config und Ports) am 2026-11-10. Release
-    v0.4.0 am 2026-11-10. Offen: Nachricht an die k-playbook-Sitzung (Workbench).
+    v0.4.0 am 2026-11-10, der k-playbook-Sitzung gemeldet.
 
 ## In Arbeit
 
@@ -685,8 +685,8 @@ ist Nacharbeit des Nutzers)
   4. Zwei Token-Dateien an einem Hub ohne Standard: `node client` meldet „Wahl fehlt“ mit beiden
      Kandidaten; nach `kephalaion node account default <hub> <account>` gilt er in der CLI, in
      `node mcp add|status|headers` und in der Erweiterung für VS Code.
-- **Task 037 — Release melden:** Mindestversion v0.4.0 in `installation.md`, „Auskunft für
-  Clients“, nachgetragen (2026-11-10); der k-playbook-Sitzung das Release melden.
+- **Task 037 — Release gemeldet:** Mindestversion v0.4.0 in `installation.md`, „Auskunft für
+  Clients“, nachgetragen und der k-playbook-Sitzung gemeldet (2026-11-10).
 
 - **Task 025 — Fehlversuche fälschungssicher, Abnahme mit VS Code und `rotate`** (Nacharbeit des
   Nutzers; braucht die Fenster und Token-Dateien des Nutzers. Auf der VM ist alles ausgerollt und
