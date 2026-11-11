@@ -1,8 +1,8 @@
 # Fortschritt
 
-Stand: 2026-11-11 (Task 037 `upgrade --auto` und Signale Etappen 1–4 ausgeführt, Meldung an
-k-playbook nach dem Release offen; Task 036 `upgrade --auto` Etappen 1–4 ausgeführt, Abnahme
-Teil B nach dem Folgerelease offen; 2026-11-10: Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
+Stand: 2026-11-11 (Task 037 `upgrade --auto` und Signale abgeschlossen, Release v0.4.2, an
+k-playbook gemeldet; Task 036 `upgrade --auto` Etappen 1–4 ausgeführt, Abnahme Teil B mit dem
+Folgerelease v0.4.2 jetzt möglich; 2026-11-10: Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
 Stand 2026-10-08: Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
@@ -459,7 +459,9 @@ ist Nacharbeit des Nutzers)
   Grenze in eigener Prozessgruppe; ein ausstehender Neustart wird nachgeholt; Rückweg-Datei
   `.kephalaion-upgrade-backup-<version>-…`, Aufräumen alter temporärer Dateien
   (`installation.md`, „`upgrade --auto`“; `konzept.md`, „Upgrade ohne Menschen“). Abnahme sind
-  die Tests mit eingespeistem Signal. Offen die Meldung an k-playbook (unten, „Zu tun“).
+  die Tests mit eingespeistem Signal. Veröffentlicht in v0.4.2 (2026-11-11) und der
+  k-playbook-Sitzung zu deren Task 141 gemeldet (reason `interrupted`, Höchstdauer, Abstand
+  SIGTERM → SIGKILL mindestens 75 s, JSON nach SIGTERM auswerten, ausstehender Neustart).
 
 - **Task 036 (`036-upgrade-auto-fuer-nodes`) — `kephalaion upgrade --auto`: ein Node
   aktualisiert sich selbst, wenn es gefahrlos geht** (2026-11-11, Etappen 1–4
@@ -540,14 +542,6 @@ ist Nacharbeit des Nutzers)
   des entfernten Nodes (siehe „Zu besprechen“).
 
 ## Zu tun
-
-- **Meldung an k-playbook zu Task 037 (`037-upgrade-auto-signale`)** — offen, gesendet wird
-  nach dem Release wie bei v0.4.0. Inhalt (Entwurf im Task): neuer reason `interrupted`
-  (`failed`, Exit 1, vor dem Ersetzen abgebrochen, nichts verändert); Höchstdauer vom Signal
-  bis zum Ende 75 s mit laufendem Dienst, 5 s ohne; Abstand SIGTERM → SIGKILL mindestens 75 s;
-  nach SIGTERM das JSON auswerten statt „Ausgang unbekannt“, nur nach SIGKILL bleibt
-  `kephalaion status` der Prüfschritt; `--auto` holt einen ausstehenden Neustart nach und meldet
-  dann `upgraded` ohne neues Release.
 
 - **Spätere Rotation ohne eigenen Node** (Todo 18, Folgearbeit von Task 028): `setup` richtet
   nur ein; wer keinen eigenen Node hat, braucht für jedes spätere Rotieren den Admin
