@@ -115,6 +115,10 @@ type WhoamiRequest struct {
 type WhoamiResponse struct {
 	HubID   string `json:"hub_id"`
 	Version int    `json:"version"`
+	// Release ist das Release des Binarys, auf dem der Hub läuft, etwa
+	// v0.5.0, bei einem dev build dev (Task 036). Additiv in Fassung 1: Ein
+	// Hub vor Task 036 schickt es nicht, dann ist es leer.
+	Release string `json:"release,omitempty"`
 	// Node ist der Name des Nodes am Hub.
 	Node string `json:"node"`
 	// Allowed sind die Collections, die der Node abgleichen darf, sortiert.

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/hub/source"
 	"github.com/kephalaion/kephalaion/internal/hub/store"
@@ -137,7 +138,9 @@ func checkVersion(v int) error {
 // Whoami bestätigt den Node. Mit Account-Teil prüft es den Account gegen
 // accounts und nennt seinen User und, welche seiner Collections dieser Node
 // abgleichen darf. Ein Account, der nicht gilt, ist kein Fehler, sondern
-// Valid false — ohne User.
+// Valid false — ohne User. Release ist die Version dieses Binarys: So prüft
+// ein Node vor upgrade --auto, ob sein Hub schon mindestens so neu ist wie
+// das Ziel (Task 036).
 func (h *Hub) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.WhoamiResponse, error) {
 	if err := checkVersion(req.Version); err != nil {
 		return contract.WhoamiResponse{}, err
@@ -151,8 +154,8 @@ func (h *Hub) Whoami(ctx context.Context, req contract.WhoamiRequest) (contract.
 	if err != nil {
 		return contract.WhoamiResponse{}, err
 	}
-	resp := contract.WhoamiResponse{HubID: info.HubID, Version: contract.Version, Node: req.Auth.Node,
-		Allowed: allowed, Public: acc.public, Subscribed: acc.subscribed}
+	resp := contract.WhoamiResponse{HubID: info.HubID, Version: contract.Version, Release: buildinfo.Get().Version,
+		Node: req.Auth.Node, Allowed: allowed, Public: acc.public, Subscribed: acc.subscribed}
 	if req.Account != nil {
 		a, ok, err := h.checkAccount(ctx, *req.Account)
 		if err != nil {

@@ -52,7 +52,10 @@ type Upgrader struct {
 	System bool
 	// Now liefert die Zeit für Report.CheckedAt.
 	Now func() time.Time
-	Out io.Writer
+	// Rename benennt eine Datei atomar um; nil heißt os.Rename. Tests lassen
+	// das Ersetzen damit scheitern.
+	Rename func(oldpath, newpath string) error
+	Out    io.Writer
 }
 
 // New liefert einen Upgrader für dieses Binary und github.com/kephalaion/kephalaion.
@@ -178,17 +181,7 @@ func (u *Upgrader) run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, errors.New(msg)
 	}
 
-	name := AssetName(u.Current.OS, u.Current.Arch)
-	bin, ok := rel.findAsset(name)
-	if !ok {
-		return Result{}, fmt.Errorf("das Release %s hat kein Binary für %s (%s fehlt)", target, u.Current.Platform(), name)
-	}
-	sumsAsset, ok := rel.findAsset(SumsAsset)
-	if !ok {
-		return Result{}, fmt.Errorf("das Release %s hat kein %s", target, SumsAsset)
-	}
-
-	want, err := u.expectedSum(ctx, sumsAsset, name)
+	bin, want, err := u.assetAndSum(ctx, rel, target)
 	if err != nil {
 		return Result{}, err
 	}
@@ -232,6 +225,25 @@ func (u *Upgrader) printCheck(current Version, isDev bool, target Version, expli
 	}
 	_, _, hint := u.way(self, dir, target.String(), isDev)
 	fmt.Fprintf(u.Out, "Weg: %s\n", hint)
+}
+
+// assetAndSum sucht im Release das Binary dieser Plattform und lädt seine
+// Summe aus SHA256SUMS.
+func (u *Upgrader) assetAndSum(ctx context.Context, rel release, target Version) (asset, string, error) {
+	name := AssetName(u.Current.OS, u.Current.Arch)
+	bin, ok := rel.findAsset(name)
+	if !ok {
+		return asset{}, "", fmt.Errorf("das Release %s hat kein Binary für %s (%s fehlt)", target, u.Current.Platform(), name)
+	}
+	sumsAsset, ok := rel.findAsset(SumsAsset)
+	if !ok {
+		return asset{}, "", fmt.Errorf("das Release %s hat kein %s", target, SumsAsset)
+	}
+	want, err := u.expectedSum(ctx, sumsAsset, name)
+	if err != nil {
+		return asset{}, "", err
+	}
+	return bin, want, nil
 }
 
 // expectedSum lädt SHA256SUMS und liefert die Summe für name.
@@ -295,14 +307,48 @@ func (u *Upgrader) executablePath() (string, error) {
 // Verzeichnis und damit auf demselben Dateisystem liegen. Scheitert irgendein
 // Schritt oder wird ctx abgebrochen (SIGINT/SIGTERM), wird die temporäre Datei
 // entfernt und exe bleibt, wie es war.
-func (u *Upgrader) replace(ctx context.Context, exe string, bin asset, wantSum string) (err error) {
-	dir := filepath.Dir(exe)
+func (u *Upgrader) replace(ctx context.Context, exe string, bin asset, wantSum string) error {
+	tmpName, err := u.download(ctx, filepath.Dir(exe), bin, wantSum)
+	if err != nil {
+		return err
+	}
+	// Letzte Gelegenheit für einen Abbruch; nach rename ist das neue Binary da.
+	if ctx.Err() != nil {
+		_ = os.Remove(tmpName)
+		return errAborted
+	}
+	if err := u.rename(tmpName, exe); err != nil {
+		_ = os.Remove(tmpName)
+		return replaceError(exe, err)
+	}
+	return nil
+}
+
+// replaceError ist die Meldung, wenn sich exe nicht ersetzen lässt.
+func replaceError(exe string, err error) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("kein Schreibrecht, um %s zu ersetzen", exe)
+	}
+	return fmt.Errorf("%s nicht ersetzbar: %w", exe, err)
+}
+
+func (u *Upgrader) rename(oldpath, newpath string) error {
+	if u.Rename != nil {
+		return u.Rename(oldpath, newpath)
+	}
+	return os.Rename(oldpath, newpath)
+}
+
+// download lädt das Binary in eine temporäre Datei in dir (TempPattern),
+// prüft die Summe und macht die Datei ausführbar. Scheitert ein Schritt oder
+// wird ctx abgebrochen, ist die temporäre Datei entfernt.
+func (u *Upgrader) download(ctx context.Context, dir string, bin asset, wantSum string) (name string, err error) {
 	tmp, err := os.CreateTemp(dir, TempPattern)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
-			return fmt.Errorf("kein Schreibrecht im Verzeichnis %s — das Binary dort lässt sich nicht ersetzen", dir)
+			return "", fmt.Errorf("kein Schreibrecht im Verzeichnis %s — das Binary dort lässt sich nicht ersetzen", dir)
 		}
-		return fmt.Errorf("temporäre Datei in %s nicht anlegbar: %w", dir, err)
+		return "", fmt.Errorf("temporäre Datei in %s nicht anlegbar: %w", dir, err)
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -314,42 +360,32 @@ func (u *Upgrader) replace(ctx context.Context, exe string, bin asset, wantSum s
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, bin.URL, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resp, err := u.do(req)
 	if err != nil {
-		return fmt.Errorf("%s nicht ladbar: %w", bin.Name, err)
+		return "", fmt.Errorf("%s nicht ladbar: %w", bin.Name, err)
 	}
 	defer resp.Body.Close()
 
 	h := sha256.New()
 	if _, err = io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
 		if ctx.Err() != nil {
-			return errAborted
+			return "", errAborted
 		}
-		return fmt.Errorf("Download von %s abgebrochen: %w", bin.Name, err)
+		return "", fmt.Errorf("Download von %s abgebrochen: %w", bin.Name, err)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantSum {
-		return fmt.Errorf("Prüfsumme von %s stimmt nicht: erwartet %s, erhalten %s", bin.Name, wantSum, got)
+		return "", fmt.Errorf("Prüfsumme von %s stimmt nicht: erwartet %s, erhalten %s", bin.Name, wantSum, got)
 	}
 	if err = tmp.Chmod(0o755); err != nil {
-		return fmt.Errorf("Rechte der temporären Datei nicht setzbar: %w", err)
+		return "", fmt.Errorf("Rechte der temporären Datei nicht setzbar: %w", err)
 	}
 	if err = tmp.Sync(); err != nil {
-		return fmt.Errorf("temporäre Datei nicht schreibbar: %w", err)
+		return "", fmt.Errorf("temporäre Datei nicht schreibbar: %w", err)
 	}
 	if err = tmp.Close(); err != nil {
-		return fmt.Errorf("temporäre Datei nicht schreibbar: %w", err)
+		return "", fmt.Errorf("temporäre Datei nicht schreibbar: %w", err)
 	}
-	// Letzte Gelegenheit für einen Abbruch; nach rename ist das neue Binary da.
-	if ctx.Err() != nil {
-		return errAborted
-	}
-	if err = os.Rename(tmpName, exe); err != nil {
-		if errors.Is(err, fs.ErrPermission) {
-			return fmt.Errorf("kein Schreibrecht, um %s zu ersetzen", exe)
-		}
-		return fmt.Errorf("%s nicht ersetzbar: %w", exe, err)
-	}
-	return nil
+	return tmpName, nil
 }

@@ -1,6 +1,7 @@
 # Fortschritt
 
-Stand: 2026-11-10 (Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
+Stand: 2026-11-11 (Task 036 `upgrade --auto` Etappen 1–4 ausgeführt, Abnahme Teil B nach dem
+Folgerelease offen; 2026-11-10: Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
 Stand 2026-10-08: Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
 Etappen 1–4 ausgeführt, die Abnahme auf der VM ist jeweils Nacharbeit des Nutzers; 022 auf der
 WSL abgenommen; 023 auf der VM eingespielt und abgenommen; 024 abgenommen; 026 Etappen 1–4
@@ -24,7 +25,8 @@ ist Nacharbeit des Nutzers)
   3. `git log --oneline` und `git status` — was committet ist, was gerade in Arbeit ist;
   4. `docs/konzept.md` — Abschnitte „Offene Punkte“, „Stufen“, „Werkzeuge“ und alles mit
      „offen“, „zurückgestellt“, „vorgemerkt“;
-  5. `k-playbook-local/material/befunde/` — Befunde mit Status ungleich `geklaert`.
+  5. `keph:/queue/findings/` — Befunde mit `sicherheit: unbestaetigt` als Anlass für offene
+     Prüfungen; der Stichpunkt nennt den Sachverhalt selbst, ohne Verweis auf den Befund.
 - **Wie:** nur Stichpunkte, jeder mit Verweis auf seine Quelle (Task/Etappe, Abschnitt).
   Erledigtes aus „In Arbeit“ und „Zu tun“ nach „Erledigt“ verschieben, dort knapp halten.
   Entschiedenes aus „Zu besprechen“ streichen — die Entscheidung gehört in `konzept.md`,
@@ -158,7 +160,7 @@ ist Nacharbeit des Nutzers)
   Einträge der Seite, nicht im Cursor; neutrales Paket `internal/frontmatter` (yaml.v3 über den
   Knotenbaum, Zeitangaben bleiben Text); Durchlauf gegen den echten Node (`home:eins`,
   `test/frontmatter/`). Nur Node, kein Vertrag, kein Schema, Erweiterung unberührt
-  (`konzept.md`, „Datenmodell“, „Allgemein — lesen“; Befund `frontmatter-yaml.md`).
+  (`konzept.md`, „Datenmodell“, „Allgemein — lesen“).
 - **Task 016 — vendor/ und Ordner abgleichen** (2026-09-28, Etappen 1–5):
   - Scope `vendor/<name>` in `rights.vendor` der Account-Zeile (Liste, ohne neue Fassung des
     Vertrags); die eine Regel in `contract.Rights.MayWrite`: unter `vendor/<name>/` allein der
@@ -180,7 +182,7 @@ ist Nacharbeit des Nutzers)
     84 Symlinks übergangen, keine Treffer der Vorabprüfung) in 1,7 s nach
     `vendor/k-playbook/`, zweiter Lauf 0,5 s ohne Änderung, SIGINT nach 13 von 49 Änderungen
     und Fortsetzen, `pull` mit `diff -r` ohne Unterschied, Account nur mit `write`
-    abgewiesen (Befund `vendor-scope-und-dir-push-pull.md`).
+    abgewiesen.
 
 - **Task 018 — Transport `https`: Node zu einem Hub hinter einem Reverse-Proxy** (2026-09-29,
   Etappen 1–3):
@@ -205,7 +207,7 @@ ist Nacharbeit des Nutzers)
   - Tests ohne Netz gegen „Proxy plus Hub“ (`internal/testcert`, `httptest` mit `StartTLS`):
     richtige, falsche und keine CA, falscher Name, abgelaufen, `serve` mit `https`-Eintrag
     (Abgleich, `create` über MCP, Anstoß, falsche CA). Abnahme auf der VM: Etappe 4, siehe
-    „Zu testen“ (Befund `material/befunde/transport-entfernt.md`).
+    „Zu testen“.
 
 - **Task 019 — Das Binary hinter einem Präfix: Begrüßung an der Wurzel, der Hub unter
   `/hub/`** (2026-09-30, Etappen 1–3):
@@ -231,8 +233,7 @@ ist Nacharbeit des Nutzers)
   - Tests: `TestServeHubListener` (22 Pfade und Methoden, nie `Location`),
     `TestNotFoundWithoutContract`, `TestAccountRotateOldAddress`, `TestNodeHubCheckHTTPS`
     gegen `proxyHubAt` mit `newHubHandler` (Präfix `/kephalaion`, Rest 401 bzw. 404).
-    Abnahme auf der VM: Etappe 4, siehe „Zu testen“ (Befund
-    `material/befunde/transport-entfernt.md`).
+    Abnahme auf der VM: Etappe 4, siehe „Zu testen“.
 
 - **Task 020 — Weboberfläche am Hub: Kephalaion-Token abfragen, Zugriff des Accounts zeigen**
   (2026-09-30, Etappen 1–4):
@@ -255,8 +256,7 @@ ist Nacharbeit des Nutzers)
     erreichbar“ (502/503, kein Netz);
   - Durchlauf im Browser (Playwright gegen einen Wegwerf-Hub): die sieben Proben bestanden;
     dabei gefunden und behoben: fehlendes Symbol (`/favicon.ico` 404 in der Konsole, jetzt
-    `gui/icon.svg`), zerlegte Tabellenköpfe, zwei Fehler der schmalen Ansicht — Befund
-    `material/befunde/gui.md`;
+    `gui/icon.svg`), zerlegte Tabellenköpfe, zwei Fehler der schmalen Ansicht;
   - Doku: `begriffe.md` (`gui`, `account token`, `greeting`, `whoami`), `konzept.md`
     („Kommunikation“: die Weboberfläche am Hub; „Offene Punkte“), `installation.md` (Option
     Weboberfläche hinter der Anmeldung, zwei Arten 401, „Bekannte Grenze“: fail2ban zählt jede
@@ -279,14 +279,15 @@ ist Nacharbeit des Nutzers)
     Verzeichnis-Scope (gleich oder darunter): die Scopes über `whoami` beim Node, vor dem
     ersten Vorgang und bei `--dry-run`; sonst Exit 2 mit den freigegebenen Verzeichnissen,
     `grant … --dir` und `node sync`; Stand des letzten Abgleichs, der Hub prüft trotzdem;
-  - Durchlauf im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`);
+  - Durchlauf im vorübergehenden Aufbau: ohne Freigabe Exit 2 vor jedem Schreiben,
+    `grant … --dir` und Entzug wirken erst nach `node sync`;
     Abnahme auf der VM: siehe „Zu testen“.
 - **Task 022 — bei den Assistenten angemeldet:** `kephalaion node mcp add|remove|status|headers`
   (Paket `internal/assistant`) für Claude Code, OpenCode und Codex, auf User-Ebene, das Token nie
   im Klartext; die Erweiterung 0.0.6 meldet den Node als MCP-Server für Copilot (Sperre bei
   Log-Level Trace, entschieden am 2026-10-01); Anstoß aus `install.sh` und `node account
   rotate|check`. Auf der WSL am 2026-10-01 mit allen vier abgenommen, Codex über `codex
-  app-server` (Befund `material/befunde/mcp-client-registrierung.md`).
+  app-server`.
 - **Task 024 — `read` liefert den Inhalt in der Struktur** (2026-10-02, Etappen 1–3): Der
   Inhalt steht im Feld `content` von `ReadOutput`, der Text des Ergebnisses ist nur das JSON der
   Struktur. So bekommt auch Claude Code den Inhalt, das nur `structuredContent` weiterreicht.
@@ -294,7 +295,7 @@ ist Nacharbeit des Nutzers)
   Text. Abgenommen in neuen Sitzungen von Claude Code (kürzt `begriffe.md` mit 38 KB nicht),
   OpenCode, Codex (`app-server`) und VS Code: Die Erweiterung zeigt Markdown samt Frontmatter
   und speichert Markdown, Copilot liest mit `read` (`konzept.md`, „Allgemein — lesen“;
-  `vscode.md`, „`read` mit `content`“; Befund `mcp-read-inhalt-in-claude-code.md`).
+  `vscode.md`, „`read` mit `content`“).
 
 - **Task 026 — Weboberfläche: Zugriff je User aus der Anmeldung des Proxys** (2026-10-05,
   Etappen 1–4; Entscheidung des Nutzers vom 2026-10-05: Umbau komplett, `konzept.md`,
@@ -313,8 +314,7 @@ ist Nacharbeit des Nutzers)
     gegenüber `viewer`; Meldungen für keine Anmeldung des Proxys, ungültigen User, abgelaufene
     Anmeldung, Hub nicht erreichbar, keinen Account; kein Formular, nur `GET`;
   - Durchlauf im Browser (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter für
-    Caddy mit authproxy): alle Proben bestanden, ohne Korrektur — Befund
-    `material/befunde/gui.md`;
+    Caddy mit authproxy): alle Proben bestanden, ohne Korrektur;
   - Doku: `begriffe.md` (`viewer`, `gui/api/user`, `gui`), `konzept.md` („Die Weboberfläche am
     Hub“, „Die Identität ist das Token — mit einer Ausnahme“, „Authentifizierung“, „Offene
     Punkte“), `installation.md` (Vorlage mit `request_header` für die ganze Site und
@@ -374,8 +374,7 @@ ist Nacharbeit des Nutzers)
     `USER_API` (ohne Query oder `?name=` mit `encodeURIComponent`) und `USERS_API`, immer GET,
     `redirect: "manual"`, `same-origin`, `no-store`;
   - Durchlauf im Browser (Playwright, Stellvertreter, der `X-User*` entfernt und
-    `X-User-Roles` setzt): alle Proben bestanden, ohne Korrektur — Befund
-    `material/befunde/gui.md`;
+    `X-User-Roles` setzt): alle Proben bestanden, ohne Korrektur;
   - Doku: `begriffe.md` (`gui admin`, `gui/api/users`, `gui/api/user`, Abgrenzung zu `admin`),
     `konzept.md` (Admin-Ansicht, größere Grenze, Absicherung des lokalen Zugriffs statt
     geheimem Header), `installation.md` (Vorlage mit `request_header -X-User*` und `-X_User*`,
@@ -389,8 +388,8 @@ ist Nacharbeit des Nutzers)
     Auf der VM eingespielt am 2026-10-07 (dev c77af6f), nachdem Caddy (läuft wie das Caddyfile
     im Repo, `X-User*` fällt vor jedem `handle` weg) und authproxy (schickt `X-User-Roles`)
     geprüft waren; mit Probenutzern von außen belegt: Ein selbst gesetzter `X-User-Roles`
-    erreicht den Hub nicht (`~/dev/vm/kephalaion/README.md`, „Stand 2026-10-07“; Befund
-    `benutzer-und-tokens-gui.md`). Abnahme mit eigenen Sitzungen: siehe „Zu testen“.
+    erreicht den Hub nicht (`~/dev/vm/kephalaion/README.md`, „Stand 2026-10-07“). Abnahme mit
+    eigenen Sitzungen: siehe „Zu testen“.
 
 - **Task 036 — create und write melden unlesbares Frontmatter und Kommentare im Wert**
   (2026-11-09, Etappen 1–3; `keph:/user/kamran/tasks/done/001-create-write-melden-frontmatter.md`,
@@ -452,6 +451,17 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 036 (`036-upgrade-auto-fuer-nodes`) — `kephalaion upgrade --auto`: ein Node
+  aktualisiert sich selbst, wenn es gefahrlos geht** (2026-11-11, Etappen 1–4
+  ausgeführt): `whoami` nennt das Release des Hubs (`release`, additiv, `vertrag.md`); `upgrade
+  --preflight --json` prüft mit dem neuen Binary die Datenbanken; `upgrade --auto [--json]` mit
+  den Stufen 1–13, Sperre, Rückweg nach dem Neustart (`installation.md`, „Upgrade: was
+  Kephalaion meldet“; `konzept.md`, „Upgrade ohne Menschen“). Abnahme Teil A sind die Tests mit
+  nachgespieltem GitHub und Hub. **Einspielen von Hand:** erst die VM per Ansible auf das
+  Release mit Task 036, dann `kephalaion upgrade` in der WSL; ein älteres Binary kennt `--auto`
+  nicht (Exit 2). Offen Teil B (unten, „Zu testen“) und der Folgetask in k-playbook
+  (`k-playbook upgrade` ruft `--auto --json`).
+
 - **Task 032 — Idempotenzschlüssel für die Schreibvorgänge** (2026-10-15, Etappen 1–5
   ausgeführt; Anlass k-playbook Task 088): wahlweise `request_id` bei `create`, `write`, `delete`
   und `rename` im Vertrag und an den Werkzeugen des Nodes; der Hub merkt sich einen Erfolg in
@@ -460,8 +470,7 @@ ist Nacharbeit des Nutzers)
   derselbe Schlüssel für einen anderen Vorgang ist `invalid` (`vertrag.md`, „Wiederholung mit
   Schlüssel“). Lokal mit curl gegen Hub und Node durchgespielt. **Reihenfolge beim Einspielen:
   erst den Hub (Export/Import, `installation.md`, „Neue Schemafassung“), dann die Nodes** — ein
-  älterer Hub übergeht den Schlüssel still. Offen das Einspielen auf der VM. Befund
-  `schreiben-wiederholen.md`.
+  älterer Hub übergeht den Schlüssel still. Offen das Einspielen auf der VM.
 
 - **Task 031 — Eine Collection, die der Hub selbst aus einem Release füllt** (2026-10-12,
   Etappen 1–5 ausgeführt): `public` als Eigenschaft jeder Collection, die eingebettete Liste
@@ -473,7 +482,6 @@ ist Nacharbeit des Nutzers)
   Release `k-playbook-defaults.tar.gz` trägt (v0.12.0 trägt es nicht) — vorher `vm:k-playbook`
   in `k-playbook-dev` umbenennen, Schema per Export/Import, dann `hub collection fetch
   k-playbook`; dazu Todo #19 (Anfrage über den Node einschränken) und #20 (Abo abschaltbar).
-  Befund `collection-aus-release.md`.
 
 - **Task 025 — Fehlversuche fälschungssicher zählen, ohne richtige Clients zu sperren:** gebaut
   am 2026-10-09 (Etappe 1: Weg 4 lokal mit Caddy 2.11.7 und mit `fail2ban-regex` auf der VM
@@ -483,11 +491,11 @@ ist Nacharbeit des Nutzers)
   Fenster, `vscode/pause.js`), auf der VM ausgerollt (Etappe 5: Rollen `kephalaion`, `caddy`,
   `fail2ban`; die Jail `kephalaion-mcp` liest das Zugriffslog von Caddy mit `remote_ip`; Abnahmen
   T1–T10 in `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“), dokumentiert
-  (Etappe 6); Befund `mcp-von-aussen.md`. Offen die Abnahme durch den Nutzer mit mehreren
+  (Etappe 6). Offen die Abnahme durch den Nutzer mit mehreren
   VS-Code-Fenstern und mit `rotate` gegen die VM, Schritte unter „Zu testen“.
 
 - **Task 030 — Abnahme der Statusleiste in der WSL:** gebaut am 2026-10-08 (Etappe 1, belegt
-  am Wegwerf-Node mit zwei Einträgen auf denselben Hub; Befund `vscode-betrieb.md`), Doku
+  am Wegwerf-Node mit zwei Einträgen auf denselben Hub), Doku
   nachgezogen (Etappe 2); offen die Abnahme durch den Nutzer in der WSL mit einem Wegwerf-Node
   und im DevContainer der VM, Schritte unter „Zu testen“.
 
@@ -517,7 +525,7 @@ ist Nacharbeit des Nutzers)
   aus einem `HOME` ohne Node, `whoami` über `https` in neuen Sitzungen von Claude Code, OpenCode
   und Codex (`app-server`), verdeckt ohne Anmeldung, lokal alles wie bisher, kein Token im
   Journal, lokale Einträge wie vorher; VS Code 0.0.7 mit entfernter `nodeUrl` vom Nutzer
-  abgenommen (A10). Befund `mcp-von-aussen.md`: Die Erweiterung schickt rund 2 Anfragen je
+  abgenommen (A10). Gemessen: Die Erweiterung schickt rund 2 Anfragen je
   Sekunde, ein ungültiges Token sperrt in Sekunden; nach `rotate` ein Fenster bis zum Abgleich
   des entfernten Nodes (siehe „Zu besprechen“).
 
@@ -552,14 +560,13 @@ ist Nacharbeit des Nutzers)
   k-playbook. Die Erweiterung für VS Code merkt sich `writable` je Collection aus dem letzten
   `read` (`extension.js`, `this.writable`) — unter `vendor/` und in einem Verzeichnis mit
   Verzeichnis-Scope kann die Anzeige eines Ordners deshalb vom Recht des zuletzt gelesenen
-  Dokuments abhängen; `stat` je Dokument ist richtig (Befund
-  `vendor-scope-und-dir-push-pull.md`).
+  Dokuments abhängen; `stat` je Dokument ist richtig.
 
 - **MCP bei den Assistenten, dann über `https`** (entschieden am 2026-09-30):
   - **Task 022 — bei den Assistenten anmelden, lokal:** erledigt, siehe „Erledigt“.
   - **Task 023 — MCP und Kommandozeile über `https`:** gebaut und auf der VM eingespielt, siehe
     „In Arbeit“ (`konzept.md`, „Entfernt: MCP über HTTPS“; Fehlversuche über die Jail
-    `kephalaion-mcp`, Befund `material/befunde/mcp-von-aussen.md`). Grenzen
+    `kephalaion-mcp`). Grenzen
     (`installation.md`, „Node für Clients anderer Rechner“, „Grenzen“): entfernte Adresse auf
     einem Rechner mit eigenem Node nur bis zum nächsten automatischen Anstoß; kein abweichender
     Alias am entfernten Node; eigene CA bei den Assistenten nur aus den Binaries belegt, nicht
@@ -573,8 +580,7 @@ ist Nacharbeit des Nutzers)
   (`if: false` in `.github/workflows/ci.yml`, Job `macos`); später `if: false` entfernen. Stand:
   Er lief, einzig `TestBackgroundSync` scheiterte (Läufe 36260080975, 36260519391; grün waren
   36259254294 im dritten Versuch und 36260980326) — an einer Race-Condition im Test, seit
-  Task 013 behoben; der Job bleibt trotzdem vorerst aus (Task 011, Etappe 5; Befund
-  `material/befunde/ci-macos.md`).
+  Task 013 behoben; der Job bleibt trotzdem vorerst aus (Task 011, Etappe 5).
 
 - **Update-Hinweis einstellbar oder zwischengespeichert** (vorgemerkt 2026-09-26, Todo):
   `node whoami` fragt GitHub bei jedem Aufruf, auch ohne Account und vor der Prüfung des
@@ -597,8 +603,7 @@ ist Nacharbeit des Nutzers)
   - `release` liest die URL nur aus stdout von `gh workflow run`; steht sie woanders, greift
     der Rückfall über die Kennung, bis zu 60 s später (2);
   - `TestServe` ist nur langsam, weil das Beenden 5 s auf eine ungenutzte Verbindung wartet;
-    mit `CloseIdleConnections` vor dem Beenden wieder schnell (5, Befund
-    `material/befunde/test-laufzeiten.md`);
+    mit `CloseIdleConnections` vor dem Beenden wieder schnell (5);
   - `make check` gibt `go test  ./...` mit doppeltem Leerzeichen aus (6).
 
 - **VS-Code-Erweiterung in die Installation:** heute nur aus `vscode/` von Hand gebaut und
@@ -662,6 +667,14 @@ ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 036 — `upgrade --auto`, Abnahme Teil B** (nach dem Folgerelease, also dem ersten Release
+  nach dem mit Task 036; vorher beide Rechner von Hand auf genau das Release mit Task 036: die VM
+  per Ansible mit fester `kephalaion_version`, die WSL mit `kephalaion upgrade --version <vN>`):
+  auf der VM vor dem Folgerelease als User und als `sudo` `skipped`, `admin`; in der WSL vor dem
+  Folgerelease der VM `skipped`, `hub_older` mit Alias `vm`, Binary unverändert; nach `make diff`
+  und `make deploy ROLE=kephalaion` auf das Folgerelease in der WSL `upgraded`, `restarted: true`,
+  `kephalaion status` grün; ein zweiter Lauf `current` (Task 036, „Abnahme“).
+
 - **Task 037 — Standard-Account und Auskunft, Abnahme an den drei Orten** (nach dem Release;
   Binary auf der Dev-VM über die Ansible-Rolle `kephalaion` in `~/dev/vm`, nichts von Hand; ohne
   `KEPHALAION_CONFIG`):
@@ -683,8 +696,8 @@ ist Nacharbeit des Nutzers)
 
 - **Task 025 — Fehlversuche fälschungssicher, Abnahme mit VS Code und `rotate`** (Nacharbeit des
   Nutzers; braucht die Fenster und Token-Dateien des Nutzers. Auf der VM ist alles ausgerollt und
-  ohne VS Code belegt: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“, T1–T10;
-  Befund `material/befunde/mcp-von-aussen.md`, 2026-10-09). Die eigene Adresse muss auf der
+  ohne VS Code belegt: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand 2026-10-09“,
+  T1–T10). Die eigene Adresse muss auf der
   Allowlist stehen (`~/dev/vm/ansible/roles/fail2ban/files/fail2ban/allowlist`; Adresse von außen
   gegen die Liste prüfen) — gezählt wird an den Zeilen im Journal von Caddy, nicht an
   `fail2ban-client status`:
@@ -718,7 +731,7 @@ ist Nacharbeit des Nutzers)
   liest `~/.config/kephalaion/tokens/` des Nutzers — deshalb Aliase, die der WSL-Node nicht
   kennt, nicht `vm`). Lokal in der WSL `make vscode-install`, dann „Developer: Reload Window“.
   Ein Wegwerf-Hub und -Node mit zwei Einträgen `<a>` (`local`) und `<b>` (`http`) auf denselben
-  Hub wie in Etappe 1 (Befund `material/befunde/vscode-betrieb.md`, 2026-10-08):
+  Hub wie in Etappe 1:
   1. In einem Temp-Verzeichnis, jedes Kommando mit `--config <tmp>/config.yaml`: `hub init --db
      sqlite:///<tmp>/hub.db --listen 127.0.0.1:17434`, `hub collection add <c>`, `hub node add
      <na>` und `hub node add <nb>` (Token je in eine Datei, `umask 077`), `hub node grant <na>
@@ -774,8 +787,8 @@ ist Nacharbeit des Nutzers)
   5. `journalctl -u kephalaion` → `… /gui/api/users 200 … viewer=<admin> admin=ja`, nirgends ein
      Token; im Journal von Caddy keine 401 auf `/kephalaion/gui/…`.
 
-  Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter):
-  `material/befunde/gui.md`, Abschnitt vom 2026-10-07.
+  Lokal belegt am 2026-10-07 (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter):
+  alle Proben bestanden, ohne Korrektur.
 
   **Von der KI geprüft am 2026-10-07** (Probenutzer `probe029a` mit `kephalaion.admin` und
   `probe029n` ohne Rolle, danach gelöscht): Admin → Liste 200, fremder User 200, ungültiger
@@ -809,7 +822,7 @@ ist Nacharbeit des Nutzers)
   (VM), dann die WSL (`make dev-install`). Schritte in `~/dev/vm/kephalaion/README.md`,
   „Abnahme von Task 021“: `grant kamran-wsl test --write --vendor test-docs --dir test-docs`,
   `node sync vm`, `node dir push vm:test test-docs ./docs`, `push` an die Wurzel abgelehnt.
-  Lokal belegt im vorübergehenden Aufbau (Befund `vendor-scope-und-dir-push-pull.md`).
+  Lokal belegt im vorübergehenden Aufbau.
 - **Task 026 — Abnahme der Weboberfläche auf der VM** (eingespielt am 2026-10-05 16:14, dev
   1689ed9 mit Task 027; Punkte 2–4 abgenommen, Punkt 1 offen für den Nutzer). Keine neue
   Schemafassung: Binary ersetzen und Dienst neu starten genügt. Caddy steht schon wie die Vorlage in `installation.md` (`request_header
@@ -830,7 +843,7 @@ ist Nacharbeit des Nutzers)
      nicht des Binarys.
 
   Lokal belegt (Playwright gegen einen Wegwerf-Hub hinter einem Stellvertreter für Caddy mit
-  authproxy): `material/befunde/gui.md`, Abschnitt vom 2026-10-05.
+  authproxy) am 2026-10-05: alle Proben bestanden, ohne Korrektur.
 
   **Abgenommen am 2026-10-05 (KI):** 2, 3 und 4 wie beschrieben, dazu `X-User` doppelt bzw.
   `admin` → 403 `unauthenticated` bzw. `invalid_user`, fremder und leerer `name` → 403
@@ -842,7 +855,7 @@ ist Nacharbeit des Nutzers)
   `opaqueredirect` (302 des authproxy), Neuladen führt zur Anmeldung. **Offen: Punkt 1** — die
   eigenen Accounts sieht nur, wer mit eigener Sitzung anmeldet.
 - **Task 020 — Abnahme der Weboberfläche auf der VM: abgelöst durch Task 026.** Ausgeführt
-  waren G1 und G6 (Befund `material/befunde/gui.md`); die Schritte mit Account-Token (G2–G5,
+  waren G1 und G6; die Schritte mit Account-Token (G2–G5,
   G7 in `~/dev/vm/kephalaion/README.md`, „Abnahme der Weboberflaeche“) gelten nicht mehr — die
   Seite fragt kein Token mehr ab.
 - **Task 018 und 019, Etappe 4 — Abnahme auf der VM: abgenommen 2026-09-30.** Binary dev
@@ -854,9 +867,9 @@ ist Nacharbeit des Nutzers)
   via=<WSL-IP> node=wsl-kleist [account=kamran-wsl]`, Caddy-Log 200 auf `/kephalaion/hub/v1/…`;
   von außen `…/kephalaion/hub/` → 200 Hub-Text, `…/hub/nix` → 404 `invalid`, `GET
   …/hub/v1/whoami` → 405 `invalid`; auf der VM `/` → Begrüßung mit Version, `POST /v1/whoami` →
-  Hinweis auf `/hub`, `vmhttp` mit `/hub` erreichbar. Befunde bestätigt: „Proxy setzt Host, Hub
+  Hinweis auf `/hub`, `vmhttp` mit `/hub` erreichbar. Bestätigt: „Proxy setzt Host, Hub
   unverändert“, „`strip_prefix /kephalaion` reicht `/hub/v1/…` durch“, `via` trägt die WSL-IP
-  (kein LB/NAT vor `9.141.8.157`) — `material/befunde/transport-entfernt--2026-09-29.md`.
+  (kein LB/NAT vor `9.141.8.157`).
   **Bewusst nicht geprobt** (fail2ban, 10× 401 in 10 min): das 401 in Vertragsform von außen und
   `node hub check` mit alter Adresse `…/kephalaion` — beides ist im Repo getestet
   (`TestNodeHubCheckHTTPS`, `TestAccountRotateOldAddress`). Ablauf als Skripte:
@@ -891,19 +904,25 @@ ist Nacharbeit des Nutzers)
 - **Task 014, im echten VS Code:** die Handgriffe aus `docs/vscode.md`, „Im echten VS Code noch
   zu prüfen“ — speichern, neue Datei und Ordner, Drag & Drop (auch mit Binärdatei), umbenennen,
   verschieben mit „Ersetzen“ und in eine andere Collection, löschen, „Datei ist neuer“,
-  fremdes Dokument; dabei klären, wie der `FileService` den Provider ruft (Befund
-  `material/befunde/vscode-schreiben.md`, offen).
+  fremdes Dokument; dabei klären, wie der `FileService` den Provider ruft (`vscode.md`, „Im
+  echten VS Code noch zu prüfen“, Punkt 13).
 - **Task 014, PostgreSQL:** `rename` eines Verzeichnisses kommt zeilenweise ohne Zwischennamen
-  aus — nur mit SQLite geprüft, für PostgreSQL aus der Überlegung (Befund
-  `material/befunde/rename-verzeichnisse.md`, unbestätigt).
+  aus — nur mit SQLite geprüft, für PostgreSQL nur aus der Überlegung (unbestätigt): Alle neuen
+  Namen liegen unter dem neuen, alle alten unter dem alten Präfix, und ineinanderliegende
+  Präfixe lehnen `ident.CheckRename` und `renameTargetFree` vorher ab.
+- **Task 035 — Erweiterung bei globaler Installation, im echten VS Code** (nur der Nutzer): über
+  Remote-SSH auf der Dev-VM ohne `kephalaion.nodeUrl` (die Umgehung steht weder in den
+  Remote-Einstellungen der VM noch in den User-Einstellungen unter Windows) prüfen, dass die
+  Erweiterung die globale config findet und die Statusleiste stimmt. `status` und die
+  Installation der 0.3.2 auf der VM sind schon belegt.
 - **Ranking mit FTS5:** Korrektur aus k-playbook Task 056 (Zeiger vor Zielen) neu nachweisen —
   die Suche steht seit Task 033; dabei die Gewichte in `bm25()` (8/3/1, `replica/search.go`)
   an echter Doku messen und nachstellen.
 
 ## Zu besprechen
 
-- **Fehlversuche nach `rotate` und durch die Rate der Erweiterung** (Task 023, Befund
-  `mcp-von-aussen.md`): **erledigt** — entschieden am 2026-10-02, gebaut in Task 025: Der Node
+- **Fehlversuche nach `rotate` und durch die Rate der Erweiterung** (Task 023):
+  **erledigt** — entschieden am 2026-10-02, gebaut in Task 025: Der Node
   stößt bei einem abgewiesenen Paar zu einem bekannten Account den Abgleich an (gedrosselt, keine
   Gnadenfrist), die Erweiterung pausiert ungültige Paare mit Schranke und Budget über alle
   Fenster (höchstens 4 Fehlversuche in 10 min), und die Jail zählt im Log von Caddy mit der
@@ -911,7 +930,7 @@ ist Nacharbeit des Nutzers)
   Erweiterung bei gültigem Paar ist unverändert.
 - **Abfragen der Erweiterung für VS Code:** Jedes Fenster fragt `changes` alle 3 s und `whoami`
   alle 30 s, auch ohne eingebundene Collection — mit vier Fenstern unter WSL rund 80 `POST /mcp`
-  je Minute im Log des Nodes (gemessen am 2026-10-01, Befund `mcp-client-registrierung.md`).
+  je Minute im Log des Nodes (gemessen am 2026-10-01).
   So lassen oder nur mit eingebundener Collection bzw. im Fokus fragen (`vscode.md`, „Offen“)?
   Fehlversuche begrenzt seit Task 025 die Pause, die Rate bleibt.
 - **Admins in der Weboberfläche** (Task 026): **erledigt** — entschieden am 2026-10-05 (Header
@@ -923,7 +942,7 @@ ist Nacharbeit des Nutzers)
 - **Anmeldung eines Accounts und Antwortzeit:** Der Hash wird immer in konstanter Zeit
   verglichen, aber ein bekannter Account kostet eine Abfrage mehr als ein unbekannter
   (`store.CheckAccount` liest die Rechte mit). Nicht gemessen; ob das zu ändern ist, zusammen
-  mit der Begrenzung von Fehlversuchen entscheiden (Befund `material/befunde/gui.md`).
+  mit der Begrenzung von Fehlversuchen entscheiden.
 - **Tägliche Frage nach einem Update abschaltbar?** (ohne Netz, Datenschutz; `konzept.md`,
   „Offene Punkte“, Node als Dienst). Richtung (2026-09-26): einstellbar oder zwischengespeichert,
   siehe „Zu tun“, Update-Hinweis.

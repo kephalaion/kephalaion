@@ -11,8 +11,11 @@
 package service
 
 import (
+	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/config"
@@ -163,4 +166,114 @@ func xmlText(s string) string {
 	var b strings.Builder
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
+}
+
+// InstalledCall liest aus der installierten Unit bzw. plist pro User den
+// Aufruf, den der Dienst startet: unter Linux ExecStart, auf macOS
+// ProgramArguments — das Gegenstück zu UserUnit und LaunchAgent. So prüft
+// upgrade --auto, ob der Dienst dieses Binary mit dieser config startet.
+func (m *Manager) InstalledCall() ([]string, error) {
+	data, err := os.ReadFile(m.UnitPath())
+	if err != nil {
+		return nil, err
+	}
+	switch m.OS {
+	case "darwin":
+		return plistArguments(data)
+	case "linux":
+		for _, line := range strings.Split(string(data), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ExecStart="); ok {
+				return parseExecLine(rest)
+			}
+		}
+		return nil, fmt.Errorf("%s: keine Zeile ExecStart", m.UnitPath())
+	}
+	return nil, ErrUnsupported
+}
+
+// parseExecLine zerlegt eine Zeile ExecStart, wie execLine sie schreibt:
+// Argumente durch Leerraum getrennt, in Anführungszeichen mit \" und \\,
+// %% und $$ für % und $.
+func parseExecLine(line string) ([]string, error) {
+	var args []string
+	for i := 0; i < len(line); {
+		if line[i] == ' ' || line[i] == '\t' {
+			i++
+			continue
+		}
+		var b strings.Builder
+		if line[i] == '"' {
+			i++
+			closed := false
+			for i < len(line) {
+				c := line[i]
+				if c == '\\' && i+1 < len(line) {
+					b.WriteByte(line[i+1])
+					i += 2
+					continue
+				}
+				i++
+				if c == '"' {
+					closed = true
+					break
+				}
+				b.WriteByte(c)
+			}
+			if !closed {
+				return nil, fmt.Errorf("ExecStart %q: Anführungszeichen nicht geschlossen", line)
+			}
+		} else {
+			for i < len(line) && line[i] != ' ' && line[i] != '\t' {
+				b.WriteByte(line[i])
+				i++
+			}
+		}
+		a := strings.ReplaceAll(b.String(), "%%", "%")
+		args = append(args, strings.ReplaceAll(a, "$$", "$"))
+	}
+	if len(args) == 0 {
+		return nil, errors.New("ExecStart ist leer")
+	}
+	return args, nil
+}
+
+// plistArguments liest die Strings unter ProgramArguments einer plist.
+func plistArguments(data []byte) ([]string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.Strict = false
+	var lastKey string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("plist ohne ProgramArguments (%v)", err)
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch start.Name.Local {
+		case "key":
+			var k string
+			if err := dec.DecodeElement(&k, &start); err != nil {
+				return nil, err
+			}
+			lastKey = k
+		case "array":
+			if lastKey != "ProgramArguments" {
+				continue
+			}
+			var arr struct {
+				Strings []string `xml:"string"`
+			}
+			if err := dec.DecodeElement(&arr, &start); err != nil {
+				return nil, err
+			}
+			if len(arr.Strings) == 0 {
+				return nil, errors.New("plist: ProgramArguments ist leer")
+			}
+			return arr.Strings, nil
+		default:
+			lastKey = ""
+		}
+	}
 }

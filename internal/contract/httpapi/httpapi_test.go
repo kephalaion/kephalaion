@@ -486,3 +486,33 @@ func TestRotateNodeOverHTTP(t *testing.T) {
 		t.Errorf("Fehler nennt das Token: %v", err)
 	}
 }
+
+// Der Node liest release aus der Antwort auf whoami (Task 036); ein Hub vor
+// Task 036 schickt es nicht, dann ist es leer, und die übrigen Felder gelten
+// wie bisher.
+func TestWhoamiReleaseOverHTTP(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"mit release":  {`{"hub_id":"01H","version":1,"release":"v0.5.0","node":"laptop","allowed":["a"]}`, "v0.5.0"},
+		"ohne release": {`{"hub_id":"01H","version":1,"node":"laptop","allowed":["a"]}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/whoami" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			resp, err := newClient(t, srv.URL).Whoami(context.Background(),
+				contract.WhoamiRequest{Version: contract.Version, Auth: auth})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Release != tc.want || resp.HubID != "01H" || resp.Node != "laptop" || len(resp.Allowed) != 1 {
+				t.Errorf("whoami = %+v", resp)
+			}
+		})
+	}
+}

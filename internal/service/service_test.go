@@ -306,3 +306,63 @@ func TestUnsupportedOS(t *testing.T) {
 		t.Errorf("Unit auf windows: %v", err)
 	}
 }
+
+// InstalledCall liest den Aufruf zurück, den UserUnit bzw. LaunchAgent
+// geschrieben hat — auch mit Leerraum, Anführungszeichen, Backslash, % und $
+// bzw. XML-Zeichen im Pfad (Task 036).
+func TestInstalledCall(t *testing.T) {
+	calls := [][]string{
+		{"/home/anna/.local/bin/kephalaion", "serve"},
+		{"/home/anna/.local/bin/kephalaion", "serve", "--config", "/home/anna/Meine Daten/100%/k$.yaml"},
+		{"/opt/a \"b\"\\c/kephalaion", "serve", "--config", "/x/a&b <c>.yaml"},
+	}
+	for _, osName := range []string{"linux", "darwin"} {
+		m, _ := newTestManager(t, osName)
+		if _, err := m.InstalledCall(); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s ohne Unit: %v", osName, err)
+		}
+		for _, call := range calls {
+			text, err := m.Unit(call)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(m.UnitPath()), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(m.UnitPath(), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := m.InstalledCall()
+			if err != nil || !reflect.DeepEqual(got, call) {
+				t.Errorf("%s: %q, %v; erwartet %q", osName, got, err, call)
+			}
+		}
+	}
+	// Die Dateien unter testdata/ wie geschrieben.
+	for name, want := range map[string][]string{
+		"user-config.service": calls[1],
+		"launchagent.plist":   {"/Users/anna/.local/bin/kephalaion", "serve", "--config", "/Users/anna/a&b <c>.yaml"},
+	} {
+		data, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		if strings.HasSuffix(name, ".plist") {
+			got, err = plistArguments(data)
+		} else {
+			got, err = parseExecLine(strings.TrimPrefix(strings.Split(string(data), "\n")[6], "ExecStart="))
+		}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %q, %v", name, got, err)
+		}
+	}
+	for _, bad := range []string{"", "   ", `/bin/k "offen`} {
+		if got, err := parseExecLine(bad); err == nil {
+			t.Errorf("ExecStart %q: %q ohne Fehler", bad, got)
+		}
+	}
+	if _, err := plistArguments([]byte(`<plist><dict><key>Label</key><string>x</string></dict></plist>`)); err == nil {
+		t.Error("plist ohne ProgramArguments ohne Fehler")
+	}
+}

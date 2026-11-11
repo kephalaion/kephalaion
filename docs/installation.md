@@ -159,6 +159,7 @@ Fehler von `systemctl` bzw. `launchctl`.
 kephalaion upgrade --check          # nachsehen
 kephalaion upgrade                  # auf das neueste Release
 kephalaion upgrade --version v0.2.0 # genau diese Version, auch zurück; nötig für einen dev build
+kephalaion upgrade --auto           # nur, wenn es gefahrlos geht (für k-playbook und Skripte)
 ```
 
 `upgrade` prüft die Prüfsumme gegen `SHA256SUMS` und ersetzt das Binary atomar; scheitert
@@ -172,6 +173,23 @@ VS Code neu, in jedem Editor, in dem sie installiert ist (`kephalaion vscode ins
 **Einmal beim Übergang:** Das erste `upgrade` auf eine Fassung mit eingebetteter Erweiterung
 läuft noch mit dem alten Binary, das die Erweiterung nicht anfasst — danach einmal `kephalaion
 vscode install`.
+
+`kephalaion upgrade --auto` (mit `--json` als JSON) prüft erst, ob ein Upgrade ansteht und ob es
+ohne Menschen gehen darf, und führt es nur dann aus — auf einem Rechner mit Node pro User, der
+als Dienst pro User läuft. Es überspringt ohne jede Änderung, was ein Mensch entscheiden muss:
+einen dev build, die globale config (das macht der Verwalter), einen Hub in der config, ein
+Binary ohne Schreibrecht, einen Node, der nicht als Dienst pro User mit diesem Binary läuft
+(etwa im Devcontainer), einen Hub des Nodes, der noch kein mindestens so neues Release trägt,
+und ein Veto des neuen Binarys (etwa eine neue Schemafassung). Vor dem Ersetzen prüft es das
+heruntergeladene Binary mit `upgrade --preflight --json`; nach dem Neustart muss der Node mit
+der neuen Version antworten, sonst kommt das alte Binary zurück. Was es meldet und was bei jedem
+Grund zu tun ist: „Upgrade: was Kephalaion meldet“ unten.
+
+**Einmal beim Übergang auf `--auto`:** Der erste Schritt auf ein Release mit `--auto` (Task 036)
+geht von Hand — erst der Hub, global per Ansible, dann `kephalaion upgrade` auf jedem Rechner mit
+Node pro User. Ein älteres Binary kennt `--auto` nicht und antwortet mit Exit 2. Danach trägt
+der Hub ein Release, das er in `whoami` nennt, und das nächste Release kommt auf den Nodes mit
+`--auto`, sobald der Hub es hat.
 
 ### Installation pro User entfernen
 
@@ -891,7 +909,9 @@ Transport oder anderer CA da, bricht er ab. Ob schon rotiert ist, fragt er den H
 Ein neuer Code aus `hub node token <name>` für einen vorhandenen Eintrag wird übernommen und
 rotiert. Lehnt der Hub alles ab (ein alter Code, inzwischen ersetzt), nennt er `hub node token
 <name>`. Kennt der Hub `node_rotate` noch nicht (älter als Task 034), bricht er ab: **erst den
-Hub aktualisieren, dann die Nodes** — derselbe Aufruf setzt danach fort. `node setup` gibt es
+Hub aktualisieren, dann die Nodes** — derselbe Aufruf setzt danach fort. `kephalaion upgrade
+--auto` hält diese Reihenfolge selbst ein: Es aktualisiert einen Node erst, wenn jeder seiner
+Hubs ein mindestens so neues Release nennt. `node setup` gibt es
 nur pro User; neben der globalen config bricht es ab. Exit 0 eingerichtet, 1 Fehler, 2 falscher
 Aufruf. Den Code darf `node setup` als Argument nehmen, weil er sofort rotiert wird; bricht es
 vorher ab, gilt er weiter (Grenzen: [`konzept.md`](konzept.md), „Einen Node mit einem Code
@@ -1399,8 +1419,7 @@ für VS Code pausiert das Paar nach dem ersten; ein Assistent nicht).
   Codex `CODEX_CA_CERTIFICATE` oder `SSL_CERT_FILE`, OpenCode `NODE_EXTRA_CA_CERTS` (oder die
   System-CA), Claude Code `NODE_EXTRA_CA_CERTS`, die Erweiterung für VS Code die CA des Extension
   Hosts (`NODE_EXTRA_CA_CERTS`) —, gesetzt in der Umgebung, in der der Assistent startet. Geprüft
-  ist das nicht; nur die Zeichenketten stehen in den Binaries (Befund
-  `mcp-client-registrierung.md`).
+  ist das nicht; nur die Zeichenketten stehen in den Binaries (gefunden mit strings, 2026-10-01).
 - **Devcontainer:** nicht dieser Weg ([`konzept.md`](konzept.md), „Devcontainer“).
 
 ### Ansible
@@ -1429,6 +1448,10 @@ danach. Wie es auf der Dev-VM aussieht: `~/dev/vm/ansible/roles/kephalaion/READM
 2026-10-09“ (Rollen `kephalaion`, `caddy`, `fail2ban`, je `make deploy ROLE=…`).
 
 ## Neue Schemafassung: node.db oder hub.db neu anlegen
+
+`kephalaion upgrade --auto` erkennt einen solchen Sprung vor dem Ersetzen (die Probe mit dem neuen
+Binary, „Upgrade: was Kephalaion meldet“) und meldet `skipped`, `schema` — das Upgrade geht dann
+den Weg hier, von Hand.
 
 Migrationen gibt es noch nicht; ein Sprung der Schemafassung (zuletzt `node.db` 4 → 5 mit
 `hubs.ca`, Task 018) heißt: Das neue Binary lehnt die vorhandene `node.db` ab, sie ist neu
@@ -1473,7 +1496,8 @@ Collection dieses Namens (in k-playbook bis 2026-10-09 die Entwicklungs-Collecti
 Import im Export umbenennen — unter `collections`, `node_collections` und den Rechten der
 Accounts, etwa in `k-playbook-dev` — und ihre Dokumente unter dem neuen Namen einspielen.
 
-**Ab Task 032 erst den Hub, dann die Nodes.** Der Sprung auf Fassung 7 betrifft nur `hub.db`; die
+**Ab Task 032 erst den Hub, dann die Nodes** (`kephalaion upgrade --auto` hält das ein: Es
+überspringt einen Node, solange ein Hub älter ist, `hub_older`). Der Sprung auf Fassung 7 betrifft nur `hub.db`; die
 Nodes bekommen nur das neue Binary, `node.db` bleibt. Die Reihenfolge zählt: Ein Hub vor Task 032
 übergeht den Schlüssel `request_id` still und schriebe eine Wiederholung ein zweites Mal; ein Node
 vor Task 032 lehnt einen Aufruf mit `request_id` dagegen laut ab (das go-sdk verbietet
@@ -1542,6 +1566,98 @@ hinter einem Proxy nach außen reicht, ob der Proxy auch `X-User-Roles` des Brow
 Eine Vorlage aus der Zeit davor tut das nicht; Kephalaion meldet es nicht. Wie man anpasst und
 prüft: „Hub für Nodes anderer Rechner“, Option Weboberfläche, „Upgrade von der alten
 Vorlage“.
+
+### `upgrade --auto`
+
+`kephalaion upgrade --auto` prüft, ob ein Upgrade ansteht und ob es ohne Menschen gehen darf,
+und führt es dann aus — prüfen und ausführen in einem Aufruf. Die erste zutreffende Stufe
+entscheidet: GitHub fragen; dev build; nicht neuer; die globale config; ein Hub in der config;
+Schreibrecht beim Binary; läuft der Node hier als Dienst pro User mit diesem Binary; sind alle
+Hubs des Nodes mindestens so neu; die Sperre; Download und Prüfsumme; die Probe mit dem neuen
+Binary; ersetzen; neu starten und prüfen. Bis einschließlich der Probe bleiben Binary, Dienst und
+Datenbanken unverändert; liegen bleibt höchstens die Sperrdatei `.kephalaion-upgrade.lock` neben
+dem Binary (keine temporäre Datei — sie bleibt, wie `<db>.lock` bei `serve`). `--auto` stuft nie
+zurück und ersetzt nie einen dev build. Ohne `--json` stehen dieselben Angaben in Zeilen da.
+
+`kephalaion upgrade --auto --json`:
+
+```json
+{
+  "outcome": "skipped",
+  "reason": "hub_older",
+  "from": "v0.4.0",
+  "to": "v0.5.0",
+  "warnings": [],
+  "hint": "Hub vm hat v0.4.0, älter als das Ziel v0.5.0 — erst den Hub auf v0.5.0 oder neuer bringen, dann erneut kephalaion upgrade --auto",
+  "check": { "state": "ok", "version": "v0.4.0", "latest": "v0.5.0", "…": "der Report wie bei upgrade --check --json" }
+}
+```
+
+| Feld | Bedeutung |
+|---|---|
+| `outcome` | `upgraded` (ersetzt, wenn ein Dienst lief: neu gestartet und geprüft), `current` (nichts zu tun), `skipped` (nicht angefasst, Grund in `reason`), `failed` (gescheitert, Grund in `reason` und `error`) |
+| `reason` | nur bei `skipped` und `failed`, Tabelle unten |
+| `from`, `to` | installierte Version und Ziel — `to` auch bei `skipped`, sobald GitHub geantwortet hat |
+| `restarted` | nur, wenn ein Dienst pro User lief; dann `true` |
+| `rolled_back` | nur bei `failed`, `restart`: ob das alte Binary zurück ist und der Dienst mit ihm neu gestartet |
+| `warnings` | Warnungen, die das Ergebnis nicht ändern, etwa von der Erweiterung für VS Code; sonst `[]` |
+| `error` | bei `failed` der Fehler |
+| `hint` | in einem Satz, was zu tun ist — zum Anzeigen, etwa in k-playbook |
+| `check` | der Report wie bei `upgrade --check --json` (oben) |
+
+**`restarted: true`** steht bei `upgraded` mit Neustart und immer bei `failed`, `restart` — der
+Dienst lief und wurde neu gestartet, gleich ob der Rückweg danach gelang (`rolled_back: true`)
+oder nicht (`rolled_back: false`). Lief kein Dienst pro User, fehlt das Feld.
+
+| `outcome` | `reason` | wann | was zu tun ist |
+|---|---|---|---|
+| `skipped` | `dev_build` | ein selbst gebautes Binary | von Hand: `kephalaion upgrade --version vX.Y.Z` |
+| `skipped` | `admin` | die globale config gilt — immer, auch als root, auch mit Schreibrecht | der Verwalter: Ansible (Version anheben) oder `sudo kephalaion upgrade && sudo systemctl restart kephalaion` |
+| `skipped` | `hub` | die config pro User hat einen Abschnitt `hub:` — ein Hub wird nie automatisch aktualisiert | von Hand: `kephalaion upgrade`, danach die Nodes |
+| `skipped` | `manual` | kein Schreibrecht im Verzeichnis des Binarys | wer dort schreiben darf, oder wie es installiert wurde |
+| `skipped` | `not_here` | der Node läuft nicht als Dienst pro User mit diesem Binary: reiner Client (Datenbank und Verzeichnis fehlen, etwa im Devcontainer), ohne config antwortet trotzdem ein Node an der Standardadresse, die Unit pro User startet ein anderes Binary oder eine andere config, oder ein Node antwortet ohne Dienst | `hint` lesen: auf dem Rechner aktualisieren, auf dem der Node läuft; bei abweichender Unit `kephalaion service install`; bei `serve` von Hand `kephalaion upgrade` und `serve` selbst neu starten |
+| `skipped` | `hub_older` | ein Hub des Nodes nennt ein älteres Release als das Ziel (`hint` nennt den Alias) | erst diesen Hub aktualisieren, dann erneut `--auto` |
+| `skipped` | `hub_unknown` | ein Hub nennt kein Release (älter als Task 036), läuft als dev build oder antwortet nicht (auch: Node gesperrt, Token ungültig); oder die Hub-Einträge lassen sich nicht lesen | `hint` lesen. Nennt er einen Alias, den Hub aktualisieren bzw. erreichbar machen. Nennt er einen Fehler statt eines Alias (`node.db` fehlt, ihr Verzeichnis aber nicht; config nicht lesbar), liegt es am Node selbst: seine Einrichtung reparieren (`kephalaion status`) |
+| `skipped` | `busy` | ein anderer `upgrade --auto` hält die Sperre | später erneut |
+| `skipped` | `schema` | das neue Binary lehnt die Schemafassung einer Datenbank ab (Probe) | von Hand: „Neue Schemafassung“ oben; `hint` kommt aus dem neuen Binary |
+| `skipped` | `release` | das neue Binary verlangt aus einem anderen Grund einen Schritt von Hand (Probe) | `hint` des neuen Binarys und die Release-Notizen |
+| `failed` | `check` | GitHub nicht erreichbar, Rate-Limit, kein Release | später erneut |
+| `failed` | `download` | Download oder Prüfsumme gescheitert | später erneut; das Binary ist unverändert |
+| `failed` | `preflight` | das neue Binary kennt `--preflight` nicht, stürzt ab oder antwortet unlesbar | von Hand: `kephalaion upgrade`, danach `kephalaion status` |
+| `failed` | `replace` | Ersetzen gescheitert | Rechte im Verzeichnis prüfen; das Binary ist unverändert |
+| `failed` | `restart` | nach dem Neustart lief der Dienst nicht binnen 10 s mit der Zielversion an | mit `rolled_back: true` läuft wieder das alte Binary: Log ansehen (`journalctl --user -u kephalaion`), dann von Hand; mit `rolled_back: false` nennt `hint` den Weg von Hand |
+
+`current` hat keinen Grund: Das Release ist nicht neuer — oder ein anderer Lauf hat das Binary
+ersetzt, während dieser auf die Sperre kam.
+
+**Die Probe.** Bevor `--auto` ersetzt, ruft es das heruntergeladene und gegen `SHA256SUMS`
+geprüfte Binary mit derselben config auf (`KEPHALAION_CONFIG`): `<neues Binary> upgrade
+--preflight --json`. Das öffnet je Rolle der config die Datenbank wie beim Start (Rolle und
+Schemafassung) und schließt sie sofort; geändert wird nichts, auch nicht neben einem laufenden
+`serve`. Die Antwort ist `ok` oder `veto`:
+
+```json
+{
+  "result": "veto",
+  "reason": "schema",
+  "hint": "Release v0.5.0 erwartet eine andere Schemafassung (node: Datenbank 5, erwartet 6); das Upgrade geht nur von Hand: docs/installation.md, „Neue Schemafassung“",
+  "version": "v0.5.0",
+  "config": "/home/anna/.config/kephalaion/config.yaml",
+  "roles": { "node": { "state": "schema", "want": "6", "got": "5", "error": "…" } }
+}
+```
+
+Je Rolle steht `state` `ok`, `schema` (mit `want` und `got`) oder `error`. Ein Veto `schema` wird
+`skipped`, `schema`; jedes andere (dieses Binary kennt noch `database` und `config`, ein künftiges
+darf eigene nennen) wird `skipped`, `release` — beide reichen `hint` durch. Exit 0, sobald die
+Probe geantwortet hat. `--preflight` ist der Aufruf für `--auto`, kein Werkzeug für Menschen.
+
+**Fristen:** jede Frage an einen Hub 5 s, die Probe 30 s, die Prüfung nach dem Neustart 10 s.
+
+Exit-Code von `upgrade --auto` (mit und ohne `--json`): 0 bei `upgraded`, `current` und
+`skipped`; 1 bei `failed`; 2 bei falschem Aufruf (`--auto` mit `--check` oder `--version`) — und
+von jedem Binary, das `--auto` noch nicht kennt (vor Task 036). Ein Aufrufer wertet Exit 2 als
+„Binary zu alt für `--auto`“ und fällt auf `upgrade --check --json` zurück.
 
 ## Ohne systemd
 

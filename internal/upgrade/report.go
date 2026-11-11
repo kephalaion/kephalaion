@@ -74,18 +74,8 @@ type Report struct {
 // --check meldet. Scheitert die Frage, ist State failed und Error gesetzt;
 // die Angaben zum Weg stehen trotzdem darin.
 func (u *Upgrader) Report(ctx context.Context) Report {
-	current, isDev := u.current()
-	self, dir, _ := u.access()
-	r := Report{State: StateOK, CheckedAt: u.now().UTC().Format(time.RFC3339), Version: u.Current.Version,
-		DevBuild: isDev, SelfUpgrade: self}
-	if _, target, err := u.release(ctx, ""); err != nil {
-		r.State, r.Error = StateFailed, err.Error()
-	} else {
-		r.Latest = target.String()
-		r.UpdateAvailable = !isDev && target.Compare(current) > 0
-	}
-	r.Method, r.Command, r.Hint = u.way(self, dir, r.Latest, isDev)
-	return r
+	l, _ := u.Latest(ctx)
+	return l.Report
 }
 
 // Local liefert den Report ohne Frage an GitHub: Version, Schreibrecht, Weg;

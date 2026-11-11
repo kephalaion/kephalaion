@@ -23,7 +23,8 @@ Aufruf:
 Kommandos:
   help        zeigt diese Übersicht
   version     zeigt Version, Commit, Go-Version und Plattform
-  upgrade     aktualisiert dieses Binary auf das neueste Release
+  upgrade     aktualisiert dieses Binary auf das neueste Release; mit --auto
+              nur, wenn es ohne Menschen gefahrlos geht
   hub         richtet den Hub ein, pflegt seine Collections, Nodes und
               Accounts und spielt Dokumente ein (init, collection, node,
               account, doc, import)

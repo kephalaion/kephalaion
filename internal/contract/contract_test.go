@@ -568,3 +568,41 @@ func TestFetchAndFlagsJSON(t *testing.T) {
 		t.Errorf("whoami: %+v, %v", w, err)
 	}
 }
+
+// whoami nennt das Release des Hubs im Feld release (Task 036): additiv in
+// Fassung 1. Ein Hub vor Task 036 schickt es nicht, der Node liest dann ein
+// leeres Release; ein Node vor Task 036 übergeht das Feld.
+func TestWhoamiReleaseJSON(t *testing.T) {
+	b, err := json.Marshal(WhoamiResponse{HubID: "01H", Version: Version, Release: "v0.5.0", Node: "n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"version":1,"release":"v0.5.0","node":"n"`) {
+		t.Errorf("whoami als JSON: %s", b)
+	}
+	// Ohne Release fehlt das Feld, wie bei einem Hub vor Task 036.
+	b, _ = json.Marshal(WhoamiResponse{HubID: "01H", Version: Version})
+	if strings.Contains(string(b), "release") {
+		t.Errorf("whoami ohne Release: %s", b)
+	}
+	var w WhoamiResponse
+	if err := json.Unmarshal([]byte(`{"hub_id":"01H","version":1,"release":"v0.5.0","node":"n"}`), &w); err != nil ||
+		w.Release != "v0.5.0" || w.Node != "n" {
+		t.Errorf("mit release: %+v, %v", w, err)
+	}
+	w = WhoamiResponse{}
+	if err := json.Unmarshal([]byte(`{"hub_id":"01H","version":1,"node":"n"}`), &w); err != nil || w.Release != "" ||
+		w.Node != "n" {
+		t.Errorf("ohne release: %+v, %v", w, err)
+	}
+	// Ein Node vor Task 036 kennt das Feld nicht: Er übergeht es.
+	var old struct {
+		HubID   string `json:"hub_id"`
+		Version int    `json:"version"`
+		Node    string `json:"node"`
+	}
+	if err := json.Unmarshal([]byte(`{"hub_id":"01H","version":1,"release":"v0.5.0","node":"n"}`), &old); err != nil ||
+		old.Node != "n" || old.Version != 1 {
+		t.Errorf("alter Node: %+v, %v", old, err)
+	}
+}

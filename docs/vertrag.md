@@ -60,6 +60,12 @@ nächste Neubau an einem neuen Hub überschreibt es. Ein Node vor Task 033 kennt
 unklaren Ausgang (`outcome_unknown`; über `local` sind Node und Hub dasselbe Binary). Geschrieben
 hat der Hub nichts; der Abgleich zeigt es. Darum auch hier: erst den Hub, dann die Nodes.
 
+Mit Task 036 kam, ebenfalls ohne neue Fassung, das Feld `release` in der Antwort von `whoami`
+hinzu (siehe dort): das Release des Hub-Binarys. Ein Node vor Task 036 übergeht es; ein Hub vor
+Task 036 schickt es nicht. `kephalaion upgrade --auto` hält damit „erst den Hub, dann die Nodes“
+selbst ein: Nennt ein Hub kein Release oder ein älteres als das Ziel, aktualisiert sich der Node
+nicht.
+
 ## Anmeldung
 
 Jede Anfrage trägt den Namen des Nodes am Hub und sein Token (`NodeAuth`). Über HTTP stehen
@@ -98,6 +104,7 @@ Antwort:
 |---|---|---|
 | Hub-Kennung | `hub_id` | die `hub_id` des Hubs |
 | Fassung | `version` | 1 |
+| Release | `release` | das Release des Binarys, auf dem der Hub läuft, etwa `"v0.5.0"`, bei einem dev build `"dev"` (aus `buildinfo`). Additiv in Fassung 1 (Task 036): Ein Hub vor Task 036 schickt das Feld nicht, ein Node vor Task 036 übergeht es. Danach fragt `kephalaion upgrade --auto`, ob der Hub mindestens so neu ist wie das Ziel ([`installation.md`](installation.md), „Upgrade: was Kephalaion meldet“). |
 | Node | `node` | der Name des Nodes am Hub |
 | Erlaubte Collections | `allowed` | alle Collections, die der Node abgleichen darf, sortiert — wie bei `sync` |
 | Öffentlich | `public` | die öffentlichen unter `allowed`, sortiert — wie bei `sync` |

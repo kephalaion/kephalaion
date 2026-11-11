@@ -818,8 +818,8 @@ Verzeichnisse.
 Gebaut in Task 016 (2026-09-28) als neutrales Paket `internal/dirsync` gegen eine kleine
 Schnittstelle (list, read, create, write, delete) und als `kephalaion node dir push|pull`;
 gemessen im Durchlauf: 115 Dokumente in 1,7 s angelegt (rund 15 ms je Vorgang), ein Lauf ohne
-Änderung 0,5 s, ein Abbruch per SIGINT setzt beim nächsten Lauf fort (Befund
-`vendor-scope-und-dir-push-pull.md`). Ein ganzer Ordner wird geschrieben, indem der alte
+Änderung 0,5 s, ein Abbruch per SIGINT setzt beim nächsten Lauf fort. Ein ganzer Ordner wird
+geschrieben, indem der alte
 Inhalt durch den eines lokalen Ordners ersetzt wird — und ebenso zurückgelesen.
 
 - **Die Dateien liefert, wer sie sieht.** Den Namen eines lokalen Ordners an den Node zu geben,
@@ -1842,6 +1842,52 @@ Datenbanken.
 - **k-playbook** bietet das Update in seiner Oberfläche an, wenn das Binary sich selbst
   ersetzen kann; sonst weist es nur auf die neue Version und den Weg hin.
 
+**Upgrade ohne Menschen — ergänzt am 2026-11-11, gebaut in Task 036.** Auf einem Rechner mit
+Node pro User, etwa der WSL, aktualisiert `kephalaion upgrade --auto [--json]` das Binary in
+einem Aufruf, sobald das gefahrlos geht; sonst ändert es nichts und sagt maschinenlesbar,
+warum (`outcome` `upgraded`, `current`, `skipped` oder `failed`, dazu `reason` und `hint`;
+[`installation.md`](installation.md), „Upgrade: was Kephalaion meldet“).
+
+- **Die Regel liegt in Kephalaion, nicht beim Aufrufer.** k-playbook, die Erweiterung oder ein
+  Skript werten nur `outcome`, `reason` und `hint` aus und kennen weder Hub noch config.
+  Prüfen und Ausführen sind ein Aufruf; eine Sperrdatei neben dem Binary
+  (`.kephalaion-upgrade.lock`) hält parallele Läufe auseinander (`busy`).
+- **Erst GitHub, dann die lokalen Gründe.** `current` ist auch auf Rechnern des Verwalters die
+  nützlichste Antwort; ohne Netz ist `failed`, `check` die ehrliche.
+- **Global ändert sich nichts.** Gilt die globale config, ist es immer `skipped`, `admin` —
+  auch als root, auch mit Schreibrecht und gleich, welches Binary aufgerufen wurde. Sonst
+  ersetzte im Mischfall (ein beschreibbares Binary pro User vor `/usr/local/bin` im PATH, die
+  System-Unit startet `/usr/local/bin/kephalaion`) nur das Binary pro User, und der Node bliebe
+  alt. Die Entscheidung vom 2026-09-26 bleibt.
+- **Ein Hub wird nie automatisch aktualisiert**, auch nicht pro User (`hub`). Ebenso wenig ein
+  Node, den dieser Aufruf nicht neu starten kann (`not_here`): ein reiner Client wie der
+  Devcontainer (Datenbank und Verzeichnis fehlen, wie bei `status` seit Task 037, oder ohne
+  config antwortet trotzdem ein Node an der Standardadresse), eine Unit pro User mit anderem
+  Binary oder anderer config als dem Aufruf aus `serveCall`, ein `serve` ohne Dienst.
+- **Erst den Hub, dann die Nodes, ohne dass jemand daran denkt.** Der Hub nennt in `whoami` sein
+  Release (`release`, additiv in Fassung 1, [`vertrag.md`](vertrag.md)). `--auto` fragt jeden
+  Hub-Eintrag live mit der Anmeldung des Nodes, mit kurzer Frist (5 s), und schreibt nichts in
+  `node.db`; nennt einer kein oder ein älteres Release als das Ziel, ist es `hub_unknown` bzw.
+  `hub_older`. Das erste `--auto` gelingt deshalb erst, wenn der Hub ein Release mit Task 036
+  trägt — gewollt.
+- **Eine neue Schemafassung erkennt das neue Binary, nicht das alte.** Vor dem Ersetzen ruft
+  `--auto` das heruntergeladene, geprüfte Binary als `upgrade --preflight --json` mit derselben
+  config auf (`KEPHALAION_CONFIG`); es öffnet `node.db` und `hub.db` mit `store.Open` und
+  ändert nichts. Die Antwort ist `ok` oder `veto` mit `reason` und `hint` aus dem neuen Binary:
+  `schema` wird `skipped`, `schema`, jeder andere Grund `skipped`, `release`. So meldet ein
+  künftiges Release einen Schritt von Hand, den das installierte nicht kennen muss. Das neue
+  Binary vor der Installation auszuführen, ist dasselbe Vertrauen wie bei der Installation; die
+  Prüfsumme ist vorher geprüft.
+- **Nach dem Neustart zählt nur die Zielversion.** Lief der Dienst pro User, startet `--auto`
+  ihn neu und wartet höchstens 10 s, bis er läuft und der Node mit der Zielversion antwortet.
+  Sonst kommt das alte Binary zurück (es lag als Rückweg nach `TempPattern` daneben, das
+  Zurücksetzen ist ein atomares Umbenennen), der Dienst startet erneut, und das Ergebnis ist
+  `failed`, `restart` mit `rolled_back`.
+- **`upgrade` ohne `--auto` bleibt, wie es ist**, ohne Rückweg und ohne Probe; ein Mensch kann
+  weiter alles von Hand, auch einen Hub pro User aktualisieren. `upgrade --check --json` bleibt
+  unverändert. Ein Binary vor Task 036 beantwortet `--auto` mit Exit 2; ein Aufrufer fällt dann
+  auf `--check --json` zurück.
+
 **Bei den Assistenten angemeldet — entschieden am 2026-09-30, gebaut in Task 022.** Der Node
 wird bei jedem KI-Assistenten des Users als MCP-Server eingetragen, auf User-Ebene, ein Eintrag
 `kephalaion` für alle Hubs: die Adresse aus `listen` der config, je Hub das Header-Paar aus den
@@ -1867,8 +1913,7 @@ ein. Global trägt jeder User für sich ein — die Tokens liegen bei ihm. OpenC
 Node nicht nach OAuth (der Node antwortet nie 401); ein `{file:…}`-Verweis auf eine fehlende
 Datei machte aber seine ganze config ungültig, deshalb nimmt `add` nur vorhandene Token-Dateien
 auf und bereinigt tote Verweise. Cursor und Gemini CLI vorerst nicht. Einzelheiten:
-[`installation.md`](installation.md), „Bei den Assistenten anmelden“; Befund
-`material/befunde/mcp-client-registrierung.md`.
+[`installation.md`](installation.md), „Bei den Assistenten anmelden“.
 
 **Standard-Account und Auskunft für Clients — entschieden am 2026-11-10, gebaut in Task 037.**
 Liegen an einem Hub mehrere Token-Dateien, wählt jeder Client in derselben Reihenfolge: seine
@@ -1941,7 +1986,7 @@ Rechners ist für Devcontainer nicht der Weg („Kommunikation“), eine Bridge 
    im Container gibt es kein systemd — und `node.db` samt Replica in einem Volume, sonst ist
    nach jedem Neubau des Containers alles neu einzurichten. Tokens nie im Image.
 
-**Für Weg 1 schon geklärt** (Befund `material/befunde/mcp-von-aussen.md`):
+**Für Weg 1 schon geklärt:**
 
 - Unter Docker Desktop (Windows mit WSL, macOS) erreicht ein Container den Node des Hosts über
   `host.docker.internal`: Docker leitet an den Loopback des Hosts weiter, der Node muss nicht

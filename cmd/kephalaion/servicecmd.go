@@ -133,11 +133,17 @@ func serveCall(loc config.Location) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Pfad dieses Binarys nicht ermittelbar: %w", err)
 	}
+	return serveCallFor(exe, loc), nil
+}
+
+// serveCallFor ist der Aufruf aus serveCall für das Binary exe — der
+// Maßstab, an dem upgrade --auto die installierte Unit misst (Task 036).
+func serveCallFor(exe string, loc config.Location) []string {
 	args := []string{exe, "serve"}
 	if std, err := config.DefaultUserPath(); err != nil || loc.Path != std {
 		args = append(args, "--config", loc.Path)
 	}
-	return args, nil
+	return args
 }
 
 // noSystemdHint ist der Weg ohne systemd: serve unter einem eigenen

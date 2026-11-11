@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kephalaion/kephalaion/internal/buildinfo"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/contract/httpapi"
 	"github.com/kephalaion/kephalaion/internal/hub/store"
@@ -107,6 +108,24 @@ func TestWhoami(t *testing.T) {
 		_, err = f.api().Whoami(context.Background(), contract.WhoamiRequest{Version: 2, Auth: f.node()})
 		if !errors.Is(err, contract.ErrUnsupportedVersion) {
 			t.Errorf("Fassung 2: %v", err)
+		}
+	})
+}
+
+// whoami nennt das Release des Binarys, auf dem der Hub läuft (Task 036) —
+// über local und HTTP, bei einem dev build dev.
+func TestWhoamiRelease(t *testing.T) {
+	old := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = old })
+	forTransports(t, func(t *testing.T, newFixture func(*testing.T) *fixture) {
+		f := newFixture(t)
+		buildinfo.Version = "v0.5.0"
+		if resp := f.whoami(t, nil); resp.Release != "v0.5.0" || resp.Version != contract.Version {
+			t.Errorf("Release: %+v", resp)
+		}
+		buildinfo.Version = buildinfo.DevVersion
+		if resp := f.whoami(t, nil); resp.Release != buildinfo.DevVersion {
+			t.Errorf("dev build: %+v", resp)
 		}
 	})
 }

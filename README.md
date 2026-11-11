@@ -13,7 +13,7 @@ dem Hub für Store, Journal und Accounts und dem Node als lokalem MCP-Server mit
 Was geplant ist und warum, steht in [`docs/konzept.md`](docs/konzept.md), die Begriffe in
 [`docs/begriffe.md`](docs/begriffe.md).
 
-**Stand:** Gebaut sind das Gerüst (`version`, `upgrade` mit `--check --json`), die Installation
+**Stand:** Gebaut sind das Gerüst (`version`, `upgrade` mit `--check --json` und `--auto`), die Installation
 pro User und global samt Dienst (`service`, [`docs/installation.md`](docs/installation.md))
 und das Einrichten der Rollen:
 `hub init`, `node init`, `status`, `config show|set|unset|export|import`, dazu am Hub Collections,
@@ -113,6 +113,7 @@ kephalaion upgrade --check    # nachsehen: neueste Version, selbst ersetzbar?, W
 kephalaion upgrade --check --json   # dasselbe als JSON (für k-playbook)
 kephalaion upgrade            # auf das neueste Release; startet den Dienst pro User neu
 kephalaion upgrade --version v0.1.0   # genau diese Version, auch zurück
+kephalaion upgrade --auto --json      # nur, wenn es gefahrlos geht (für k-playbook)
 ```
 
 `upgrade` prüft die Prüfsumme und ersetzt das Binary atomar; scheitert etwas, bleibt das alte
@@ -127,6 +128,16 @@ Fassung mit eingebetteter Erweiterung läuft noch mit dem alten Binary — danac
 Ob es eine neue Version gibt, meldet auch das MCP-Werkzeug `whoami` (Feld `update`); `serve`
 fragt GitHub dafür höchstens einmal am Tag. Ohne Anmeldung erlaubt die GitHub-API 60
 Anfragen je Stunde.
+
+`upgrade --auto` aktualisiert einen Node pro User ohne Rückfrage, wenn es gefahrlos geht, und
+lässt sonst alles, wie es ist: nie global (das macht der Verwalter), nie einen Hub, nie einen
+dev build, nie vor dem Hub — jeder Hub des Nodes muss in `whoami` ein mindestens so neues
+Release nennen. Vor dem Ersetzen prüft das neue Binary die Datenbanken (`upgrade --preflight
+--json`), nach dem Neustart muss der Node mit der neuen Version antworten, sonst kommt das alte
+Binary zurück. Ergebnis und Gründe (`outcome`, `reason`, `hint`):
+[`docs/installation.md`](docs/installation.md), „Upgrade: was Kephalaion meldet“. Den ersten
+Schritt auf ein Release mit `--auto` geht man von Hand, erst der Hub, dann die Nodes; ein älteres
+Binary antwortet auf `--auto` mit Exit 2.
 
 **Weboberfläche hinter einem Proxy:** Vor dem Upgrade auf eine Fassung mit Admin-Ansicht
 (Task 029) muss der Proxy auch `X-User-Roles` des Browsers entfernen — eine Caddy-Vorlage aus

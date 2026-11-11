@@ -1035,6 +1035,16 @@ Ausführlich: [`konzept.md`](konzept.md).
   Binary selbst ersetzen kann (**self upgrade**, Schreibrecht in seinem Verzeichnis) und den
   Weg (**method**: `self`, `explicit` für einen dev build, `admin` global, `manual`);
   `--check --json` dasselbe als JSON, dieselbe Struktur wie das Feld `update` in `whoami`.
+- **auto upgrade** — `kephalaion upgrade --auto [--json]` (Task 036): prüft, ob ein Upgrade
+  ansteht und ob es ohne Menschen gehen darf, und führt es nur dann aus; das Ergebnis ist
+  **outcome** (`upgraded`, `current`, `skipped`, `failed`) mit **reason** und `hint`. Global,
+  bei einem Hub in der config, einem dev build oder einem Hub des Nodes, der kein mindestens so
+  neues **release** nennt, ändert es nichts. Vor dem Ersetzen die **Probe** (`upgrade
+  --preflight --json`): Das neue Binary öffnet die Datenbanken und antwortet `ok` oder **veto**;
+  nach dem Neustart muss der Node die Zielversion melden, sonst der **Rückweg** (das alte Binary
+  lag nach `TempPattern` daneben). Eine **Sperre** (`.kephalaion-upgrade.lock` neben dem
+  Binary) hält parallele Läufe auseinander. Einzelheiten: [`installation.md`](installation.md),
+  „Upgrade: was Kephalaion meldet“.
 - **install.sh** — Installationsskript für die Erstinstallation pro User nach
   `~/.local/bin/kephalaion`; liegt im Repo und hängt an jedem Release. Nennt am Ende die
   nächsten Schritte (Rollen, `service install`, `vscode install`, wenn ein Editor-CLI im
