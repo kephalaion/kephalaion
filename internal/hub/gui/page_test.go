@@ -359,8 +359,8 @@ func argsOf(code string, open int) (string, bool) {
 
 // Das Stylesheet: hell und dunkel, schmal als Blöcke, die Tabelle scrollt
 // nur in ihrem eigenen Kasten, nichts Fremdes. overflow-wrap: anywhere ließ
-// die Spalten der Tabelle unter ihre Wörter schrumpfen („Les-en“, Befund
-// gui.md) — break-word bricht nur, was sonst überliefe.
+// die Spalten der Tabelle unter ihre Wörter schrumpfen („Les-en“) —
+// break-word bricht nur, was sonst überliefe.
 func TestStyle(t *testing.T) {
 	css := file(t, "style.css")
 	for _, want := range []string{"@media (prefers-color-scheme: dark)", "@media (max-width: 48rem)", "overflow-x: auto",

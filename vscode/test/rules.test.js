@@ -164,8 +164,8 @@ test('Version: der Hinweis nennt das CLI des Editors', () => {
 });
 
 // Die Statusleiste (Task 030): Ein Node bedient viele Hubs, ein Client nutzt davon einige — nur
-// genutzte Hubs warnen. Die Fälle folgen dem Wegwerf-Node aus dem Befund vscode-betrieb.md
-// (2026-10-08): zwei Einträge auf denselben Hub, Token-Datei nur für einen.
+// genutzte Hubs warnen. Die Fälle folgen einem Wegwerf-Node,
+// gemessen am 2026-10-08: zwei Einträge auf denselben Hub, Token-Datei nur für einen.
 test('Statusleiste: ein Hub ohne Token des Clients ist missing und keine Warnung', () => {
   const synced = { last_success: '2026-10-08T15:39:58Z', revision: 1 };
   const ok = { hub: 't030a', login: 'ok', node: 'n030-local', account: 'acc030', user: 'u030', sync: synced };

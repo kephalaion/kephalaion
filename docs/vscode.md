@@ -152,8 +152,8 @@ und deren Benachrichtigungen brauchen eine Sitzung.
   `hubStatus` in [`vscode/rules.js`](../vscode/rules.js) (Tests in
   `vscode/test/rules.test.js`); `render()` und `summary()` nehmen beide sie. Belegt am
   2026-10-08 an einem Wegwerf-Node mit zwei Einträgen auf denselben Hub und Token-Datei nur
-  für einen: `whoami` mit dem einen Paar meldet `ok` neben `missing` (Befund
-  `material/befunde/vscode-betrieb.md`). Bis dahin färbte jeder Hub mit `login` ≠ `ok` die
+  für einen: `whoami` mit dem einen Paar meldet `ok` neben `missing`. Bis dahin färbte jeder Hub
+  mit `login` ≠ `ok` die
   Leiste gelb — eine Annahme der ersten Fassung (2026-09-26: ein Node je User mit nur eigenen
   Hubs, `missing` hieß „Token vergessen“).
 - **Klick darauf:** ein kleines Menü — neu verbinden, Token setzen, Collection einbinden,
@@ -263,8 +263,7 @@ VS Code. `code --add-mcp` wäre der andere Weg, wirkt aber im Remote-Terminal (W
   Server gestartet („Starting server from Remote extension host“, 8 Werkzeuge), `whoami` mit
   Account; im Log des Nodes die Anfragen mit Account. Danach stand das Token weder unter
   `~/.vscode-server` noch in den Daten von VS Code unter Windows (`AppData/Roaming/Code`,
-  durchsucht mit GNU grep; nicht lesbar nur drei gesperrte `LOCK`-Dateien). Befund
-  `material/befunde/mcp-client-registrierung.md`.
+  durchsucht mit GNU grep; nicht lesbar nur drei gesperrte `LOCK`-Dateien).
 
 ## Ein Node auf einem anderen Rechner (Task 023, 0.0.7)
 
@@ -731,8 +730,7 @@ Jeder Schreibvorgang geht über die Werkzeuge des Nodes zum Hub (`create`, `writ
   `NoPermissions`; Node nicht erreichbar. In einem isolierten Aufbau mit Node über `http`: Hub
   gestoppt → `Unavailable`, Lesen geht weiter; `outcome_unknown` und abgebrochene Verbindung.
   Der Weg darunter — zwei Nodes, Konflikt zwischen ihnen, Hub gestoppt — steht als Go-Test
-  `TestMCPWriteTwoNodes` in `cmd/kephalaion`. Befund dazu:
-  `k-playbook-local/material/befunde/vscode-schreiben.md`.
+  `TestMCPWriteTwoNodes` in `cmd/kephalaion`.
 
 ### Im echten VS Code noch zu prüfen
 
@@ -779,8 +777,9 @@ Ausgang; daran lässt sich ablesen, was VS Code wirklich aufruft.
 12. **Fremdes Dokument:** `echo fremd | kephalaion hub doc put eins test/fremd.md` (gehört
     `admin`), in VS Code öffnen — es ist nicht schreibgeschützt —, ändern und speichern: erst
     jetzt „gehört admin, supersede fehlt“ (`NoPermissions`); am Hub bleibt `fremd`.
-13. **Noch unbestätigt** (Befund `vscode-schreiben.md`, „Wie VS Code den Provider beim Schreiben
-    ruft“), im Log nachsehen: ruft der `FileService` `writeFile` immer mit `create` und
+13. **Noch unbestätigt** (abgeleitet aus `src/vs/platform/files/common/fileService.ts` von VS
+    Code — `writeFile`, `mkdirp`, `doMoveCopy` —, nicht im echten VS Code nachgesehen), im Log
+    nachsehen: ruft der `FileService` `writeFile` immer mit `create` und
     `overwrite` auf (Speichern und neue Datei gelingen, kein `FileExists`/`FileNotFound`), legt
     er fehlende Eltern über `createDirectory` an (beim Drop eines verschachtelten Ordners Zeilen
     `createDirectory … nur hier gemerkt` vor den `create`), und löscht er bei „Ersetzen“ das Ziel

@@ -393,8 +393,8 @@ test('MCP-Server: Hub mit mehreren Accounts ohne Wahl ausgelassen', async () => 
   }
 });
 
-// Task 030: Die Statusleiste warnt nur über genutzte Hubs. Das whoami des Wegwerf-Nodes aus dem
-// Befund vscode-betrieb.md (2026-10-08): zwei Einträge auf denselben Hub, Token-Datei nur für
+// Task 030: Die Statusleiste warnt nur über genutzte Hubs. Das whoami eines Wegwerf-Nodes,
+// gemessen am 2026-10-08: zwei Einträge auf denselben Hub, Token-Datei nur für
 // t030a — neutral; eine leere Token-Datei für t030b ist missing trotz Token-Datei — gelb.
 test('Statusleiste: Hub ohne Token des Clients neutral, leere Token-Datei gelb', async () => {
   putToken('t030a', 'acc030', TOKEN_A);

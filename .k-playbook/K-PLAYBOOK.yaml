@@ -25,3 +25,10 @@ remediation:
   # Aus dem Modus abgeleitet; Commands lesen sie direkt.
   pr_required: false
   direct_fixes: true
+
+kephalaion:
+  # Anbindung an die Collection dieses Projekts in Kephalaion: der Alias des
+  # Hubs (auf jedem Rechner gleich) und die Collection. Der Account gehört
+  # zum Rechner und kommt von Kephalaion (kephalaion node client).
+  hub: vm
+  collection: kephalaion-dev

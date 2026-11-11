@@ -12,7 +12,8 @@ import (
 // Verzeichnisse unter dem Heimatverzeichnis, in denen er Erweiterungen
 // ablegt — lokal und als Server einer Remote-Sitzung (WSL, SSH,
 // Devcontainer). Die Namen folgen dataFolderName bzw. serverDataFolderName
-// aus der product.json des Editors (Befund vscode-betrieb, 2026-10-05).
+// aus der product.json des Editors (VS Code und VSCodium dort belegt,
+// Cursor nur aus dem Forum; 2026-10-05).
 type Editor struct {
 	Name string
 	CLI  string
