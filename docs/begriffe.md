@@ -1042,9 +1042,13 @@ Ausführlich: [`konzept.md`](konzept.md).
   neues **release** nennt, ändert es nichts. Vor dem Ersetzen die **Probe** (`upgrade
   --preflight --json`): Das neue Binary öffnet die Datenbanken und antwortet `ok` oder **veto**;
   nach dem Neustart muss der Node die Zielversion melden, sonst der **Rückweg** (das alte Binary
-  lag nach `TempPattern` daneben). Eine **Sperre** (`.kephalaion-upgrade.lock` neben dem
-  Binary) hält parallele Läufe auseinander. Einzelheiten: [`installation.md`](installation.md),
-  „Upgrade: was Kephalaion meldet“.
+  lag als **Rückweg-Datei** `.kephalaion-upgrade-backup-<version>-…` daneben). Eine **Sperre**
+  (`.kephalaion-upgrade.lock` neben dem Binary) hält parallele Läufe auseinander. Ein Signal vor
+  dem Ersetzen bricht ab (**interrupted**), eines danach wird nur vermerkt; die **Höchstdauer**
+  vom Signal bis zum Ende ist 75 s mit laufendem Dienst, 5 s ohne (Task 037). Ein **ausstehender
+  Neustart** — das Binary ist aktuell, der Node läuft noch mit einem älteren Release — wird
+  nachgeholt. Einzelheiten: [`installation.md`](installation.md), „Upgrade: was Kephalaion
+  meldet“.
 - **install.sh** — Installationsskript für die Erstinstallation pro User nach
   `~/.local/bin/kephalaion`; liegt im Repo und hängt an jedem Release. Nennt am Ende die
   nächsten Schritte (Rollen, `service install`, `vscode install`, wenn ein Editor-CLI im

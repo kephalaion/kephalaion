@@ -40,12 +40,21 @@ type fakeSystemd struct {
 	system     string // ActiveState der System-Unit; leer: gibt es nicht
 	failStart  bool
 	restartErr error
+	// onRestart läuft bei jedem restart, bevor er wirkt.
+	onRestart func()
+	// hangRestarts ist die Zahl der nächsten restarts, die hängen, bis ihr
+	// Kontext endet; hangShow lässt jedes show --user so hängen.
+	hangRestarts int
+	hangShow     bool
 }
 
-func (f *fakeSystemd) run(_ context.Context, name string, args ...string) (string, error) {
+func (f *fakeSystemd) run(ctx context.Context, name string, args ...string) (string, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	f.calls = append(f.calls, call)
 	switch {
+	case strings.HasPrefix(call, "systemctl --user show ") && f.hangShow:
+		<-ctx.Done()
+		return "", ctx.Err()
 	case strings.HasPrefix(call, "systemctl --user show "):
 		load := "not-found"
 		if _, err := os.Stat(f.m.UnitPath()); err == nil {
@@ -66,6 +75,14 @@ func (f *fakeSystemd) run(_ context.Context, name string, args ...string) (strin
 	case call == "systemctl --user enable --now kephalaion.service":
 		f.active = !f.failStart
 	case call == "systemctl --user restart kephalaion.service":
+		if f.onRestart != nil {
+			f.onRestart()
+		}
+		if f.hangRestarts > 0 {
+			f.hangRestarts--
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
 		if f.restartErr != nil {
 			return "", f.restartErr
 		}

@@ -51,6 +51,12 @@ type autoEnv struct {
 	probe   func(listen string) (nodeInfo, error)
 	rename  func(oldpath, newpath string) error
 	renames []string
+	// onLatest und onDownload laufen bei der Frage nach dem Release bzw.
+	// beim Download des Binarys, bevor GitHub antwortet.
+	onLatest, onDownload func()
+	// grouped sind die Aufrufe des Managers ab der Grenze, über den Runner
+	// mit eigener Prozessgruppe.
+	grouped []string
 }
 
 type hubAnswer struct {
@@ -69,7 +75,14 @@ func newAutoEnv(t *testing.T, installed string) *autoEnv {
 	if err := os.MkdirAll(e.script, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Steuerdateien im Verzeichnis script: hang-<befehl> lässt den Aufruf
+	// hängen (seine PID steht dann in <befehl>.pid), kill-<befehl> lässt ihn
+	// an SIGTERM sterben; pgid.log hält je Aufruf die Prozessgruppe fest.
+	sc := e.script
 	e.newBin = []byte("#!/bin/sh\n" +
+		"[ -r /proc/$$/stat ] && read -r _ _ _ _ pg _ < /proc/$$/stat && echo \"$1|$pg\" >> '" + sc + "/pgid.log'\n" +
+		"[ -f '" + sc + "/kill-'\"$1\" ] && kill -TERM $$\n" +
+		"[ -f '" + sc + "/hang-'\"$1\" ] && { echo $$ > '" + sc + "/'\"$1\".pid; exec sleep 30; }\n" +
 		"printf '%s|%s\\n' \"$*\" \"$KEPHALAION_CONFIG\" >> '" + e.script + "/calls.log'\n" +
 		"[ -f '" + e.script + "/stderr' ] && cat '" + e.script + "/stderr' >&2\n" +
 		"[ -f '" + e.script + "/stdout' ] && cat '" + e.script + "/stdout'\n" +
@@ -79,10 +92,18 @@ func newAutoEnv(t *testing.T, installed string) *autoEnv {
 	name := upgrade.AssetName("linux", "amd64")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/kephalaion/kephalaion/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		if e.onLatest != nil {
+			e.onLatest()
+		}
 		fmt.Fprintf(w, `{"tag_name":"v0.2.0","assets":[{"name":%q,"browser_download_url":"%s/d/%s"},`+
 			`{"name":"SHA256SUMS","browser_download_url":"%s/d/SHA256SUMS"}]}`, name, e.srv.URL, name, e.srv.URL)
 	})
-	mux.HandleFunc("/d/"+name, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(e.newBin) })
+	mux.HandleFunc("/d/"+name, func(w http.ResponseWriter, r *http.Request) {
+		if e.onDownload != nil {
+			e.onDownload()
+		}
+		_, _ = w.Write(e.newBin)
+	})
 	mux.HandleFunc("/d/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
 		if e.sums != nil {
 			_, _ = w.Write(e.sums)
@@ -120,8 +141,21 @@ func newAutoEnv(t *testing.T, installed string) *autoEnv {
 		return u
 	}
 
-	oldAsk, oldProbe, oldPre := autoAskHub, autoProbeNode, autoPreflight
+	oldAsk, oldProbe, oldPre, oldGroup := autoAskHub, autoProbeNode, autoPreflight, autoOwnGroup
 	oldWithin, oldPoll := autoRestartWithin, autoRestartPoll
+	oldTimeout, oldExt, oldSlack := autoRestartTimeout, autoExtensionTimeout, autoSlack
+	// Ab der Grenze bekommt der Manager einen eigenen Runner; im Test bleibt
+	// es das nachgespielte systemd — nie das echte —, und jeder Aufruf wird
+	// als in eigener Prozessgruppe vermerkt.
+	autoOwnGroup = func(m *service.Manager) *service.Manager {
+		c := *m
+		inner := m.Run
+		c.Run = func(ctx context.Context, name string, args ...string) (string, error) {
+			e.grouped = append(e.grouped, strings.Join(append([]string{name}, args...), " "))
+			return inner(ctx, name, args...)
+		}
+		return &c
+	}
 	autoAskHub = func(_ context.Context, _ config.Config, h nodestore.Hub) (string, error) {
 		e.asked = append(e.asked, h.Name)
 		if e.onAsk != nil {
@@ -151,8 +185,9 @@ func newAutoEnv(t *testing.T, installed string) *autoEnv {
 	autoRestartWithin, autoRestartPoll = 200*time.Millisecond, 5*time.Millisecond
 	t.Cleanup(func() {
 		newUpgrader = oldU
-		autoAskHub, autoProbeNode, autoPreflight = oldAsk, oldProbe, oldPre
+		autoAskHub, autoProbeNode, autoPreflight, autoOwnGroup = oldAsk, oldProbe, oldPre, oldGroup
 		autoRestartWithin, autoRestartPoll = oldWithin, oldPoll
+		autoRestartTimeout, autoExtensionTimeout, autoSlack = oldTimeout, oldExt, oldSlack
 	})
 	return e
 }

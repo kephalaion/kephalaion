@@ -1880,9 +1880,22 @@ warum (`outcome` `upgraded`, `current`, `skipped` oder `failed`, dazu `reason` u
   Prüfsumme ist vorher geprüft.
 - **Nach dem Neustart zählt nur die Zielversion.** Lief der Dienst pro User, startet `--auto`
   ihn neu und wartet höchstens 10 s, bis er läuft und der Node mit der Zielversion antwortet.
-  Sonst kommt das alte Binary zurück (es lag als Rückweg nach `TempPattern` daneben, das
-  Zurücksetzen ist ein atomares Umbenennen), der Dienst startet erneut, und das Ergebnis ist
-  `failed`, `restart` mit `rolled_back`.
+  Sonst kommt das alte Binary zurück (es lag als Rückweg daneben, seit Task 037 als
+  `.kephalaion-upgrade-backup-<version>-…` mit der Version des alten Binarys; das Zurücksetzen
+  ist ein atomares Umbenennen), der Dienst startet erneut, und das Ergebnis ist `failed`,
+  `restart` mit `rolled_back`.
+- **Signale ohne halben Zustand — ergänzt am 2026-11-11, gebaut in Task 037.** `--auto` fängt
+  SIGTERM, SIGINT und SIGHUP selbst ab; die Grenze liegt unmittelbar vor dem Ersetzen. Davor
+  bricht der Lauf ab und räumt auf (`failed`, `interrupted`, nichts verändert), danach führt er
+  Ersetzen, Neustart, Prüfung und Rückweg auf einem Kontext ohne Abbruch mit eigenen Fristen zu
+  Ende — höchstens 75 s mit laufendem Dienst, 5 s ohne —, und die Kinder ab der Grenze laufen
+  in einer eigenen Prozessgruppe. Ein Aufrufer wartet zwischen SIGTERM und SIGKILL mindestens
+  die 75 s. Nach einem SIGKILL zwischen Ersetzen und Neustart holt der nächste Lauf den Neustart
+  nach: Ist das Binary aktuell und meldet der Node ein älteres Release, startet er neu und prüft
+  gegen die Version des Binarys (`upgraded`, `from` gleich der Version des Nodes). Die
+  Rückweg-Datei bleibt, bis der Node mit der Version des Binarys läuft; Reste abgebrochener
+  Läufe, älter als eine Stunde, räumt jeder Lauf nach der Sperre weg. Einzelheiten:
+  [`installation.md`](installation.md), „`upgrade --auto`“.
 - **`upgrade` ohne `--auto` bleibt, wie es ist**, ohne Rückweg und ohne Probe; ein Mensch kann
   weiter alles von Hand, auch einen Hub pro User aktualisieren. `upgrade --check --json` bleibt
   unverändert. Ein Binary vor Task 036 beantwortet `--auto` mit Exit 2; ein Aufrufer fällt dann

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/buildinfo"
@@ -29,7 +30,10 @@ import (
 //
 //  1. GitHub fragen (failed/check)
 //  2. dev build (skipped/dev_build)
-//  3. nicht neuer (current)
+//  3. nicht neuer (current) — es sei denn, ein Neustart steht aus: Der
+//     Dienst läuft noch mit einem älteren Release als das Binary; dann
+//     holt der Lauf ihn nach, mit der Version des Binarys als Ziel, ohne
+//     Stufe 10 und 12 (Task 037)
 //  4. globale config (skipped/admin)
 //  5. config pro User mit hub: (skipped/hub)
 //  6. kein Schreibrecht beim Binary (skipped/manual)
@@ -42,6 +46,13 @@ import (
 //  12. Ersetzen mit Rückweg (failed/replace)
 //  13. Neustart und Prüfung (failed/restart mit Rückweg), dann upgraded
 //
+// Ein Signal vor Stufe 12 bricht ab (failed/interrupted), eines danach wird
+// nur vermerkt; siehe upgradeautosignal.go (Task 037).
+//
+// Nach der Sperre räumt jeder Lauf alte temporäre Dateien weg; die
+// Rückweg-Dateien bleiben, bis der Node mit der Version des Binarys läuft
+// (autoBackups).
+//
 // Die Teile, die nach außen greifen — Hubs, Probe, Dienst, Node —, sind für
 // Tests eingespeist wie newUpgrader und newServiceManager.
 
@@ -53,8 +64,8 @@ const (
 	autoFailed   = "failed"
 )
 
-// Die Gründe (autoResult.Reason), festgelegt in Task 036: die ersten zehn bei
-// skipped, die übrigen bei failed.
+// Die Gründe (autoResult.Reason), festgelegt in Task 036, interrupted in
+// Task 037: die ersten zehn bei skipped, die übrigen bei failed.
 const (
 	reasonDevBuild   = "dev_build"
 	reasonAdmin      = "admin"
@@ -72,6 +83,8 @@ const (
 	reasonPreflight = "preflight"
 	reasonReplace   = "replace"
 	reasonRestart   = "restart"
+	// reasonInterrupted: ein Signal vor dem Ersetzen, nichts verändert.
+	reasonInterrupted = "interrupted"
 )
 
 // Die Fristen von upgrade --auto; Tests setzen sie kürzer.
@@ -88,6 +101,17 @@ var (
 	// die Pause zwischen zwei Versuchen.
 	autoRestartWithin = 10 * time.Second
 	autoRestartPoll   = 250 * time.Millisecond
+	// autoRestartTimeout begrenzt jeden Neustart des Dienstes, den des
+	// Upgrades wie den des Rückwegs: serve braucht bis zu zweimal
+	// shutdownGrace (20 s) zum Beenden, dazu der Start. Nach dem Ersetzen
+	// gibt es keinen anderen Abbruch mehr.
+	autoRestartTimeout = 30 * time.Second
+	// autoExtensionTimeout begrenzt das Erneuern der Erweiterung für VS Code,
+	// alle Editoren zusammen.
+	autoExtensionTimeout = 60 * time.Second
+	// autoStaleAge ist das Alter, ab dem eine temporäre Datei neben dem
+	// Binary als Rest eines abgebrochenen Laufs gilt.
+	autoStaleAge = time.Hour
 )
 
 // Die eingespeisten Teile.
@@ -101,6 +125,15 @@ var (
 	autoProbeNode = func(ctx context.Context, listen string, timeout time.Duration) (nodeInfo, error) {
 		return probeNodeWithin(ctx, localNodeAddress(listen), nil, "", timeout)
 	}
+	// autoOwnGroup gibt dem Manager des Dienstes ab der Grenze einen Runner,
+	// der jedes Kind (systemctl, launchctl) in einer eigenen Prozessgruppe
+	// startet: Ein Signal an die Gruppe des Laufs soll den Neustart nicht
+	// abschneiden. Tests ersetzen ihn, weil ihr Manager systemd nachspielt.
+	autoOwnGroup = func(m *service.Manager) *service.Manager {
+		c := *m
+		c.Run = service.OwnGroupRunner
+		return &c
+	}
 )
 
 // autoResult ist die Antwort von upgrade --auto, mit --json als JSON.
@@ -109,7 +142,9 @@ type autoResult struct {
 	Outcome string `json:"outcome"`
 	// Reason gibt es nur bei skipped und failed.
 	Reason string `json:"reason,omitempty"`
-	// From ist die installierte Version, To das Ziel, wenn bekannt.
+	// From ist die installierte Version, To das Ziel, wenn bekannt. Beim
+	// Nachholen eines Neustarts ist From die Version des Nodes und To die des
+	// Binarys.
 	From string `json:"from"`
 	To   string `json:"to,omitempty"`
 	// Restarted ist nur gesetzt, wenn ein Dienst pro User lief: true, wenn
@@ -142,8 +177,13 @@ func (r autoResult) fail(reason string, err error, hint string) autoResult {
 
 // runUpgradeAuto führt upgrade --auto aus und gibt das Ergebnis aus: Exit 0
 // bei upgraded, current und skipped, 1 bei failed.
-func runUpgradeAuto(ctx context.Context, asJSON bool, stdout, stderr io.Writer) int {
-	res := upgradeAuto(ctx)
+func runUpgradeAuto(asJSON bool, stdout, stderr io.Writer) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g, release := watchSignals(cancel, stderr)
+	defer release()
+	res := upgradeAuto(ctx, g)
+	g.stop()
 	if asJSON {
 		if code := printJSON(res, stdout, stderr); code != 0 {
 			return code
@@ -186,8 +226,63 @@ func printAutoResult(w io.Writer, r autoResult) {
 	}
 }
 
-// upgradeAuto ist der Ablauf von upgrade --auto, Stufe für Stufe.
-func upgradeAuto(ctx context.Context) autoResult {
+// interrupt macht aus dem Ergebnis eines Laufs, den sig vor dem Ersetzen
+// abgebrochen hat, failed/interrupted.
+func (r autoResult) interrupt(sig os.Signal) autoResult {
+	r.Restarted, r.RolledBack = nil, nil
+	return r.fail(reasonInterrupted, fmt.Errorf("durch %s vor dem Ersetzen abgebrochen", signalName(sig)),
+		"nichts verändert — Binary, Dienst und Datenbanken wie vorher; später erneut kephalaion upgrade --auto")
+}
+
+// upgradeAuto ist der Ablauf von upgrade --auto. ctx bricht g bei einem
+// Signal ab. Kam das Signal vor der Grenze, ist das Ergebnis
+// failed/interrupted, gleich womit die Stufe endete; kam es danach, steht es
+// als Warnung darin.
+func upgradeAuto(ctx context.Context, g *autoGuard) autoResult {
+	var st autoState
+	res := autoStages(ctx, g, &st)
+	if sig := g.before(); sig != nil {
+		res = res.interrupt(sig)
+	}
+	if sig := g.afterCross(); sig != nil {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("%s kam nach dem Ersetzen und wurde nicht befolgt: Ersetzen, "+
+			"Neustart und Prüfung liefen mit eigenen Fristen zu Ende", signalName(sig)))
+	}
+	res.Warnings = append(res.Warnings, autoBackups(res, st)...)
+	return res
+}
+
+// autoState hält aus den Stufen fest, was autoBackups am Ende braucht.
+type autoState struct {
+	// dir ist das Verzeichnis des Binarys; leer, wenn es unbekannt ist.
+	dir string
+	// node ist, was die Frage an den Node an Stufe 3 ergab.
+	node nodeState
+	// backupsDone: Die Stufen haben die Rückweg-Dateien schon entfernt.
+	backupsDone bool
+}
+
+// nodeState ist, was die Frage an den Node an Stufe 3 ergibt, wenn das
+// Binary aktuell ist (autoPendingRestart).
+type nodeState int
+
+const (
+	// nodeUnknown: kein Dienst pro User mit diesem Binary und dieser config,
+	// oder nicht gefragt.
+	nodeUnknown nodeState = iota
+	// nodeSilent: Der Dienst läuft, der Node antwortet nicht.
+	nodeSilent
+	// nodeAtBinary: Der Node meldet die Version des Binarys.
+	nodeAtBinary
+	// nodeOther: Der Node meldet dev, nichts, eine unlesbare oder eine
+	// neuere Version.
+	nodeOther
+	// nodeOlder: Der Node meldet ein älteres Release — ein Neustart steht aus.
+	nodeOlder
+)
+
+// autoStages sind die Stufen von upgrade --auto.
+func autoStages(ctx context.Context, g *autoGuard, st *autoState) autoResult {
 	u := newUpgrader(io.Discard)
 	u.System = systemConfigApplies()
 	res := autoResult{From: u.Current.Version, Warnings: []string{}}
@@ -198,6 +293,7 @@ func upgradeAuto(ctx context.Context) autoResult {
 	var startFile os.FileInfo
 	if exeErr == nil {
 		startFile, _ = os.Stat(exe)
+		st.dir = filepath.Dir(exe)
 	}
 
 	// 1. GitHub — vor allen lokalen Gründen: current ist auch auf Rechnern
@@ -215,10 +311,24 @@ func upgradeAuto(ctx context.Context) autoResult {
 		return res.skip(reasonDevBuild, "ein dev build wird nie automatisch ersetzt; von Hand: kephalaion upgrade "+
 			"--version "+res.To)
 	}
+	// Ist das Binary aktuell, steht vielleicht noch ein Neustart aus: Dann
+	// laufen die übrigen Stufen mit der Version des Binarys als Ziel.
+	pending := false
 	if target.Compare(latest.Current) <= 0 {
-		res.Outcome = autoCurrent
-		res.Hint = fmt.Sprintf("%s ist aktuell (neuestes Release %s); nichts zu tun", res.From, res.To)
-		return res
+		var node string
+		node, st.node = autoPendingRestart(ctx, u, exe, exeErr, latest.Current)
+		if st.node != nodeOlder {
+			res.Outcome = autoCurrent
+			res.Hint = fmt.Sprintf("%s ist aktuell (neuestes Release %s); nichts zu tun", res.From, res.To)
+			if st.node == nodeAtBinary {
+				res.Hint = fmt.Sprintf("%s ist aktuell (neuestes Release %s), der Node läuft damit; nichts zu tun",
+					res.From, res.To)
+			}
+			return res
+		}
+		pending = true
+		target = latest.Current
+		res.From, res.To = node, target.String()
 	}
 
 	// 4. Die globale config: immer der Verwalter, gleich mit welchen Rechten
@@ -257,13 +367,29 @@ func upgradeAuto(ctx context.Context) autoResult {
 	if hint != "" {
 		return res.skip(reasonNotHere, hint)
 	}
+	// Beim Nachholen ist der Neustart der ganze Zweck: Hat der Dienst seit
+	// Stufe 3 angehalten, gibt es nichts nachzuholen — serve startet beim
+	// nächsten Start ohnehin mit dem Binary. Die Rückweg-Dateien bleiben
+	// (autoBackups nennt sie), denn ob der Node mit dieser Version läuft, ist
+	// offen.
+	if pending && !running {
+		res.Outcome = autoCurrent
+		res.Hint = fmt.Sprintf("%s ist aktuell; ein Neustart stand aus (der Node lief mit %s), aber der Dienst läuft "+
+			"inzwischen nicht mehr — nichts neu gestartet, serve benutzt das Binary beim nächsten Start", res.To,
+			res.From)
+		return res
+	}
 	if cfg.Node != nil {
 		if reason, hint := autoHubs(ctx, cfg, target); reason != "" {
 			return res.skip(reason, hint)
 		}
 	}
 
-	// 9. Die Sperre hält bis nach dem Neustart; die Datei bleibt liegen.
+	// 9. Die Sperre hält bis nach dem Neustart; die Datei bleibt liegen. Kam
+	// schon ein Signal, wird sie nicht mehr genommen.
+	if g.before() != nil {
+		return res
+	}
 	lock, err := upgrade.Lock(filepath.Dir(exe))
 	if errors.Is(err, upgrade.ErrBusy) {
 		return res.skip(reasonBusy, "ein anderer upgrade --auto läuft gerade auf diesem Binary; danach erneut")
@@ -278,25 +404,67 @@ func upgradeAuto(ctx context.Context) autoResult {
 		res.Hint = "ein anderer Lauf hat das Binary inzwischen ersetzt; nichts zu tun"
 		return res
 	}
-
-	// 10.
-	staged, err := u.Stage(ctx, latest, exe)
+	// Reste abgebrochener Läufe, aber keine Rückweg-Datei.
+	removed, err := upgrade.RemoveStale(st.dir, autoStaleAge, time.Now())
+	if len(removed) > 0 {
+		res.Warnings = append(res.Warnings, "alte temporäre Dateien neben dem Binary entfernt: "+
+			strings.Join(removed, ", "))
+	}
 	if err != nil {
-		return res.fail(reasonDownload, err, "Download oder Prüfsumme gescheitert, das Binary bleibt unverändert; "+
-			"später erneut versuchen")
+		res.Warnings = append(res.Warnings, fmt.Sprintf("alte temporäre Dateien neben dem Binary nicht entfernt: %v",
+			err))
 	}
 
-	// 11. Die Probe mit dem neuen Binary, vor dem Ersetzen.
-	if r := autoProbe(ctx, res, staged, loc.Path); r.Outcome != "" {
-		_ = os.Remove(staged)
+	// 10. Beim Nachholen gibt es nichts zu laden: geprüft und neu gestartet
+	// wird das installierte Binary.
+	bin, staged := exe, ""
+	if !pending {
+		if g.before() != nil {
+			return res
+		}
+		staged, err = u.Stage(ctx, latest, exe)
+		if err != nil {
+			return res.fail(reasonDownload, err, "Download oder Prüfsumme gescheitert, das Binary bleibt "+
+				"unverändert; später erneut versuchen")
+		}
+		bin = staged
+	}
+	dropStaged := func() {
+		if staged != "" {
+			_ = os.Remove(staged)
+		}
+	}
+
+	// 11. Die Probe mit dem neuen bzw. installierten Binary, vor dem
+	// Ersetzen bzw. Neustart.
+	if r := autoProbe(ctx, res, bin, loc.Path, pending); r.Outcome != "" {
+		dropStaged()
 		return r
 	}
 
+	// Die Grenze: ein letztes Mal auf ein Signal prüfen — unmittelbar vor dem
+	// Ersetzen, beim Nachholen vor dem Neustart. Ab hier laufen Ersetzen,
+	// Neustart, Prüfung und Rückweg auf einem Kontext ohne Abbruch mit
+	// eigenen Fristen zu Ende, und die Kinder starten in einer eigenen
+	// Prozessgruppe.
+	if sig := g.cross(running); sig != nil {
+		dropStaged()
+		return res.interrupt(sig)
+	}
+	stages := ctx
+	ctx = context.WithoutCancel(ctx)
+	if svc != nil {
+		svc = autoOwnGroup(svc)
+	}
+
 	// 12.
-	backup, err := u.Swap(staged, exe)
-	if err != nil {
-		return res.fail(reasonReplace, err, "Ersetzen gescheitert, das Binary bleibt unverändert; Rechte im "+
-			"Verzeichnis prüfen, dann erneut")
+	var backup string
+	if !pending {
+		backup, err = u.Swap(staged, exe)
+		if err != nil {
+			return res.fail(reasonReplace, err, "Ersetzen gescheitert, das Binary bleibt unverändert; Rechte im "+
+				"Verzeichnis prüfen, dann erneut")
+		}
 	}
 
 	// 13. Neustart und Prüfung; scheitert sie, der Rückweg.
@@ -304,13 +472,28 @@ func upgradeAuto(ctx context.Context) autoResult {
 		restarted := true
 		res.Restarted = &restarted
 		if err := restartAndCheck(ctx, svc, cfg.Listen(config.Node), res.To); err != nil {
+			if pending {
+				return autoPendingRollBack(ctx, u, svc, res, exe, err)
+			}
 			return autoRollBack(ctx, u, svc, res, backup, exe, err)
 		}
 	}
-	_ = os.Remove(backup)
-	res.Warnings = append(res.Warnings, autoExtension(ctx, exe)...)
+	// Der Node läuft mit der Version des Binarys (oder läuft nicht): Der
+	// eigene Rückweg und alle älteren kommen weg, noch unter der Sperre.
+	if backup != "" {
+		_ = os.Remove(backup)
+	}
+	removed, err = upgrade.RemoveBackups(st.dir)
+	if len(removed) > 0 {
+		res.Warnings = append(res.Warnings, "Rückweg-Dateien früherer Läufe entfernt: "+strings.Join(removed, ", "))
+	}
+	st.backupsDone = err == nil
+	res.Warnings = append(res.Warnings, autoExtensionUnlessSignal(stages, g, exe)...)
 	res.Outcome = autoUpgraded
-	if running {
+	if pending {
+		res.Hint = fmt.Sprintf("Neustart nachgeholt: das Binary war schon %s, der Dienst lief noch mit %s und läuft "+
+			"jetzt mit %s", res.To, res.From, res.To)
+	} else if running {
 		res.Hint = fmt.Sprintf("aktualisiert auf %s; der Dienst läuft mit dem neuen Binary", res.To)
 	} else {
 		res.Hint = fmt.Sprintf("aktualisiert auf %s; kein Dienst lief — serve benutzt das neue Binary beim nächsten "+
@@ -466,7 +649,9 @@ func askHubRelease(ctx context.Context, cfg config.Config, h nodestore.Hub) (str
 func execPreflight(ctx context.Context, bin, cfgPath string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, autoPreflightTimeout)
 	defer cancel()
+	// Die Probe bleibt in der Prozessgruppe des Laufs und endet mit ihm.
 	cmd := exec.CommandContext(ctx, bin, "upgrade", "--preflight", "--json")
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), config.EnvConfig+"="+cfgPath)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
@@ -479,6 +664,24 @@ func execPreflight(ctx context.Context, bin, cfgPath string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// diedOfSignal liefert das Signal, an dem ein Kind gestorben ist, wenn es
+// SIGTERM, SIGINT oder SIGHUP war — die Signale, die --auto abfängt.
+func diedOfSignal(err error) os.Signal {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return nil
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		return nil
+	}
+	switch sig := ws.Signal(); sig {
+	case syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP:
+		return sig
+	}
+	return nil
+}
+
 // firstLine ist die erste nicht leere Zeile von s.
 func firstLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
@@ -489,12 +692,22 @@ func firstLine(s string) string {
 	return ""
 }
 
-// autoProbe ist Stufe 11: Die Probe mit dem neuen Binary staged. Ein
-// Ergebnis mit Outcome heißt: nicht ersetzen.
-func autoProbe(ctx context.Context, res autoResult, staged, cfgPath string) autoResult {
-	out, err := autoPreflight(ctx, staged, cfgPath)
+// autoProbe ist Stufe 11: Die Probe mit dem Binary bin — dem neuen, beim
+// Nachholen eines Neustarts (installed) dem installierten. Ein Ergebnis mit
+// Outcome heißt: nicht ersetzen bzw. nicht neu starten.
+func autoProbe(ctx context.Context, res autoResult, bin, cfgPath string, installed bool) autoResult {
+	out, err := autoPreflight(ctx, bin, cfgPath)
 	failHint := "das neue Binary ließ sich nicht prüfen, das installierte bleibt; von Hand: kephalaion upgrade, " +
 		"danach kephalaion status"
+	if installed {
+		failHint = "das installierte Binary ließ sich nicht prüfen, der Dienst ist nicht neu gestartet; " +
+			"kephalaion status"
+	}
+	if sig := diedOfSignal(err); sig != nil {
+		// Ein Signal an die Gruppe trifft auch die Probe, oft bevor der Lauf
+		// es selbst sieht.
+		return res.interrupt(sig)
+	}
 	if err != nil {
 		return res.fail(reasonPreflight, fmt.Errorf("Probe mit %s gescheitert: %w", res.To, err), failHint)
 	}
@@ -523,14 +736,18 @@ func autoProbe(ctx context.Context, res autoResult, staged, cfgPath string) auto
 		rep.Result), failHint)
 }
 
-// restartAndCheck startet den Dienst pro User neu und wartet, bis er läuft
-// und der Node unter listen mit der Version want antwortet — beides
-// zusammen, innerhalb von autoRestartWithin.
+// restartAndCheck startet den Dienst pro User neu (höchstens
+// autoRestartTimeout) und wartet, bis er läuft und der Node unter listen mit
+// der Version want antwortet — beides zusammen, innerhalb von
+// autoRestartWithin. Die Frist gilt strikt: Jede Abfrage des Dienstes und
+// jede Probe endet spätestens mit ihr.
 func restartAndCheck(ctx context.Context, m *service.Manager, listen, want string) error {
-	if err := m.Restart(ctx); err != nil {
+	if err := restartWithin(ctx, m); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(autoRestartWithin)
+	ctx, cancel := context.WithTimeout(ctx, autoRestartWithin)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
 	for {
 		var last error
 		st, err := m.UserState(ctx)
@@ -540,7 +757,7 @@ func restartAndCheck(ctx context.Context, m *service.Manager, listen, want strin
 		case !st.Running:
 			last = fmt.Errorf("der Dienst läuft nicht (%s)", orDash(st.Detail))
 		default:
-			info, err := autoProbeNode(ctx, listen, autoProbeTimeout)
+			info, err := autoProbeNode(ctx, listen, min(autoProbeTimeout, time.Until(deadline)))
 			switch {
 			case err != nil:
 				last = err
@@ -550,17 +767,28 @@ func restartAndCheck(ctx context.Context, m *service.Manager, listen, want strin
 				return nil
 			}
 		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf("nach dem Neustart: %w", last)
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return fmt.Errorf("nach dem Neustart (Frist %s): %w", autoRestartWithin, last)
 		}
 		t := time.NewTimer(autoRestartPoll)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return ctx.Err()
+			return fmt.Errorf("nach dem Neustart (Frist %s): %w", autoRestartWithin, last)
 		case <-t.C:
 		}
 	}
+}
+
+// restartWithin startet den Dienst neu, höchstens autoRestartTimeout lang.
+func restartWithin(ctx context.Context, m *service.Manager) error {
+	ctx, cancel := context.WithTimeout(ctx, autoRestartTimeout)
+	defer cancel()
+	err := m.Restart(ctx)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("Neustart nach %s abgebrochen: %w", autoRestartTimeout, err)
+	}
+	return err
 }
 
 // autoRollBack setzt nach einem gescheiterten Neustart das alte Binary
@@ -574,7 +802,7 @@ func autoRollBack(ctx context.Context, u *upgrade.Upgrader, m *service.Manager, 
 			fmt.Sprintf("das alte Binary liegt noch als %s — von Hand zurück: mv %s %s && %s", backup, backup, exe,
 				m.RestartCommand()))
 	}
-	if err := m.Restart(ctx); err != nil {
+	if err := restartWithin(ctx, m); err != nil {
 		return res.fail(reasonRestart, fmt.Errorf("%v; altes Binary zurück, aber der Dienst startet nicht neu: %w",
 			cause, err), "das alte Binary ist zurück; den Dienst von Hand starten: "+m.RestartCommand()+
 			" (Log: "+m.LogHint()+")")
@@ -584,12 +812,134 @@ func autoRollBack(ctx context.Context, u *upgrade.Upgrader, m *service.Manager, 
 		"der Dienst neu gestartet — Log: "+m.LogHint())
 }
 
+// autoPendingRollBack ist der Rückweg beim Nachholen eines Neustarts: Liegt
+// eine Rückweg-Datei mit der Version des Nodes (res.From) da, kommt die
+// jüngste davon zurück wie in autoRollBack. Ohne sie bleibt es bei
+// failed/restart ohne Rückweg.
+func autoPendingRollBack(ctx context.Context, u *upgrade.Upgrader, m *service.Manager, res autoResult, exe string,
+	cause error) autoResult {
+	backups, _ := upgrade.Backups(filepath.Dir(exe))
+	for _, b := range backups {
+		if b.Version == res.From {
+			return autoRollBack(ctx, u, m, res, b.Path, exe, cause)
+		}
+	}
+	rolledBack := false
+	res.RolledBack = &rolledBack
+	return res.fail(reasonRestart, cause, fmt.Sprintf("der Dienst lief mit %s nicht an, und neben dem Binary liegt "+
+		"kein Rückweg mit %s — Log: %s; Zustand: kephalaion status; von Hand zurück: kephalaion upgrade --version %s, "+
+		"dann %s", res.To, res.From, m.LogHint(), res.From, m.RestartCommand()))
+}
+
+// autoPendingRestart prüft an Stufe 3, wenn das Binary aktuell ist (bin), ob
+// ein Neustart aussteht — nach einem SIGKILL zwischen Ersetzen und Neustart
+// oder nach upgrade von Hand ohne Neustart: Läuft ein Dienst pro User mit
+// diesem Binary und dieser config, fragt es den Node (eine Probe). node ist
+// die Version, die er meldet. Älter (nodeOlder) heißt: ein lesbares Release
+// ohne Suffix, kleiner als bin; ein dev build wird nie ersetzt.
+func autoPendingRestart(ctx context.Context, u *upgrade.Upgrader, exe string, exeErr error, bin upgrade.Version) (
+	node string, state nodeState) {
+	if exeErr != nil || u.System {
+		return "", nodeUnknown
+	}
+	loc, err := config.Locate("")
+	if err != nil {
+		return "", nodeUnknown
+	}
+	cfg, _, err := config.Load(loc.Path)
+	if err != nil || cfg.Hub != nil || cfg.Node == nil {
+		return "", nodeUnknown
+	}
+	if _, running, hint := autoWhere(ctx, exe, loc, cfg); hint != "" || !running {
+		return "", nodeUnknown
+	}
+	info, err := autoProbeNode(ctx, cfg.Listen(config.Node), autoProbeTimeout)
+	if err != nil {
+		return "", nodeSilent
+	}
+	if info.Version == bin.String() {
+		return info.Version, nodeAtBinary
+	}
+	v, err := upgrade.ParseVersion(info.Version)
+	if err != nil || v.IsPrerelease() || v.Compare(bin) >= 0 {
+		return info.Version, nodeOther
+	}
+	return info.Version, nodeOlder
+}
+
+// autoBackups behandelt am Ende des Laufs die Rückweg-Dateien, die die Stufen
+// nicht schon entfernt haben. Endet der Lauf mit current, weil der Node die
+// Version des Binarys meldet, kommen sie weg, unter der Sperre, die dafür
+// eigens genommen wird, ohne zu warten; ist sie belegt, bleiben sie. Sonst
+// bleiben sie, und eine Warnung nennt sie samt dem Weg von Hand.
+func autoBackups(res autoResult, st autoState) []string {
+	if st.dir == "" || st.backupsDone {
+		return nil
+	}
+	backups, err := upgrade.Backups(st.dir)
+	if err != nil || len(backups) == 0 {
+		return nil
+	}
+	if res.Outcome == autoCurrent && st.node == nodeAtBinary {
+		if lock, err := upgrade.Lock(st.dir); err == nil {
+			removed, err := upgrade.RemoveBackups(st.dir)
+			_ = lock.Close()
+			var warnings []string
+			if len(removed) > 0 {
+				warnings = append(warnings, "Rückweg-Dateien entfernt, der Node läuft mit der Version des Binarys: "+
+					strings.Join(removed, ", "))
+			}
+			if err == nil {
+				return warnings
+			}
+			backups, _ = upgrade.Backups(st.dir)
+			if len(backups) == 0 {
+				return warnings
+			}
+		}
+	}
+	var names []string
+	for _, b := range backups {
+		names = append(names, fmt.Sprintf("%s (Version %s)", b.Path, orDash(b.Version)))
+	}
+	lead := "Rückweg-Dateien neben dem Binary: "
+	if st.node == nodeSilent {
+		lead = "der Dienst läuft, aber der Node antwortet nicht; Rückweg-Dateien neben dem Binary: "
+	}
+	return []string{lead + strings.Join(names, ", ") + " — sie bleiben, bis der Node mit der Version des Binarys " +
+		"läuft; prüfen: kephalaion status, Log: " + newServiceManager().LogHint()}
+}
+
+// autoExtensionUnlessSignal erneuert die Erweiterung für VS Code, wenn bis
+// hier kein Signal kam, höchstens autoExtensionTimeout lang. ctx ist der
+// Kontext der Stufen: Ein Signal während der Erneuerung bricht sie ab.
+func autoExtensionUnlessSignal(ctx context.Context, g *autoGuard, exe string) []string {
+	const manual = "kephalaion vscode install"
+	if sig := g.afterCross(); sig != nil {
+		return []string{fmt.Sprintf("Erweiterung für VS Code nach %s nicht erneuert — von Hand: %s", signalName(sig),
+			manual)}
+	}
+	ctx, cancel := context.WithTimeout(ctx, autoExtensionTimeout)
+	defer cancel()
+	warnings := autoExtension(ctx, exe)
+	switch sig := g.afterCross(); {
+	case sig != nil:
+		warnings = append(warnings, fmt.Sprintf("Erweiterung für VS Code durch %s abgebrochen — von Hand: %s",
+			signalName(sig), manual))
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		warnings = append(warnings, fmt.Sprintf("Erweiterung für VS Code nach %s abgebrochen — von Hand: %s",
+			autoExtensionTimeout, manual))
+	}
+	return warnings
+}
+
 // autoExtension erneuert die Erweiterung für VS Code wie upgrade und liefert,
 // was dabei scheiterte, als Warnungen; die Ausgabe des neuen Binarys selbst
-// bleibt draußen, damit --json nur JSON schreibt.
+// bleibt draußen, damit --json nur JSON schreibt. Jeder Aufruf läuft in einer
+// eigenen Prozessgruppe.
 func autoExtension(ctx context.Context, exe string) []string {
 	var out, errOut bytes.Buffer
-	upgradeExtension(ctx, exe, &out, &errOut)
+	upgradeExtension(ctx, exe, &out, &errOut, true)
 	var warnings []string
 	for _, line := range strings.Split(errOut.String(), "\n") {
 		if line = strings.TrimSpace(line); line != "" {

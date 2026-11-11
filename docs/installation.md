@@ -1577,7 +1577,9 @@ Hubs des Nodes mindestens so neu; die Sperre; Download und Prüfsumme; die Probe
 Binary; ersetzen; neu starten und prüfen. Bis einschließlich der Probe bleiben Binary, Dienst und
 Datenbanken unverändert; liegen bleibt höchstens die Sperrdatei `.kephalaion-upgrade.lock` neben
 dem Binary (keine temporäre Datei — sie bleibt, wie `<db>.lock` bei `serve`). `--auto` stuft nie
-zurück und ersetzt nie einen dev build. Ohne `--json` stehen dieselben Angaben in Zeilen da.
+zurück und ersetzt nie einen dev build. Ist das Binary schon aktuell, der Dienst läuft aber noch
+mit einem älteren Release, holt `--auto` den Neustart nach (unten, „Ausstehender Neustart“). Ohne
+`--json` stehen dieselben Angaben in Zeilen da.
 
 `kephalaion upgrade --auto --json`:
 
@@ -1597,10 +1599,10 @@ zurück und ersetzt nie einen dev build. Ohne `--json` stehen dieselben Angaben 
 |---|---|
 | `outcome` | `upgraded` (ersetzt, wenn ein Dienst lief: neu gestartet und geprüft), `current` (nichts zu tun), `skipped` (nicht angefasst, Grund in `reason`), `failed` (gescheitert, Grund in `reason` und `error`) |
 | `reason` | nur bei `skipped` und `failed`, Tabelle unten |
-| `from`, `to` | installierte Version und Ziel — `to` auch bei `skipped`, sobald GitHub geantwortet hat |
+| `from`, `to` | installierte Version und Ziel — `to` auch bei `skipped`, sobald GitHub geantwortet hat; beim Nachholen eines Neustarts die Version des Nodes und die des Binarys |
 | `restarted` | nur, wenn ein Dienst pro User lief; dann `true` |
 | `rolled_back` | nur bei `failed`, `restart`: ob das alte Binary zurück ist und der Dienst mit ihm neu gestartet |
-| `warnings` | Warnungen, die das Ergebnis nicht ändern, etwa von der Erweiterung für VS Code; sonst `[]` |
+| `warnings` | Warnungen, die das Ergebnis nicht ändern: von der Erweiterung für VS Code, ein Signal nach dem Ersetzen, liegengebliebene oder entfernte Rückweg-Dateien, entfernte alte temporäre Dateien; sonst `[]` |
 | `error` | bei `failed` der Fehler |
 | `hint` | in einem Satz, was zu tun ist — zum Anzeigen, etwa in k-playbook |
 | `check` | der Report wie bei `upgrade --check --json` (oben) |
@@ -1626,9 +1628,10 @@ oder nicht (`rolled_back: false`). Lief kein Dienst pro User, fehlt das Feld.
 | `failed` | `preflight` | das neue Binary kennt `--preflight` nicht, stürzt ab oder antwortet unlesbar | von Hand: `kephalaion upgrade`, danach `kephalaion status` |
 | `failed` | `replace` | Ersetzen gescheitert | Rechte im Verzeichnis prüfen; das Binary ist unverändert |
 | `failed` | `restart` | nach dem Neustart lief der Dienst nicht binnen 10 s mit der Zielversion an | mit `rolled_back: true` läuft wieder das alte Binary: Log ansehen (`journalctl --user -u kephalaion`), dann von Hand; mit `rolled_back: false` nennt `hint` den Weg von Hand |
+| `failed` | `interrupted` | SIGTERM, SIGINT oder SIGHUP vor dem Ersetzen (unten, „Signale“); nichts verändert | später erneut |
 
-`current` hat keinen Grund: Das Release ist nicht neuer — oder ein anderer Lauf hat das Binary
-ersetzt, während dieser auf die Sperre kam.
+`current` hat keinen Grund: Das Release ist nicht neuer, und es steht kein Neustart aus — oder
+ein anderer Lauf hat das Binary ersetzt, während dieser auf die Sperre kam.
 
 **Die Probe.** Bevor `--auto` ersetzt, ruft es das heruntergeladene und gegen `SHA256SUMS`
 geprüfte Binary mit derselben config auf (`KEPHALAION_CONFIG`): `<neues Binary> upgrade
@@ -1652,10 +1655,67 @@ Je Rolle steht `state` `ok`, `schema` (mit `want` und `got`) oder `error`. Ein V
 darf eigene nennen) wird `skipped`, `release` — beide reichen `hint` durch. Exit 0, sobald die
 Probe geantwortet hat. `--preflight` ist der Aufruf für `--auto`, kein Werkzeug für Menschen.
 
-**Fristen:** jede Frage an einen Hub 5 s, die Probe 30 s, die Prüfung nach dem Neustart 10 s.
+**Fristen:** jede Frage an einen Hub 5 s, die Probe 30 s, jeder Neustart des Dienstes 30 s (der
+des Upgrades wie der des Rückwegs; `serve` braucht bis 20 s zum Beenden), die Prüfung nach dem
+Neustart 10 s — strikt, jede Abfrage und jede Probe endet mit ihr —, die Erweiterung für VS Code
+60 s.
+
+**Signale.** `--auto` fängt SIGTERM, SIGINT und SIGHUP ab; die anderen Aufrufe von `upgrade`
+behandeln sie wie bisher. Die Grenze liegt unmittelbar vor dem Ersetzen, beim Nachholen eines
+Neustarts unmittelbar vor dem Neustart.
+
+- **Davor** bricht der Lauf ab: Ein laufender Download und die Probe enden, die heruntergeladene
+  Datei ist weg, die Sperre fällt. Ergebnis `failed`, `interrupted`, Exit 1 — in jeder Stufe,
+  auch wenn die Probe selbst am Signal stirbt (Signal an die Prozessgruppe). Binary, Dienst und
+  Datenbanken sind unverändert. Das dauert wenige Sekunden.
+- **Danach** wird das Signal vermerkt, aber nicht befolgt: Ersetzen, Neustart, Prüfung und
+  gegebenenfalls der Rückweg laufen mit ihren eigenen Fristen zu Ende; das Ergebnis ist
+  `upgraded` oder `failed`, `restart` wie ohne Signal. Sofort steht eine Zeile auf stderr, auch
+  mit `--json` (etwa `upgrade --auto: SIGTERM empfangen, Neustart läuft, endet spätestens in
+  75 s`), und in `warnings` steht das Signal. Die Erweiterung für VS Code entfällt, mit einer
+  Warnung und dem Befehl von Hand; kommt das Signal, während sie läuft, bricht sie ab. Ein zweites
+  Signal ändert nichts; SIGKILL bleibt der harte Abbruch.
+- `systemctl --user` bzw. `launchctl` und `vscode install` starten ab der Grenze in einer eigenen
+  Prozessgruppe: Strg-C im Terminal oder ein Signal an die Gruppe trifft sie nicht. Die Probe
+  davor bleibt in der Gruppe des Laufs und endet mit ihm.
+
+**Höchstdauer** vom Signal bis zum Ende: mit laufendem Dienst **75 s** (zwei Neustarts zu 30 s,
+die Prüfung zu 10 s, 5 s Spielraum), ohne laufenden Dienst **5 s** (nur Ersetzen und Aufräumen).
+Ein Aufrufer, der `--auto` nach einer Frist mit SIGTERM beendet, wartet bis SIGKILL mindestens
+75 s und wertet dann das JSON aus; „Ausgang unbekannt“ bleibt nur ohne JSON, also nach SIGKILL —
+dann ist `kephalaion status` der Prüfschritt, und der nächste Lauf von `--auto` holt einen
+ausstehenden Neustart nach.
+
+**Ausstehender Neustart.** Endet ein Lauf nach dem Ersetzen und vor dem Neustart (SIGKILL), oder
+hat jemand `kephalaion upgrade` von Hand ohne Neustart gerufen, liegt das neue Binary da und der
+Dienst läuft mit dem alten. Ist das Binary aktuell, fragt `--auto` deshalb vor `current` den Node,
+wenn ein Dienst pro User mit diesem Binary und dieser config läuft (eine Probe, 3 s). Meldet er ein
+lesbares Release ohne Suffix, das älter ist als das Binary, holt der Lauf den Neustart nach: Ziel
+ist die Version des Binarys, nicht das neueste Release; die Stufen bis zur Sperre laufen wie sonst
+(die Hubs müssen mindestens die Version des Binarys tragen); Download und Ersetzen entfallen; die
+Probe läuft mit dem installierten Binary; dann Neustart und Prüfung. Ergebnis `upgraded` mit `from`
+gleich der Version des Nodes und `restarted: true`. Scheitert die Prüfung, ist es `failed`,
+`restart`: Liegt eine Rückweg-Datei mit der Version des Nodes da, kommt die jüngste davon zurück
+und der Dienst startet erneut (`rolled_back: true`); sonst `rolled_back: false`, und `hint` nennt
+Log und Weg von Hand. Meldet der Node dieselbe oder eine neuere Version, `dev`, nichts oder eine
+unlesbare, oder antwortet er nicht, bleibt es bei `current` — kein Neustart auf Verdacht. Hält der
+Dienst an, nachdem der Node gefragt wurde und bevor der Lauf neu startet, ist es ebenfalls
+`current`: Es gibt nichts nachzuholen, serve benutzt das Binary beim nächsten Start; Rückweg-Dateien
+bleiben liegen und stehen in einer Warnung.
+
+**Rückweg-Datei und Aufräumen.** Vor dem Ersetzen hält `--auto` das alte Binary als Rückweg fest:
+`.kephalaion-upgrade-backup-<version>-<zeit>-<zufall>` neben dem Binary, mit der Version des alten
+Binarys — ein harter Link, wo das Dateisystem keinen erlaubt, eine Kopie. Sie bleibt, bis ein Lauf
+damit endet, dass der Node mit der Version des Binarys läuft (`upgraded`, oder `current`, weil der
+Node die Version des Binarys meldet); dann entfernt er sie unter der Sperre. Ist die Sperre
+belegt, oder endet der Lauf anders, bleibt sie, und eine Warnung nennt sie samt `kephalaion
+status` und Log. Außerdem entfernt jeder Lauf nach der Sperre Reste abgebrochener Läufe: Dateien
+nach `.kephalaion-upgrade-*` im Verzeichnis des Binarys, die keine Rückweg-Datei sind und älter als
+eine Stunde — jüngere können einem gleichzeitigen `kephalaion upgrade` ohne `--auto` gehören. Die
+Sperrdatei bleibt. Was entfernt wurde, steht in `warnings`.
 
 Exit-Code von `upgrade --auto` (mit und ohne `--json`): 0 bei `upgraded`, `current` und
-`skipped`; 1 bei `failed`; 2 bei falschem Aufruf (`--auto` mit `--check` oder `--version`) — und
+`skipped`; 1 bei `failed`, auch `interrupted`; 2 bei falschem Aufruf (`--auto` mit `--check` oder `--version`) — und
 von jedem Binary, das `--auto` noch nicht kennt (vor Task 036). Ein Aufrufer wertet Exit 2 als
 „Binary zu alt für `--auto`“ und fällt auf `upgrade --check --json` zurück.
 

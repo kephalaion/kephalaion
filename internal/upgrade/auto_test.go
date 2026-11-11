@@ -5,7 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/kephalaion/kephalaion/internal/buildinfo"
 )
 
 // Latest liefert Ziel, installierte Version und den Report wie --check
@@ -84,7 +88,7 @@ func TestSwapAndRestore(t *testing.T) {
 		_ = f.Close()
 		return f.Name()
 	}
-	u := &Upgrader{}
+	u := &Upgrader{Current: buildinfo.Info{Version: "v0.1.0"}}
 	backup, err := u.Swap(stage(), exe)
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +98,9 @@ func TestSwapAndRestore(t *testing.T) {
 	}
 	if ok, _ := filepath.Match(TempPattern, filepath.Base(backup)); !ok || filepath.Dir(backup) != dir {
 		t.Errorf("Rückweg %s", backup)
+	}
+	if ok, _ := filepath.Match(BackupPattern, filepath.Base(backup)); !ok {
+		t.Errorf("Rückweg %s nicht nach %s", backup, BackupPattern)
 	}
 	if err := u.Restore(backup, exe); err != nil {
 		t.Fatal(err)
@@ -131,4 +138,84 @@ func TestLock(t *testing.T) {
 		t.Error(err)
 	}
 	assertNoTemp(t, dir)
+}
+
+// Swap nennt im Namen des Rückwegs die Version des alten Binarys und die
+// Zeit; Backups liest beide zurück, auch mit Suffix, die jüngste zuerst.
+// RemoveBackups entfernt alle.
+func TestBackups(t *testing.T) {
+	exe := installed(t)
+	dir := filepath.Dir(exe)
+	swap := func(version string, at time.Time) string {
+		t.Helper()
+		f, err := os.CreateTemp(dir, TempPattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		u := &Upgrader{Current: buildinfo.Info{Version: version}, Now: func() time.Time { return at }}
+		backup, err := u.Swap(f.Name(), exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return backup
+	}
+	day := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	older := swap("v0.4.0", day)
+	newer := swap("v0.5.0-rc1", day.Add(time.Hour))
+	if !strings.HasPrefix(filepath.Base(newer), ".kephalaion-upgrade-backup-v0.5.0-rc1-20261111110000-") {
+		t.Errorf("Name %s", filepath.Base(newer))
+	}
+	got, err := Backups(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != (Backup{Path: newer, Version: "v0.5.0-rc1", Stamp: "20261111110000"}) ||
+		got[1] != (Backup{Path: older, Version: "v0.4.0", Stamp: "20261111100000"}) {
+		t.Errorf("Backups: %+v", got)
+	}
+	if b := parseBackup(filepath.Join(dir, ".kephalaion-upgrade-backup-kaputt")); b.Version != "" {
+		t.Errorf("unlesbarer Name: %+v", b)
+	}
+	if safeName("v1/../x*") != "v1_.._x_" || safeName("") != "unbekannt" {
+		t.Errorf("safeName %q", safeName("v1/../x*"))
+	}
+	removed, err := RemoveBackups(dir)
+	if err != nil || len(removed) != 2 {
+		t.Errorf("entfernt %v, %v", removed, err)
+	}
+	assertNoTemp(t, dir)
+}
+
+// RemoveStale entfernt nur alte temporäre Dateien: eine frische bleibt
+// (upgrade ohne --auto, ohne Sperre), eine alte Rückweg-Datei und die
+// Sperrdatei auch.
+func TestRemoveStale(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	old := now.Add(-2 * time.Hour)
+	mk := func(name string, mtime time.Time) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	stale := mk(".kephalaion-upgrade-123", old)
+	fresh := mk(".kephalaion-upgrade-456", now.Add(-time.Minute))
+	backup := mk(".kephalaion-upgrade-backup-v0.4.0-20261101000000-789", old.Add(-72*time.Hour))
+	lock := mk(LockName, old)
+	removed, err := RemoveStale(dir, time.Hour, now)
+	if err != nil || len(removed) != 1 || removed[0] != stale {
+		t.Errorf("entfernt %v, %v", removed, err)
+	}
+	for _, p := range []string{fresh, backup, lock} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s: %v", filepath.Base(p), err)
+		}
+	}
 }

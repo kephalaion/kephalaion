@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/kephalaion/kephalaion/internal/config"
+	"github.com/kephalaion/kephalaion/internal/service"
 	"github.com/kephalaion/kephalaion/internal/vscodeext"
 )
 
@@ -22,8 +23,11 @@ var systemBinary = config.SystemBinary
 // mit dem neuen Binary exe — die neue Erweiterung steckt in ihm, nicht in
 // diesem Prozess. Je CLI eines Editors, in dem sie installiert ist, einmal
 // exe vscode install --code <cli>. Alles, was dabei scheitert, ist nur eine
-// Warnung: Der Exit-Code des Upgrades bleibt, wie er ist.
-func upgradeExtension(ctx context.Context, exe string, stdout, stderr io.Writer) {
+// Warnung: Der Exit-Code des Upgrades bleibt, wie er ist. Mit ownGroup — nur
+// upgrade --auto setzt es — läuft jeder Aufruf in einer eigenen
+// Prozessgruppe (service.OwnGroup): Ein Signal an die Gruppe des Laufs
+// trifft ihn nicht, das Ende von ctx beendet ihn samt seinen Kindern.
+func upgradeExtension(ctx context.Context, exe string, stdout, stderr io.Writer, ownGroup bool) {
 	const manual = "kephalaion vscode install"
 	if viaSudo() || sameFile(exe, systemBinary) {
 		fmt.Fprintf(stdout, "Erweiterung für VS Code: nicht erneuert (globale Installation oder sudo) — "+
@@ -51,6 +55,9 @@ func upgradeExtension(ctx context.Context, exe string, stdout, stderr io.Writer)
 		}
 		var errBuf bytes.Buffer
 		cmd := exec.CommandContext(ctx, exe, "vscode", "install", "--code", cli)
+		if ownGroup {
+			service.OwnGroup(cmd)
+		}
 		cmd.Stdout, cmd.Stderr = stdout, &errBuf
 		err := cmd.Run()
 		if err == nil {

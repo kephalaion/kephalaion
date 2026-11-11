@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kephalaion/kephalaion/internal/config"
@@ -24,7 +25,40 @@ type Runner func(ctx context.Context, name string, args ...string) (stdout strin
 
 // ExecRunner führt Programme wirklich aus.
 func ExecRunner(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	return runCmd(exec.CommandContext(ctx, name, args...), name, args)
+}
+
+// OwnGroupRunner führt Programme aus wie ExecRunner, aber jedes in einer
+// eigenen Prozessgruppe: Ein Signal an die Gruppe des Aufrufers, etwa Strg-C
+// im Terminal, trifft es nicht. Endet ctx, beendet er die ganze Gruppe des
+// Kindes. upgrade --auto nimmt ihn nach dem Ersetzen, damit Neustart und
+// Rückweg zu Ende laufen; alle anderen Aufrufe bleiben bei ExecRunner, und
+// Strg-C trifft ihre Kinder weiter.
+func OwnGroupRunner(ctx context.Context, name string, args ...string) (string, error) {
+	return runCmd(OwnGroup(exec.CommandContext(ctx, name, args...)), name, args)
+}
+
+// OwnGroup lässt cmd in einer eigenen Prozessgruppe starten und beim Ende
+// seines Kontexts die ganze Gruppe beenden, nicht nur das Kind selbst.
+// WaitDelay begrenzt das Warten auf Enkel, die seine Ausgabe noch offen
+// halten.
+func OwnGroup(cmd *exec.Cmd) *exec.Cmd {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Die Gruppe trägt die PID des Kindes (Setpgid ohne Pgid).
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = ownGroupWaitDelay
+	return cmd
+}
+
+// ownGroupWaitDelay ist die Frist nach dem Beenden der Gruppe, bis Wait die
+// Ausgabe aufgibt.
+const ownGroupWaitDelay = 2 * time.Second
+
+// runCmd führt cmd aus und liefert seine Standardausgabe; der Fehler nennt
+// den Aufruf name args und die Fehlerausgabe.
+func runCmd(cmd *exec.Cmd, name string, args []string) (string, error) {
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {

@@ -52,6 +52,11 @@ Binary zurück. Das Ergebnis — outcome upgraded, current, skipped oder
 failed, dazu reason und hint — steht in Zeilen oder mit --json als JSON;
 siehe docs/installation.md, „Upgrade: was Kephalaion meldet“.
 
+SIGTERM, SIGINT oder SIGHUP vor dem Ersetzen brechen --auto ab: failed mit
+reason interrupted, nichts verändert. Danach wird das Signal nur vermerkt:
+Neustart, Prüfung und Rückweg laufen zu Ende, mit laufendem Dienst höchstens
+75 s, ohne höchstens 5 s; eine Zeile auf stderr sagt das sofort.
+
 Optionen:
   --check            nur melden: installierte und neueste Version, ob sich
                      dieses Binary selbst ersetzen kann und wie das Upgrade
@@ -79,7 +84,8 @@ Exit-Code:
       Prüfsumme; das Binary bleibt unverändert. Mit --check --json steht der
       Grund auch im JSON (state failed, error). Mit --auto: failed, der Grund
       in reason und error; scheitert der Neustart, ist das alte Binary
-      zurück, wenn rolled_back es sagt
+      zurück, wenn rolled_back es sagt; interrupted: vor dem Ersetzen durch
+      ein Signal abgebrochen, nichts verändert
   2   falscher Aufruf — auch für --auto mit einem Binary, das --auto noch
       nicht kennt
 `
@@ -121,14 +127,16 @@ func runUpgrade(args []string, stdout, stderr io.Writer) int {
 		return usageErr("upgrade: --json gibt es nur mit --check und ohne --version, mit --auto oder mit --preflight")
 	}
 
+	// --auto fängt seine Signale selbst ab (runUpgradeAuto): vor dem Ersetzen
+	// bricht es ab, danach führt es den Neustart zu Ende.
+	if *auto {
+		return runUpgradeAuto(*asJSON, stdout, stderr)
+	}
+
 	// Ein Abbruch mit Strg-C oder SIGTERM beendet den Download, und upgrade
 	// räumt die temporäre Datei weg, bevor das Programm endet.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	if *auto {
-		return runUpgradeAuto(ctx, *asJSON, stdout, stderr)
-	}
 
 	u := newUpgrader(stdout)
 	u.System = systemConfigApplies()
@@ -150,7 +158,7 @@ func runUpgrade(args []string, stdout, stderr io.Writer) int {
 	}
 	if res.Replaced {
 		code := restartAfterUpgrade(ctx, stdout, stderr)
-		upgradeExtension(ctx, res.Exe, stdout, stderr)
+		upgradeExtension(ctx, res.Exe, stdout, stderr, false)
 		return code
 	}
 	return 0

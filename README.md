@@ -134,7 +134,10 @@ lässt sonst alles, wie es ist: nie global (das macht der Verwalter), nie einen 
 dev build, nie vor dem Hub — jeder Hub des Nodes muss in `whoami` ein mindestens so neues
 Release nennen. Vor dem Ersetzen prüft das neue Binary die Datenbanken (`upgrade --preflight
 --json`), nach dem Neustart muss der Node mit der neuen Version antworten, sonst kommt das alte
-Binary zurück. Ergebnis und Gründe (`outcome`, `reason`, `hint`):
+Binary zurück. SIGTERM, SIGINT oder SIGHUP vor dem Ersetzen brechen ab, ohne etwas zu ändern
+(`failed`, `interrupted`); danach laufen Neustart und Prüfung zu Ende, mit Dienst höchstens 75 s.
+Steht nach einem harten Abbruch ein Neustart aus, holt der nächste Lauf ihn nach. Ergebnis und
+Gründe (`outcome`, `reason`, `hint`):
 [`docs/installation.md`](docs/installation.md), „Upgrade: was Kephalaion meldet“. Den ersten
 Schritt auf ein Release mit `--auto` geht man von Hand, erst der Hub, dann die Nodes; ein älteres
 Binary antwortet auf `--auto` mit Exit 2.

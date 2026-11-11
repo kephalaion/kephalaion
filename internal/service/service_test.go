@@ -8,8 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 var update = flag.Bool("update", false, "schreibt die Dateien unter testdata/ neu")
@@ -364,5 +368,70 @@ func TestInstalledCall(t *testing.T) {
 	}
 	if _, err := plistArguments([]byte(`<plist><dict><key>Label</key><string>x</string></dict></plist>`)); err == nil {
 		t.Error("plist ohne ProgramArguments ohne Fehler")
+	}
+}
+
+// pgidScript gibt die Prozessgruppe der Shell aus (Feld 5 von
+// /proc/<pid>/stat), nur mit Builtins.
+const pgidScript = `read -r _ _ _ _ pgid _ < /proc/$$/stat; echo "$pgid"`
+
+// OwnGroupRunner startet das Kind in einer eigenen Prozessgruppe,
+// ExecRunner in der des Aufrufers.
+func TestOwnGroupRunner(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("liest /proc")
+	}
+	ctx := context.Background()
+	own := strconv.Itoa(syscall.Getpgrp())
+	out, err := ExecRunner(ctx, "/bin/sh", "-c", pgidScript)
+	if err != nil || strings.TrimSpace(out) != own {
+		t.Errorf("ExecRunner: Gruppe %q, erwartet %s (%v)", out, own, err)
+	}
+	out, err = OwnGroupRunner(ctx, "/bin/sh", "-c", pgidScript)
+	if err != nil || strings.TrimSpace(out) == "" || strings.TrimSpace(out) == own {
+		t.Errorf("OwnGroupRunner: Gruppe %q, die des Aufrufers ist %s (%v)", out, own, err)
+	}
+}
+
+// Endet der Kontext, beendet OwnGroupRunner die ganze Gruppe, auch ein Enkel
+// im Hintergrund, und kehrt trotz offener Ausgabe zurück.
+func TestOwnGroupRunnerCancel(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("liest /proc")
+	}
+	pidFile := filepath.Join(t.TempDir(), "enkel")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := OwnGroupRunner(ctx, "/bin/sh", "-c", "sleep 30 & echo $! > '"+pidFile+"'; wait")
+	if err == nil {
+		t.Fatal("kein Fehler nach dem Ende des Kontexts")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("zurück erst nach %v", d)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Der Enkel ist beendet; als Waise räumt ihn init ab, das kann einen
+	// Augenblick dauern.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil &&
+			strings.Contains(string(stat), ") Z ") {
+			return // beendet, nur noch nicht abgeholt
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Enkel %d läuft weiter", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

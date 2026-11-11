@@ -38,6 +38,10 @@ func TestMain(m *testing.M) {
 	// Kein Test ruft systemctl oder launchctl: ohne Ersatz sieht status einen
 	// Rechner ohne systemd.
 	newServiceManager = func() *service.Manager { return noSystemd(dir) }
+	// Ebenso nicht upgrade --auto ab der Grenze: Sein Runner mit eigener
+	// Prozessgruppe riefe das echte systemctl; im Test bleibt der Runner des
+	// Managers.
+	autoOwnGroup = func(m *service.Manager) *service.Manager { return m }
 	// Kein Test ruft einen echten KI-Assistenten auf: ohne Ersatz liegt keiner
 	// im PATH, und jeder Aufruf scheitert.
 	newAssistantManager = assistanttest.New(dir).Manager
