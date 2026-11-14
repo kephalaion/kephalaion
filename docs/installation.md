@@ -1553,9 +1553,6 @@ ssh <admin>@<hub> 'sudo cat /var/lib/kephalaion/backups/hub-20261114T021500Z-r54
   > hub-20261114T021500Z-r5411.db && chmod 600 hub-20261114T021500Z-r5411.db
 ```
 
-Auf der Dev-VM macht das `make kephalaion-backup-pull` in `~/dev/vm`
-(`ansible/roles/kephalaion/README.md`).
-
 ### Wiederherstellen
 
 Zurückgespielt wird bei angehaltenem Dienst, global als Verwalter:
