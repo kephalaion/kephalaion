@@ -36,6 +36,9 @@ ein, zum Lesen und Schreiben. Ein Node auf einem anderen Rechner erreicht den Hu
 ([`docs/installation.md`](docs/installation.md)). Für das Verzeichnis `docs/` einer Collection
 schreibt der Hub je Verzeichnis eine `index.md` nach Google OKF und `docs/README.md` als
 Anleitung, der Node hält einen Volltextindex für `search` ([`docs/indizierung.md`](docs/indizierung.md)).
+Die Datenbank des Hubs sichert `hub backup` neben dem laufenden Dienst; nach dem Zurückspielen
+vergibt `hub reset-id` eine neue `hub_id` ([`docs/installation.md`](docs/installation.md),
+„Sicherung und Wiederherstellung“).
 Noch nicht gebaut: `ssh`, semantische Suche, weitere Werkzeuge (`create_numbered`, `append`,
 `replace_section`, `supersede`, `replace_directory`).
 
@@ -179,6 +182,7 @@ kephalaion config set hub public_url https://<name>/kephalaion/hub   # für den 
 kephalaion config set hub alias vm                   # der Alias, unter dem Nodes den Hub eintragen
 kephalaion config export --output keph-config.yaml   # Einstellungen sichern, ohne Inhalte
 kephalaion config import keph-config.yaml            # in eingerichtete Rollen zurückschreiben
+kephalaion hub backup                                # die ganze Hub-Datenbank sichern, neben dem laufenden serve
 ```
 
 `status` und alle anderen Kommandos öffnen nur vorhandene Datenbanken, angelegt wird nur mit
@@ -212,6 +216,25 @@ Die Hub-Einträge behalten ihre Tokens über Export und Import; die Replicas leg
 Abgleich neu an. Global dasselbe als Systembenutzer mit `--config /etc/kephalaion/config.yaml`
 und `--db sqlite:///var/lib/kephalaion/node.db` ([`docs/installation.md`](docs/installation.md),
 „Neue Schemafassung“).
+
+**Sicherung des Hubs.** `kephalaion hub backup [--dir <verzeichnis>] [--keep <n>]` schreibt neben
+dem laufenden `serve` einen Snapshot der Hub-Datenbank — Inhalte, Versionsgeschichte, Collections,
+Nodes, Accounts und Rechte — nach `backups/` neben der `hub.db`
+(`hub-<UTC JJJJMMTTThhmmssZ>-r<revision>.db`, Datei `0600`, Verzeichnis `0700`), prüft ihn
+(`integrity_check`, `journal_mode` `wal`, Rolle, Schemafassung) und behält die jüngsten 14 Stände
+(`--keep`, `0` löscht nichts). Der Dienst bleibt an, kein Schreiber wartet, und die Sicherung ist
+ein Stand, eine Revision; die Datei von Hand zu kopieren, leistet das nicht (WAL). Eine Datei,
+die die Prüfung nicht besteht, wird gelöscht (Exit-Code 1). Zurückgespielt wird bei angehaltenem
+Dienst: `hub.db` samt `-wal` und `-shm` beiseitelegen, die Sicherung als `hub.db` einsetzen,
+`kephalaion hub reset-id`, Dienst starten. `hub reset-id` vergibt eine neue `hub_id` — nur ohne
+laufenden `serve` —, und jeder Node leert daraufhin seine Replica und gleicht von vorn ab; ohne
+das liefen Replicas, die schon weiter waren als die Sicherung, still auseinander. Was nach der
+Sicherung geschah, fehlt dem Hub, auch ein danach rotiertes Token: Der Verwalter gibt es neu aus
+(`hub node token`, `hub account token`). Eine Sicherung passt nur zu einem Binary mit derselben
+Schemafassung; über einen Sprung hinweg bleibt es bei `config export` und `hub import`. `node.db`
+und Replicas brauchen keine Sicherung: Replicas sind abgeleitet, die Hub-Einträge sichert `config
+export`. Ablauf, Timer für die globale Installation und Grenzen:
+[`docs/installation.md`](docs/installation.md), „Sicherung und Wiederherstellung“.
 
 ### Hub und Node auf einem Rechner
 

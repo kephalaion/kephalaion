@@ -1693,6 +1693,36 @@ Projekte dieses Rechners.
   langsam machen. `init` warnt bei solchen Pfaden: `/mnt/` unter WSL sicher, Sync-Ordner
   über bekannte Namen im Pfad.
 
+**Sicherung des Hubs — entschieden am 2026-11-12, gebaut in Task 038.** Geht die `hub.db`
+kaputt oder verloren, kommt der Hub aus einer Sicherung zurück: Inhalte, Versionsgeschichte,
+Collections, Nodes, Accounts und Rechte. Ablauf und Units stehen in
+[`installation.md`](installation.md), „Sicherung und Wiederherstellung“; hier die Entscheidungen:
+
+- **Im laufenden Betrieb, ohne Schreiber aufzuhalten.** `kephalaion hub backup` schreibt neben
+  `serve` einen Snapshot per `VACUUM INTO` — als einzelne Anweisung, die in einer
+  Lesetransaktion liest. In einer mit `BeginTx` begonnenen Transaktion machte `_txlock=immediate`
+  daraus `BEGIN IMMEDIATE`, und sie hielte die Schreibsperre. Die Datei zu kopieren scheidet aus:
+  Im WAL-Modus ist sie allein kein stimmiger Stand.
+- **Die Kopie wird auf WAL gestellt.** `VACUUM INTO` schreibt mit `journal_mode=delete`, und das
+  Öffnen stellt nie um (nur das Anlegen). Ohne das Umstellen liefe ein zurückgespielter Hub mit
+  Rollback-Journal — ein anderer Hub als der gesicherte.
+- **Geprüft, dann benannt.** Geschrieben wird in eine verdeckte Datei im Zielverzeichnis;
+  `integrity_check`, `journal_mode`, Rolle und Schemafassung werden an ihr geprüft, die Revision
+  im Namen kommt aus ihrer `db_info`, und erst danach bekommt sie per `rename` ihren Namen. Eine
+  fehlerhafte wird gelöscht und als Fehler gemeldet, nie behalten.
+- **Ein zurückgespielter Stand bekommt eine neue `hub_id`** (`hub reset-id`, „Datenmodell“, „Hub
+  aus einer Sicherung“). Ein Snapshot ist nie sicher der letzte Stand; die Nodes bauen ihre
+  Replica deshalb neu auf, statt still auseinanderzulaufen. Die alte `hub_id` bleibt nur bei
+  einem Export bei angehaltenem `serve` erhalten (Task 039).
+- **Tokens kommen nicht mit zurück.** Der Hub hält nur Hashes; nach dem Zurückspielen gelten die
+  aus der Zeit der Sicherung. Ein danach rotiertes Token gibt der Verwalter neu aus — und macht
+  damit das wieder gültige alte wertlos.
+- **Nur der Hub, nur SQLite.** `node.db` und Replicas werden nicht gesichert: Replicas sind
+  abgeleitet, die Hub-Einträge sichert `config export`. Ein Export unabhängig von der Datenbank
+  ist Task 039, PostgreSQL Task 017.
+- **Später denkbar:** eine Sicherung vor `upgrade --auto`; die Ablage außerhalb des Rechners
+  (bisher holt der Verwalter die Stände von Hand).
+
 ## Installation und Betrieb
 
 **Entschieden am 2026-09-26: zwei Arten der Installation, je Rechner genau eine.**
@@ -2300,8 +2330,10 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   `seit` des Nodes über H, wurde der Hub mit gleicher `hub_id` zurückgespielt; der Node
   behandelt das wie einen Wechsel der `hub_id`. Das greift nur, bis der Hub wieder darüber
   hinaus geschrieben hat. **Grenze, festgehalten in [`vertrag.md`](vertrag.md):** Ein aus einer
-  Sicherung zurückgespielter Hub braucht eine neue `hub_id`; bis es dafür ein Kommando gibt,
-  verwirft der Node die Replica selbst (`node hub rm` und `node hub add`).
+  Sicherung zurückgespielter Hub braucht eine neue `hub_id`. Seit Task 038 vergibt sie
+  `kephalaion hub reset-id`, bei angehaltenem `serve`, als fester Schritt des Wiederherstellens
+  — eine Sicherung (`hub backup`) entsteht im laufenden Betrieb und ist nie sicher der letzte
+  Stand ([`installation.md`](installation.md), „Sicherung und Wiederherstellung“).
 - **Eine Abfrage für alle Collections.** Der Node schickt eine Liste von Paaren (Collection,
   seit); der Hub fragt einmal ab, nach Revision sortiert, jede Collection über den Index
   `(collection, revision)`:

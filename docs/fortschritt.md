@@ -1,6 +1,8 @@
 # Fortschritt
 
-Stand: 2026-11-11 (Task 037 `upgrade --auto` und Signale abgeschlossen, Release v0.4.2, an
+Stand: 2026-11-14 (Task 038 Sicherung des Hubs: `hub backup` und `hub reset-id` gebaut und
+dokumentiert, noch in keinem Release — Timer und Abnahme auf der VM folgen mit dem nächsten;
+2026-11-11: Task 037 `upgrade --auto` und Signale abgeschlossen, Release v0.4.2, an
 k-playbook gemeldet; Task 036 `upgrade --auto` Etappen 1–4 ausgeführt, Abnahme Teil B mit dem
 Folgerelease v0.4.2 jetzt möglich; 2026-11-10: Task 033 abgeschlossen, Release v0.4.0, an k-playbook gemeldet;
 Stand 2026-10-08: Tasks 001–016 abgeschlossen; 018 und 019 auf der VM abgenommen; 020 und 021
@@ -452,6 +454,23 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 038 (`038-hub-backup`) — Sicherung des Hubs: Snapshot der `hub.db` im laufenden
+  Betrieb, Rotation, Timer auf der VM** (2026-11-14, Etappen 1–2 ausgeführt): `kephalaion hub
+  backup [--dir] [--keep]` schreibt neben `serve` einen Snapshot (`VACUUM INTO` als einzelne
+  Anweisung), stellt ihn auf WAL, prüft ihn (`integrity_check`, `journal_mode`, Rolle,
+  Schemafassung) und benennt ihn erst dann in `hub-<UTC>-r<revision>.db` um (`0600`, Verzeichnis
+  `backups/` `0700`); eine Datei, die die Prüfung nicht besteht, wird gelöscht; Rotation nur
+  über Dateien mit dem Namen einer Sicherung. `kephalaion hub reset-id` vergibt nach dem
+  Zurückspielen eine neue `hub_id`, nur bei angehaltenem `serve`. Belegt durch Tests: Snapshots
+  neben Schreibern sind ein Stand; nach dem Einsetzen einer älteren Sicherung und `reset-id`
+  leert ein Node seine Replica und gleicht neu ab; ein nach der Sicherung rotiertes Node-Token
+  kennt der Hub nicht mehr, der Node kann es nicht selbst rotieren, erst `hub node token` hilft
+  (`installation.md`, „Sicherung und Wiederherstellung“; `konzept.md`, „Speicherung“). Etappe 3
+  ändert nur das Repo der VM (`~/dev/vm`, Rolle `kephalaion`: `kephalaion-backup.service` und
+  `.timer`, `make kephalaion-backup-pull`); Einreichen und `make deploy ROLE=kephalaion` macht
+  der Nutzer, sobald ein Release mit `hub backup` auf der VM läuft. Folge-Task 039:
+  Export und Restore unabhängig von der Datenbank.
+
 - **Task 037 (`037-upgrade-auto-signale`) — `upgrade --auto`: SIGTERM und SIGINT ohne halben
   Zustand** (2026-11-11, Etappen 1–4 ausgeführt): Signale fängt nur der Zweig `--auto` ab;
   vor dem Ersetzen `failed`, `interrupted` ohne Änderung, danach laufen Neustart, Prüfung und
@@ -644,7 +663,6 @@ ist Nacharbeit des Nutzers)
     nötig (`konzept.md`, „Devcontainer“);
   - PostgreSQL-Umsetzung des Hub-Stores (DDL, `BIGINT`);
   - Migrationsrahmen, sobald Daten bleiben müssen;
-  - Kommando für eine neue `hub_id` nach Wiederherstellung aus einer Sicherung;
   - Markdown-Export des Stores;
   - Begrenzung von Fehlversuchen bei der Anmeldung — dringlicher, seit der Hub hinter dem
     Proxy nach außen spricht (Task 018); die Weboberfläche fragt seit Task 026 kein Token mehr
@@ -678,6 +696,20 @@ ist Nacharbeit des Nutzers)
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 038 — Sicherung des Hubs, Abnahme auf der VM** (nur der Nutzer; nach dem ersten Release
+  mit `hub backup` und `make deploy ROLE=kephalaion` in `~/dev/vm`, nichts von Hand): `systemctl
+  list-timers kephalaion-backup.timer` nennt den nächsten Lauf; `sudo systemctl start
+  kephalaion-backup.service` schreibt neben dem laufenden Dienst eine Sicherung nach
+  `/var/lib/kephalaion/backups/` (Datei `0600`, Verzeichnis `0700`, beides `kephalaion`), die
+  Zeile steht im Journal; `make kephalaion-backup-pull` holt den neuesten Stand auf den eigenen
+  Rechner. Das Wiederherstellen selbst ist nur durch Tests belegt, auf der VM nicht geprobt:
+  einmal mit einem Wegwerf-Hub oder in einem Wartungsfenster durchgehen (`installation.md`,
+  „Wiederherstellen“) — samt `hub reset-id` und dem Blick, ob die Nodes der anderen Rechner
+  ihre Replica leeren und neu abgleichen.
+- **Task 038 — vor einem Lauf des Timers mit älterem Binary:** Die Units dürfen erst mit einem
+  Release eingespielt werden, das `hub backup` kennt; mit einem älteren scheitert jeder Lauf mit
+  „Unbekanntes Kommando: hub backup“ (kein Schaden, aber ein fehlgeschlagener Dienst im Journal).
 
 - **Task 036 — `upgrade --auto`, Abnahme Teil B** (nach dem Folgerelease, also dem ersten Release
   nach dem mit Task 036; vorher beide Rechner von Hand auf genau das Release mit Task 036: die VM

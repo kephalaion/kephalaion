@@ -263,8 +263,9 @@ mit der nächsten Seite. So passen Seite und H zusammen, ohne Lese-Transaktion.
 - **`since` über H:** Liegt ein `since` über `hub_revision`, wurde der Hub aus einer Sicherung
   mit gleicher `hub_id` zurückgespielt. Der Node behandelt das wie einen Wechsel der `hub_id`.
   Das greift nur, bis der Hub wieder über dieses `since` hinaus geschrieben hat. **Grenze:** Ein
-  aus einer Sicherung zurückgespielter Hub braucht deshalb eine neue `hub_id`; bis es dafür ein
-  Kommando gibt, verwirft der Node die Replica selbst (`node hub rm` und `node hub add`).
+  aus einer Sicherung zurückgespielter Hub braucht deshalb eine neue `hub_id`: `kephalaion hub
+  reset-id` vergibt sie, bei angehaltenem `serve` (Task 038; `installation.md`, „Sicherung und
+  Wiederherstellung“). Der Node erkennt sie wie jeden Wechsel der `hub_id`.
 - Collections mit `allowed` falsch — nicht erlaubt, nicht mehr erlaubt oder unbekannt — entfernt
   der Node aus seiner Replica.
 - **Fest abonniert:** Eine Collection aus `subscribed` gleicht der Node ab, auch wenn er sie
@@ -872,7 +873,8 @@ abgebrochen, mit 503 und demselben Code; die Antwort liest dann niemand.
   oder eine Obergrenze je Schreibvorgang; in Fassung 1 gibt es kein Limit. Dasselbe gilt für
   `delete` und `rename` eines großen Verzeichnisses: eine Revision, und die Antwort trägt jede
   Zeile — bei `rename` samt Inhalt.
-- **Wiederherstellung aus einer Sicherung** braucht eine neue `hub_id` (siehe oben).
+- **Wiederherstellung aus einer Sicherung** braucht eine neue `hub_id` (siehe oben): `hub
+  reset-id` am Hub, kein Vorgang des Vertrags.
 - **Ohne Schlüssel keine Wiederholung.** Nach unklarem Ausgang eines Schreibvorgangs ohne
   `request_id` sieht der Aufrufer nach, statt zu wiederholen; hinter einem Proxy sind 502 und
   503 weitere unklare Ausgänge. Den Schlüssel (Task 032) gibt es nur für `create`, `write`,

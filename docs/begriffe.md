@@ -21,7 +21,8 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **lock file** (Sperrdatei) — `<db>.lock` neben der Datenbank einer Rolle. `serve` hält darauf
   eine exklusive Sperre (`flock`), solange es läuft; ein zweiter `serve` auf derselben Rolle
   scheitert daran. `status` prüft sie, ohne zu warten, und zeigt, ob `serve` läuft. CLI-Kommandos
-  kümmern sich nicht darum.
+  kümmern sich nicht darum — außer **hub reset-id**, das dieselbe Sperre nimmt und deshalb nur
+  bei angehaltenem `serve` läuft.
 - **config** — `~/.config/kephalaion/config.yaml` pro User, `/etc/kephalaion/config.yaml`
   global. Sagt nur, welche Rollen eingerichtet sind, wo ihre Datenbank liegt (`db:`) und wo
   ihr Dienst lauscht (`listen:`). Alles andere steht in der Datenbank der Rolle. Gefunden wird
@@ -494,6 +495,26 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **hub import** — `kephalaion hub import <collection> <verzeichnis>`: spielt ein Verzeichnis
   als Dokumente ein, Name = relativer Pfad; ein Schreibvorgang, eine Revision. Nicht zu
   verwechseln mit `config import`.
+- **hub backup** (Sicherung) — `kephalaion hub backup [--dir <verzeichnis>] [--keep <n>]`
+  (Task 038): schreibt neben dem laufenden `serve` eine **Sicherung** der Hub-Datenbank, ohne
+  einen Schreiber aufzuhalten — ein **snapshot**, auf WAL gestellt, geprüft (`integrity_check`,
+  `journal_mode` `wal`, Rolle `hub`, Schemafassung des Binarys) und erst dann umbenannt in
+  `hub-<UTC JJJJMMTTThhmmssZ>-r<revision>.db` (`0600`) im Verzeichnis `backups/` neben der
+  `hub.db` (`0700`) bzw. `--dir`. Die Revision im Namen ist die aus `db_info` der Datei. Eine
+  Datei, die die Prüfung nicht besteht, wird gelöscht (Exit-Code 1). Danach **Rotation**: Es
+  bleiben die jüngsten `--keep` Stände (Standard 14, `0` löscht nichts); gezählt und gelöscht
+  werden nur Dateien mit genau diesem Namensmuster. Nur SQLite. Nicht zu verwechseln mit `config
+  export` (Einstellungen und Tabellen ohne Inhalte) und mit der Rückweg-Datei von **auto
+  upgrade**. Wiederherstellen: `installation.md`, „Sicherung und Wiederherstellung“.
+- **snapshot** — die Kopie der Hub-Datenbank, die **hub backup** schreibt: ein Stand, eine
+  Revision, gelesen in einer Lesetransaktion (`VACUUM INTO`), auch während andere schreiben —
+  nie die Kopie einer halb geschriebenen Datei.
+- **hub reset-id** — `kephalaion hub reset-id` (Task 038): vergibt dem Hub eine neue **hub_id**
+  und nennt die bisherige und die neue; Dokumente, Revision, Collections, Nodes und Accounts
+  bleiben. Der Schritt nach dem Zurückspielen einer Sicherung: Jeder Node leert daraufhin beim
+  nächsten Abgleich seine Replica und gleicht von vorn ab. Nur bei angehaltenem `serve` — es
+  nimmt dessen **lock file** und endet sonst mit Exit-Code 1, ohne etwas zu ändern. In
+  **actions** steht `hub.reset_id` mit der bisherigen `hub_id` als `subject`.
 - **vendor/** — Oberstes Verzeichnis jeder Collection für mitgelieferte
   Vorlagen, etwa `vendor/k-playbook/`. Lesen darf jeder mit `read`; schreiben unter
   `vendor/<name>/` nur mit dem Scope `vendor/<name>` (siehe „scope“), direkt in `vendor/`
@@ -893,7 +914,10 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **hub_id** — Kennung des Hubs, eine ULID, von `hub init` vergeben und in `db_info`
   gehalten; `status` zeigt sie. Am Node ist `db_info.hub_id` der Replica maßgeblich,
   `hubs.hub_id` in `node.db` nur Kopie für Anzeige und Export. Weicht sie ab, gleicht der Node
-  von vorn ab.
+  von vorn ab. Eine neue vergibt außer `hub init` nur **hub reset-id** — für einen Hub, der aus
+  einer Sicherung zurückgespielt wurde: Eine Sicherung (**hub backup**) trägt die `hub_id` ihres
+  Hubs, und ohne den Wechsel bemerkte ein Node den älteren Stand nur, solange seine Replica über
+  der Revision des Hubs liegt.
 - **grant** / **revoke** — `kephalaion hub node grant <node> <collection>`: gibt einem Node
   `replicate` auf eine Collection; `revoke` nimmt es zurück. `kephalaion hub account grant
   <name> <collection> [--write] [--supersede] [--vendor <name>]… [--dir <pfad>]…` setzt die
@@ -911,7 +935,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Schreibvorgang über einen Node trägt je Dokument eine Zeile mit `account`, `carrier` (der
   Node) und `action` (`create`, `update`, `delete`, `rename`) unter der Revision des Vorgangs;
   die CLI am Hub schreibt `admin` ohne Träger. **node_rotate** schreibt `node.rotate` mit dem
-  Node als `account`, `carrier` und `subject`, ohne Revision.
+  Node als `account`, `carrier` und `subject`, ohne Revision; **hub reset-id** schreibt
+  `hub.reset_id` als `admin` mit der bisherigen `hub_id` als `subject`.
 - **--token-stdin** — liest ein Token als eine Zeile von der Standardeingabe. Ein Token wird
   nie als Argument übergeben und nur gekürzt angezeigt (`keph_…` und die letzten vier
   Zeichen).

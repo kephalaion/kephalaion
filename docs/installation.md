@@ -1447,6 +1447,201 @@ nennte über den Block seine Version), dann das Caddyfile, dann die Jail; Tokens
 danach. Wie es auf der Dev-VM aussieht: `~/dev/vm/ansible/roles/kephalaion/README.md`, „Stand
 2026-10-09“ (Rollen `kephalaion`, `caddy`, `fail2ban`, je `make deploy ROLE=…`).
 
+## Sicherung und Wiederherstellung
+
+Gesichert wird die Datenbank des Hubs. Sie hält alles, was sich nicht neu erzeugen lässt:
+Inhalte, Versionsgeschichte, Collections, Nodes, Accounts und Rechte. `node.db` und die Replicas
+brauchen keine Sicherung — Replicas sind abgeleitet und gleichen sich neu ab, die Hub-Einträge
+des Nodes samt ihren Tokens sichert `config export`.
+
+### Sichern: `hub backup`
+
+```sh
+sudo -u kephalaion kephalaion hub backup        # global; pro User: kephalaion hub backup
+# Sicherung: /var/lib/kephalaion/backups/hub-20261114T021500Z-r5411.db (48234496 Bytes, Revision 5411); 14 Stände behalten, 1 gelöscht.
+```
+
+`kephalaion hub backup [--dir <verzeichnis>] [--keep <n>] [--config <pfad>]` läuft **neben
+`serve`**: Der Dienst bleibt an, und kein Schreiber wartet. Die Sicherung ist ein Stand — eine
+Revision, nie die Kopie einer halb geschriebenen Datei. Die `hub.db` von Hand zu kopieren,
+leistet das nicht: Die Datenbank steht auf WAL, der jüngste Stand liegt dann in `hub.db-wal`.
+
+- **Ablauf:** Snapshot (`VACUUM INTO`, in einer Lesetransaktion) in eine verdeckte Datei
+  `.hub-backup-<zufall>.tmp` im Zielverzeichnis, auf WAL umstellen, prüfen, schließen und erst
+  dann umbenennen in `hub-<UTC JJJJMMTTThhmmssZ>-r<revision>.db`. Die Revision im Namen ist die
+  aus `db_info` der geschriebenen Datei, also die des Snapshots.
+- **Prüfung** der geschriebenen Datei: `PRAGMA integrity_check` ist `ok`, `journal_mode` ist
+  `wal`, die Rolle ist `hub`, die Schemafassung die dieses Binarys. Besteht sie eine davon nicht,
+  wird sie gelöscht, und das Kommando endet mit Exit-Code 1 — eine fehlerhafte Sicherung bleibt
+  nie liegen. Die Rotation läuft dann nicht: Ein Fehlschlag kostet keinen alten Stand.
+- **Ort und Rechte:** ohne `--dir` das Verzeichnis `backups/` neben der `hub.db` (global
+  `/var/lib/kephalaion/backups/`); fehlt es, wird es mit `0700` angelegt. Jede Sicherung hat
+  `0600`. Sie enthält alle Inhalte und die Hashes der Tokens — sie gehört nur dem Benutzer, unter
+  dem der Hub läuft, und wird auf dem Rechner nicht weiter freigegeben.
+- **Rotation:** Nach einer gelungenen Sicherung bleiben die jüngsten `--keep` Stände (Standard
+  14, die neue mitgezählt), ältere werden gelöscht. Gezählt und gelöscht werden nur Dateien, die
+  genau wie eine Sicherung heißen (`hub-<zeit>-r<revision>.db`); alles andere im Verzeichnis
+  bleibt. `--keep 0` löscht nichts.
+- **Ausgabe:** eine Zeile mit Pfad, Größe, Revision und der Zahl behaltener und gelöschter
+  Stände. Exit-Code 0 gesichert, 1 Fehler (auch wenn die Sicherung liegt, aber alte Stände sich
+  nicht löschen ließen — die Zeile steht dann trotzdem da), 2 falscher Aufruf.
+- **Als Systembenutzer:** In der globalen Installation `hub backup` von Hand nur als `sudo -u
+  kephalaion …`. Als root angelegt, gehörten `backups/` und die Dateien root, und der Timer, der
+  als `kephalaion` läuft, scheiterte daran.
+- Gesichert wird nur eine SQLite-Datenbank.
+
+### Regelmäßig: ein Timer (global)
+
+Zwei Units neben `kephalaion.service`. Der Dienst der Sicherung übernimmt aus der System-Unit
+(`kephalaion service unit --system`) Benutzer, config und Härtung — und `StateDirectory`: Unter
+`ProtectSystem=strict` wäre `/var/lib/kephalaion` sonst nicht beschreibbar, und `backups/` liegt
+darunter.
+
+```ini
+# /etc/systemd/system/kephalaion-backup.service
+[Unit]
+Description=Kephalaion: Sicherung der Hub-Datenbank (kephalaion hub backup)
+Documentation=https://github.com/kephalaion/kephalaion/blob/main/docs/installation.md
+ConditionPathExists=/var/lib/kephalaion/hub.db
+
+[Service]
+Type=oneshot
+User=kephalaion
+Group=kephalaion
+Environment=KEPHALAION_CONFIG=/etc/kephalaion/config.yaml
+ExecStart=/usr/local/bin/kephalaion hub backup --keep 14
+StateDirectory=kephalaion
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+```
+
+```ini
+# /etc/systemd/system/kephalaion-backup.timer
+[Unit]
+Description=Kephalaion: tägliche Sicherung der Hub-Datenbank
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now kephalaion-backup.timer
+systemctl list-timers kephalaion-backup.timer       # nächster Lauf
+sudo systemctl start kephalaion-backup.service      # einmal sofort
+journalctl -u kephalaion-backup.service             # die Zeile jeder Sicherung, oder der Fehler
+```
+
+`Persistent=true` holt einen Lauf nach, den der Rechner ausgeschaltet verpasst hat. Der Timer
+läuft unabhängig von `kephalaion.service` — auch bei angehaltenem Dienst. Pro User gibt es keinen
+fertigen Timer; dort ruft ein eigener Timer oder cron `kephalaion hub backup` auf.
+
+**Die Sicherungen liegen auf demselben Rechner wie die `hub.db`.** Gegen den Verlust des Rechners
+oder seiner Platte hilft nur eine Kopie woanders. Geholt wird sie über den Zugang des Verwalters,
+ohne das Verzeichnis freizugeben:
+
+```sh
+ssh <admin>@<hub> 'sudo ls /var/lib/kephalaion/backups'
+ssh <admin>@<hub> 'sudo cat /var/lib/kephalaion/backups/hub-20261114T021500Z-r5411.db' \
+  > hub-20261114T021500Z-r5411.db && chmod 600 hub-20261114T021500Z-r5411.db
+```
+
+Auf der Dev-VM macht das `make kephalaion-backup-pull` in `~/dev/vm`
+(`ansible/roles/kephalaion/README.md`).
+
+### Wiederherstellen
+
+Zurückgespielt wird bei angehaltenem Dienst, global als Verwalter:
+
+```sh
+K="sudo -u kephalaion kephalaion"
+sudo systemctl stop kephalaion                                   # 1. Dienst stoppen
+sudo install -d -o kephalaion -g kephalaion -m 0700 /var/lib/kephalaion/alt
+sudo sh -c 'mv /var/lib/kephalaion/hub.db* /var/lib/kephalaion/alt/'   # 2. hub.db samt -wal, -shm (und .lock) beiseite
+sudo install -o kephalaion -g kephalaion -m 0600 \
+  /var/lib/kephalaion/backups/hub-20261114T021500Z-r5411.db \
+  /var/lib/kephalaion/hub.db                                     # 3. die Sicherung als hub.db einsetzen
+$K hub reset-id                                                  # 4. neue hub_id: <alt> → <neu>
+sudo systemctl start kephalaion                                  # 5. Dienst starten
+$K status                                                        # 6. Revision der Sicherung, neue hub_id, serve läuft
+```
+
+- **Schritt 2** nimmt `-wal` und `-shm` mit: Ein liegengebliebenes `hub.db-wal` der alten Datei
+  gehört nicht zur eingesetzten. Ist die `hub.db` verloren, entfällt der Schritt bis auf solche
+  Reste. `alt/` löscht der Verwalter, wenn der Hub wieder läuft.
+- **Schritt 3 von außen:** Liegt die Sicherung nur noch auf dem eigenen Rechner, kommt sie zuerst
+  zurück auf den Rechner des Hubs und von dort an ihre Stelle:
+
+  ```sh
+  scp -p hub-20261114T021500Z-r5411.db <admin>@<hub>:
+  ssh <admin>@<hub> 'sudo install -o kephalaion -g kephalaion -m 0600 \
+    hub-20261114T021500Z-r5411.db /var/lib/kephalaion/hub.db && rm hub-20261114T021500Z-r5411.db'
+  ```
+- **Schritt 4 als Systembenutzer**, wie `hub backup`: `hub reset-id` nimmt die Sperre von `serve`
+  und legt dafür `hub.db.lock` an; beim Öffnen entstehen `-wal` und `-shm`. Als root angelegt,
+  gehörten sie root, und `serve` scheiterte als `kephalaion` daran. Läuft `serve` noch, endet
+  `hub reset-id` mit Exit-Code 1 und ändert nichts.
+- **Dieselbe Schemafassung:** Eine Sicherung passt nur zu einem Binary mit der Schemafassung, mit
+  der sie geschrieben wurde (`kephalaion status` zeigt sie). Passt sie nicht, lehnen `hub
+  reset-id` und `serve` die Datei ab. Über einen Sprung der Schemafassung hinweg führt nur der
+  Weg unter „Neue Schemafassung“ (`config export`, `hub import`).
+
+Pro User dasselbe ohne `sudo`, mit den Orten unter `~/.local/share/kephalaion/` und `kephalaion
+service uninstall` bzw. `install` statt `systemctl`.
+
+**Warum `hub reset-id` dazugehört.** Eine Sicherung entsteht im laufenden Betrieb und ist nie
+sicher der letzte Stand: Nodes können danach schon spätere Revisionen abgeglichen haben. Mit
+derselben `hub_id` bemerkt ein Node das nur, solange sein Stand über der Revision des Hubs liegt.
+Schreibt der zurückgespielte Hub weiter und erreicht diese Revision wieder, fragt der Node „alles
+seit X“, bekommt nur das Neue, und seine Replica behält Stände, die es am Hub nicht mehr gibt —
+still. `kephalaion hub reset-id [--config <pfad>]` vergibt dem Hub eine neue `hub_id` (Ausgabe
+`hub_id: <alt> → <neu>`); Dokumente und Revision bleiben. An der neuen `hub_id` erkennt jeder
+Node den Wechsel: Beim nächsten Abgleich leert er seine Replica und gleicht von vorn ab (`node
+sync` meldet „hub_id gewechselt … Replica geleert und von vorn abgeglichen“; `serve` tut es im
+Hintergrund von selbst). Clients sehen das wie jedes Leeren der Replica: `changes` meldet
+`reset`.
+
+**Was nach der Sicherung geschah, fehlt dem Hub** — Dokumente und Revisionen, aber auch jede
+Änderung an Collections, Nodes, Accounts und Rechten, und jedes Token, das danach ersetzt wurde.
+Der Hub speichert von einem Token nur den Hash; zurückgespielt gilt wieder der Hash aus der Zeit
+der Sicherung. Für einen Node oder Account, dessen Token nach der Sicherung rotiert wurde (`node
+setup`, `node hub rotate`, `node account setup`, `node account rotate`), heißt das:
+
+- **Das Token, das er jetzt hat, kennt der Hub nicht.** Der Node bekommt bei `node sync` und
+  `node hub check` „nicht angemeldet“; er leert seine Replica dann auch nicht, sondern liefert
+  weiter aus dem alten Stand, bis er wieder hineinkommt. Ein Account ist `ungültig` (`node account
+  list`, `status`); kommt schon sein Node nicht hinein, steht dort `nicht geprüft`.
+- **Selbst rotieren hilft nicht:** `node hub rotate` und `node account rotate` melden sich mit dem
+  bisherigen Token an, und das gilt nicht — der Hub lehnt ab, nichts ändert sich.
+- **Am Hub gilt wieder das Token von vor der Rotation** — auch ein Einrichtungscode oder
+  Einrichtungstoken, das längst eingelöst war. Wer es noch hat (Shell-Verlauf, Messenger), käme
+  damit hinein, bis es ersetzt ist.
+
+Der Verwalter gibt deshalb für jeden solchen Node und Account ein neues aus; das alte ist damit
+wertlos, und eingelöst wird wie bei der Einrichtung:
+
+```sh
+$K hub node token <name>            # neuer Einrichtungscode (ohne public_url: das Token)
+# am Node: kephalaion node setup <code> — übernimmt ihn für den vorhandenen Hub-Eintrag und rotiert;
+# ohne Code: kephalaion node hub token <alias> --token-stdin, danach kephalaion node hub rotate <alias>
+
+$K hub account token <name>         # neues Einrichtungstoken
+# beim User: die alte Token-Datei ~/.config/kephalaion/tokens/<hub>/<account>.token löschen
+# (setup bricht ab, solange sie liegt), dann kephalaion node account setup <hub> <account> <token>
+```
+
+Welche Tokens betroffen sind, weiß der Hub nicht — von der Rotation steht in der Sicherung
+nichts. Es zeigt sich am Node (`node hub check <alias>`, `node account list`). Nodes und
+Accounts, die erst nach der Sicherung angelegt wurden, gibt es am Hub nicht mehr; sie werden neu
+angelegt.
+
 ## Neue Schemafassung: node.db oder hub.db neu anlegen
 
 `kephalaion upgrade --auto` erkennt einen solchen Sprung vor dem Ersetzen (die Probe mit dem neuen
@@ -1749,8 +1944,9 @@ Feste Angaben, die sich nicht ohne Hinweis im Release ändern:
 | Binary | `/usr/local/bin/kephalaion`, `root:root`, `0755` |
 | Systembenutzer | `kephalaion`, `--system`, eigene Gruppe, Home `/var/lib/kephalaion`, Shell `/usr/sbin/nologin` |
 | config | `/etc/kephalaion/config.yaml`, `0644`; Verzeichnis `/etc/kephalaion/`, `kephalaion:kephalaion`, `0755` |
-| Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`), `kephalaion:kephalaion`, `0700` |
+| Daten | `/var/lib/kephalaion/` (`node.db`, `hub.db`, `replicas/`, `backups/`), `kephalaion:kephalaion`, `0700` |
 | Unit | `/etc/systemd/system/kephalaion.service`, Inhalt aus `kephalaion service unit --system`, `0644` |
+| Sicherung des Hubs | `kephalaion hub backup --keep 14` als `kephalaion`, täglich über `kephalaion-backup.timer` und `kephalaion-backup.service` (oneshot) in `/etc/systemd/system/`, `0644`; Ziel `/var/lib/kephalaion/backups/hub-<UTC JJJJMMTTThhmmssZ>-r<revision>.db`, `0600`, Verzeichnis `0700` — siehe „Sicherung und Wiederherstellung“ |
 | Ports | Node `127.0.0.1:7433` (MCP unter `/mcp`), Hub `127.0.0.1:7434` |
 | Reverse-Proxy | Caddy, `/etc/caddy/Caddyfile`: nur `/kephalaion/hub/*` nach `localhost:7434`, mit `uri strip_prefix /kephalaion` und `header_up Host {upstream_hostport}`; Adresse für Nodes `https://<name>/kephalaion/hub`; wahlweise der Rest von `/kephalaion/*` (Weboberfläche unter `https://<name>/kephalaion/`) hinter `forward_auth` mit `copy_headers X-User X-User-Email X-User-Roles` in `route`, dazu für die ganze Site `request_header -X-User*` und `-X_User*` (entfernt jeden Header ab `X-User` des Browsers, auch `X-User-Roles`; die alte Vorlage mit vier einzelnen Zeilen vor dem Upgrade auf die Admin-Ansicht anpassen); nach außen 443 (und 80 nur für Let's Encrypt) — siehe „Hub für Nodes anderer Rechner“ |
 | settings des Hubs | `public_url` (die Adresse für Nodes, `https://<name>/kephalaion/hub`) und `alias` (der Alias, unter dem Nodes den Hub eintragen): stehen im Einrichtungscode von `hub node add` und `hub node token`; gesetzt mit `config set hub …` |
@@ -1776,6 +1972,12 @@ Reihenfolge und Regeln:
    set hub alias <alias>`, als Systembenutzer mit `--config /etc/kephalaion/config.yaml`. Beide
    prüft `config set` (`public_url` nur `https`, `alias` nach der Namensregel); ein zweiter Lauf
    mit denselben Werten ändert nichts, `config show` zeigt sie.
+
+7. **Sicherung des Hubs**, nur auf einem Rechner mit Hub: die beiden Units aus „Sicherung und
+   Wiederherstellung“ ablegen, `daemon-reload`, den Timer einschalten und starten
+   (`kephalaion-backup.timer`; der Dienst dazu wird nicht eingeschaltet, ihn startet der Timer).
+   `hub backup` braucht ein Release, das es kennt — vorher scheitert der Lauf des Timers mit
+   „Unbekanntes Kommando“, sonst geschieht nichts. Wiederhergestellt wird nie automatisch.
 
 Alle Schritte sind wiederholbar: Ein zweiter Lauf ändert nichts, solange Version und Unit
 gleich bleiben.
