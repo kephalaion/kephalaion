@@ -181,6 +181,11 @@ der Index zeigt so auch vor der ersten `README.md` eine Beschreibung. Die festen
 bleiben, auch wenn nichts darin liegt; legt jemand eine `README.md` hinein, gilt deren
 Beschreibung. Was Kephalaion später selbst ergänzt, kommt in dieselbe Liste.
 
+**Weitere Verzeichnisse direkt unter `docs/`** (bei k-playbook etwa `sources/` und
+`guidelines/`) kennt die Liste nicht, und `docs/README.md` zählt sie nicht auf; sie sagt nur,
+dass es mehr geben kann und `docs/index.md` alle nennt (2026-11-14, Anfrage aus k-playbook).
+Der Index führt sie wie jedes Verzeichnis mit Titel und Beschreibung aus ihrer `README.md`.
+
 ## Aufbau der `index.md` (entschieden am 2026-10-16)
 
 So knapp wie möglich und ausreichend genau. Beispiel `docs/generated/index.md`:
