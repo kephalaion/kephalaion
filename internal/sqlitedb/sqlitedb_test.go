@@ -228,3 +228,90 @@ func TestOpenForeignKeepsJournalMode(t *testing.T) {
 		t.Errorf("journal_mode nach Open = %q, erwartet delete", m)
 	}
 }
+
+// Snapshot schreibt eine eigenständige Kopie: 0600, auf WAL, ohne -wal und
+// -shm daneben, mit dem Inhalt der Quelle — auch wenn die Quelle offen ist
+// und ihr letzter Stand noch im WAL liegt. Die Quelle bleibt, wie sie ist.
+func TestSnapshot(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "x.db")
+	db, err := Create(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := CreateSchema(ctx, db, "CREATE TABLE extra (a TEXT);", "hub", 3, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO extra (a) VALUES ('eins')`); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "kopie.db")
+	if err := Snapshot(ctx, src, dst); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("Modus %v, erwartet 0600", fi.Mode().Perm())
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Stat(dst + suffix); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s liegt neben dem Snapshot (%v)", suffix, err)
+		}
+	}
+
+	// Was danach in der Quelle geschieht, steht nicht in der Kopie.
+	if _, err := db.ExecContext(ctx, `INSERT INTO extra (a) VALUES ('zwei')`); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := Open(ctx, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cp.Close()
+	var mode string
+	if err := cp.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+		t.Errorf("journal_mode der Kopie = %q, %v", mode, err)
+	}
+	if _, err := CheckInfo(ctx, cp, "hub", 3); err != nil {
+		t.Errorf("CheckInfo der Kopie: %v", err)
+	}
+	var n int
+	if err := cp.QueryRowContext(ctx, `SELECT COUNT(*) FROM extra`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("Zeilen in der Kopie = %d, %v; erwartet 1", n, err)
+	}
+
+	// Ein vorhandenes Ziel wird nie überschrieben.
+	if err := Snapshot(ctx, src, dst); !errors.Is(err, ErrExists) {
+		t.Errorf("Snapshot auf vorhandenes Ziel: %v, erwartet ErrExists", err)
+	}
+	if _, err := os.Stat(dst); err != nil {
+		t.Errorf("das vorhandene Ziel ist weg: %v", err)
+	}
+}
+
+// Scheitert der Snapshot, bleibt vom Ziel nichts zurück.
+func TestSnapshotFailureLeavesNothing(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := Snapshot(ctx, filepath.Join(dir, "fehlt.db"), filepath.Join(dir, "kopie.db")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("fehlende Quelle: %v, erwartet ErrNotFound", err)
+	}
+	// Keine Datenbank: VACUUM INTO scheitert, die vorab angelegte Datei geht.
+	src := filepath.Join(dir, "kaputt.db")
+	if err := os.WriteFile(src, []byte("das ist keine Datenbank, nur Text, lang genug für einen Kopf …………"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Snapshot(ctx, src, filepath.Join(dir, "kopie.db")); err == nil {
+		t.Error("Snapshot einer Datei, die keine Datenbank ist, gelingt")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "kaputt.db" {
+		t.Errorf("zurückgeblieben: %v", entries)
+	}
+}

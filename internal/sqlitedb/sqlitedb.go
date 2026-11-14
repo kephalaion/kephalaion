@@ -3,9 +3,10 @@
 // Verbindung, db_info prüfen (Schemafassung, Rolle), settings lesen und
 // schreiben.
 //
-// SQLite-eigen ist nur das Öffnen. Die Abfragen auf db_info und settings
-// folgen der Regel für den Hub: Sie laufen auch in PostgreSQL (siehe
-// internal/sqlq), denn der Hub benutzt sie mit.
+// SQLite-eigen sind nur das Öffnen und der Snapshot (Snapshot, für die
+// Sicherung des Hubs). Die Abfragen auf db_info und settings folgen der Regel
+// für den Hub: Sie laufen auch in PostgreSQL (siehe internal/sqlq), denn der
+// Hub benutzt sie mit.
 package sqlitedb
 
 import (
@@ -193,6 +194,110 @@ func Remove(path string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Snapshot schreibt eine vollständige, in sich stimmige Kopie der Datenbank
+// src nach dst, auch während andere Prozesse in src schreiben: ein Stand, nie
+// eine halb geschriebene Datei. dst darf es noch nicht geben; die Kopie
+// entsteht mit 0600, steht wie jede angelegte Datenbank auf WAL, ist mit
+// integrity_check geprüft und geschlossen — neben ihr liegen danach weder -wal
+// noch -shm. Scheitert etwas, bleibt von dst nichts zurück.
+//
+// VACUUM INTO läuft als einzelne Anweisung, nie in einer mit BeginTx
+// begonnenen Transaktion: _txlock=immediate im dsn machte daraus BEGIN
+// IMMEDIATE und nähme die Schreibsperre. So liest es in einer Lesetransaktion
+// und hält keinen Schreiber auf. Seine Kopie steht auf journal_mode=delete,
+// und Open stellt nie um — ohne das Umstellen hier liefe eine zurückgespielte
+// Datenbank mit Rollback-Journal.
+func Snapshot(ctx context.Context, src, dst string) (err error) {
+	db, err := Open(ctx, src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	// Vorab leer mit 0600 anlegen: VACUUM INTO nimmt eine leere Datei an, und
+	// der Modus hängt so nicht an der umask.
+	f, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%w: %s", ErrExists, dst)
+	}
+	if err != nil {
+		return fmt.Errorf("Snapshot %s nicht anlegbar: %w", dst, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = Remove(dst)
+		}
+	}()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("Snapshot %s nicht anlegbar: %w", dst, err)
+	}
+	if _, err := db.ExecContext(ctx, `VACUUM INTO ?`, dst); err != nil {
+		return fmt.Errorf("Snapshot von %s nach %s: %w", src, dst, err)
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("Datenbank %s schließen: %w", src, err)
+	}
+	if err := checkSnapshot(ctx, dst); err != nil {
+		return err
+	}
+	return syncFile(dst)
+}
+
+// checkSnapshot stellt die Kopie auf WAL und prüft sie: journal_mode und
+// integrity_check. Danach ist sie geschlossen.
+func checkSnapshot(ctx context.Context, path string) error {
+	db, err := open(ctx, path, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	// Eine Verbindung: Beim Schließen der letzten räumt SQLite -wal und -shm
+	// weg.
+	db.SetMaxOpenConns(1)
+	var mode string
+	if err := db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&mode); err != nil {
+		return fmt.Errorf("Snapshot %s: journal_mode lesen: %w", path, err)
+	}
+	if mode != "wal" {
+		return fmt.Errorf("Snapshot %s: journal_mode ist %s, nicht wal", path, mode)
+	}
+	rows, err := db.QueryContext(ctx, `PRAGMA integrity_check`)
+	if err != nil {
+		return fmt.Errorf("Snapshot %s: integrity_check: %w", path, err)
+	}
+	var found []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("Snapshot %s: integrity_check: %w", path, err)
+		}
+		found = append(found, line)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("Snapshot %s: integrity_check: %w", path, err)
+	}
+	if len(found) != 1 || found[0] != "ok" {
+		return fmt.Errorf("Snapshot %s: integrity_check meldet: %s", path, strings.Join(found, "; "))
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("Snapshot %s schließen: %w", path, err)
+	}
+	return nil
+}
+
+// syncFile bringt eine geschriebene Datei auf die Platte.
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("%s sichern: %w", path, err)
+	}
+	return f.Close()
 }
 
 // Querier ist, was *sql.DB und *sql.Tx gemeinsam haben.

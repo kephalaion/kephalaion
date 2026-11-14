@@ -67,6 +67,12 @@ type Store interface {
 	// (CheckSetting); UnsetSetting entfernt ihn und sagt, ob er gesetzt war.
 	SetSetting(ctx context.Context, key, value string) error
 	UnsetSetting(ctx context.Context, key string) (bool, error)
+	// ResetHubID vergibt eine neue hub_id und liefert die bisherige und die
+	// neue (backup.go). Jeder Node leert daraufhin beim nächsten Abgleich
+	// seine Replica und gleicht von vorn ab — gedacht für einen Stand, der
+	// zurückgespielt wurde und älter sein kann als das, was Nodes schon
+	// haben. Nur bei angehaltenem serve; das prüft der Aufrufer.
+	ResetHubID(ctx context.Context) (old, fresh string, err error)
 
 	Collections(ctx context.Context) ([]Collection, error)
 	// Collection liest eine Collection; ErrNotFound, wenn es sie nicht gibt.

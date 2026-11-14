@@ -146,6 +146,8 @@ const hubUsage = `Aufruf:
   kephalaion hub account add|list|show|set|rm|lock|unlock|grant|revoke|token …
   kephalaion hub doc put|get|list|rm …
   kephalaion hub import <collection> <verzeichnis> [--prefix pfad/]
+  kephalaion hub backup [--dir verzeichnis] [--keep n]
+  kephalaion hub reset-id
 
 Kommandos:
   init         richtet den Hub ein: Datenbank, Schema, Abschnitt hub: in der config
@@ -156,10 +158,15 @@ Kommandos:
                erzeugt ein Einrichtungstoken
   doc          legt Dokumente an, ersetzt, liest, listet und löscht sie
   import       spielt ein Verzeichnis als Dokumente ein, in einer Revision
+  backup       schreibt neben dem laufenden serve eine geprüfte Sicherung der
+               Hub-Datenbank und räumt alte Stände ab
+  reset-id     vergibt eine neue hub_id — der Schritt nach dem Zurückspielen
+               einer Sicherung, nur bei angehaltenem serve
 
 Hilfe: kephalaion hub collection --help, kephalaion hub node --help,
 kephalaion hub account --help, kephalaion hub doc --help,
-kephalaion hub import --help
+kephalaion hub import --help, kephalaion hub backup --help,
+kephalaion hub reset-id --help
 `
 
 const nodeUsage = `Aufruf:
@@ -237,6 +244,10 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runHubDoc(args[1:], stdin, stdout, stderr)
 	case r == config.Hub && args[0] == "import":
 		return runHubImport(args[1:], stdout, stderr)
+	case r == config.Hub && args[0] == "backup":
+		return runHubBackup(args[1:], stdout, stderr)
+	case r == config.Hub && args[0] == "reset-id":
+		return runHubResetID(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "setup":
 		return runNodeSetup(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "hub":

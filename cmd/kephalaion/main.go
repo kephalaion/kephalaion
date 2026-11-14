@@ -26,8 +26,9 @@ Kommandos:
   upgrade     aktualisiert dieses Binary auf das neueste Release; mit --auto
               nur, wenn es ohne Menschen gefahrlos geht
   hub         richtet den Hub ein, pflegt seine Collections, Nodes und
-              Accounts und spielt Dokumente ein (init, collection, node,
-              account, doc, import)
+              Accounts, spielt Dokumente ein und sichert die Datenbank
+              (init, collection, node, account, doc, import, backup,
+              reset-id)
   node        richtet den Node ein, pflegt seine Hubs und gewünschten
               Collections, tauscht Tokens von Accounts, gleicht ab, zeigt
               Dokumente der Replica, gleicht Ordner ab, meldet sich bei den

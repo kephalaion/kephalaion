@@ -134,11 +134,7 @@ func (c *command) openHub(ctx context.Context) (hubstore.Store, error) {
 
 // openHubOf öffnet die Datenbank des Hubs aus einer geladenen config.
 func openHubOf(ctx context.Context, cfg config.Config) (hubstore.Store, error) {
-	sec := cfg.Section(config.Hub)
-	if sec == nil {
-		return nil, errors.New("der Hub ist nicht eingerichtet; zuerst: kephalaion hub init")
-	}
-	addr, err := config.ParseDB(sec.DB)
+	addr, err := hubDBOf(cfg)
 	if err != nil {
 		return nil, err
 	}
