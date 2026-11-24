@@ -21,8 +21,9 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **lock file** (Sperrdatei) — `<db>.lock` neben der Datenbank einer Rolle. `serve` hält darauf
   eine exklusive Sperre (`flock`), solange es läuft; ein zweiter `serve` auf derselben Rolle
   scheitert daran. `status` prüft sie, ohne zu warten, und zeigt, ob `serve` läuft. CLI-Kommandos
-  kümmern sich nicht darum — außer **hub reset-id**, das dieselbe Sperre nimmt und deshalb nur
-  bei angehaltenem `serve` läuft.
+  kümmern sich nicht darum — außer **hub reset-id** und **hub restore**, die dieselbe Sperre
+  nehmen und deshalb nur bei angehaltenem `serve` laufen, und **hub export**, das sie ohne zu
+  warten zu nehmen versucht und danach `serve_stopped` setzt.
 - **config** — `~/.config/kephalaion/config.yaml` pro User, `/etc/kephalaion/config.yaml`
   global. Sagt nur, welche Rollen eingerichtet sind, wo ihre Datenbank liegt (`db:`) und wo
   ihr Dienst lauscht (`listen:`). Alles andere steht in der Datenbank der Rolle. Gefunden wird
