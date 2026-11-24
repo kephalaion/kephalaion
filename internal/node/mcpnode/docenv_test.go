@@ -519,10 +519,15 @@ type docEnv struct {
 	connect func(h store.Hub) (contract.Hub, error)
 	// log ist das Log der Anfragen an den Node.
 	log *lockedBuffer
+	// syncWait ersetzt, wenn gesetzt, den wartenden Anstoß des Werkzeugs
+	// sync; sonst gleicht er den Eintrag gegen seine Attrappe ab (syncNow).
+	syncWait func(ctx context.Context, h store.Hub) (SyncOutcome, error)
 
 	mu sync.Mutex
 	// kicks sind die angestoßenen Abgleiche, nach Alias.
 	kicks []string
+	// waits sind die Aufrufe des wartenden Anstoßes, nach Alias.
+	waits []string
 }
 
 // lockedBuffer ist ein Puffer für das Log, sicher über Goroutinen.
@@ -559,7 +564,54 @@ func (e *docEnv) link() HubLink {
 			defer e.mu.Unlock()
 			e.kicks = append(e.kicks, h.Name)
 		},
+		SyncWait: func(ctx context.Context, h store.Hub) (SyncOutcome, error) {
+			e.mu.Lock()
+			e.waits = append(e.waits, h.Name)
+			wait := e.syncWait
+			e.mu.Unlock()
+			if wait != nil {
+				return wait(ctx, h)
+			}
+			return e.syncNow(ctx, h)
+		},
 	}
+}
+
+// syncNow gleicht einen Eintrag gegen seine Attrappe ab und liefert das
+// Ergebnis, wie der Abgleich im Hintergrund von serve es einem Wartenden
+// gibt.
+func (e *docEnv) syncNow(ctx context.Context, h store.Hub) (SyncOutcome, error) {
+	res := (&replica.Syncer{Nodes: e.nodes}).SyncEntry(ctx, h, func(h store.Hub) (contract.Hub, error) {
+		return e.hubs[h.Name], nil
+	})
+	var ce *contract.Error
+	switch {
+	case ctx.Err() != nil:
+		return SyncOutcome{}, ctx.Err()
+	case res.Gone:
+		return SyncOutcome{}, ErrSyncGone
+	case res.Err != nil:
+		return SyncOutcome{Kind: res.Kind, Contract: errors.As(res.Err, &ce)}, nil
+	}
+	return SyncOutcome{At: res.RecordedAt}, nil
+}
+
+// takeWaits liefert die Aufrufe des wartenden Anstoßes seit dem letzten
+// Aufruf.
+func (e *docEnv) takeWaits() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := e.waits
+	e.waits = nil
+	return out
+}
+
+// waitWith ersetzt den wartenden Anstoß; nil stellt den Abgleich gegen die
+// Attrappe wieder her.
+func (e *docEnv) waitWith(fn func(ctx context.Context, h store.Hub) (SyncOutcome, error)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.syncWait = fn
 }
 
 // takeKicks liefert die angestoßenen Abgleiche seit dem letzten Aufruf.

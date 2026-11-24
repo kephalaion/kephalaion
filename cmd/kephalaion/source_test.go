@@ -181,7 +181,7 @@ func TestFetchReleaseThroughNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var kicks []string
-	link := nodeHubLink(cfg, hs, func(h nodestore.Hub) { kicks = append(kicks, h.Name) }, nil)
+	link := nodeHubLink(cfg, hs, func(h nodestore.Hub) { kicks = append(kicks, h.Name) }, nil, nil)
 	srv := httptest.NewServer(mcpnode.NewHandler(ns, "test", func() upgrade.Report { return upgrade.Report{} }, link))
 	t.Cleanup(srv.Close)
 	endpoint := srv.URL + mcpnode.Path

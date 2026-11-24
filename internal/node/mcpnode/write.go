@@ -39,8 +39,8 @@ import (
 // error.message (WriteOutput). Nur ein abgebrochener Aufruf und Argumente,
 // die schon das SDK gegen das Schema ablehnt, kommen ohne Code.
 
-// HubLink ist, was die Werkzeuge, die schreiben, von cmd/kephalaion bekommen:
-// den Weg zum Hub und den Anstoß des Abgleichs. Welche Umsetzung des Vertrags
+// HubLink ist, was die Werkzeuge, die schreiben, und das Werkzeug sync von
+// cmd/kephalaion bekommen: den Weg zum Hub und den Anstoß des Abgleichs. Welche Umsetzung des Vertrags
 // ein Eintrag bekommt, entscheidet cmd/kephalaion; internal/node kennt nur
 // contract.Hub.
 type HubLink struct {
@@ -52,6 +52,14 @@ type HubLink struct {
 	// Sync stößt den Abgleich eines Hub-Eintrags an und wartet nicht darauf;
 	// ohne Sync geschieht nichts.
 	Sync func(h store.Hub)
+	// SyncWait stößt den Abgleich eines Hub-Eintrags an und wartet auf das
+	// Ergebnis des ersten Abgleichs, der nach dem Aufruf begonnen hat (Task
+	// 042, das Werkzeug sync; sync.go). Läuft schon einer, gilt sein
+	// Nachfolger. Ein Fehler heißt, dass es kein Ergebnis gibt: mit
+	// ErrUnsupported eingehüllt der Transport (ssh), ErrSyncGone,
+	// ErrSyncStopped, sonst der Fehler von ctx — dann läuft der Abgleich
+	// weiter. Ohne SyncWait meldet das Werkzeug unsupported.
+	SyncWait func(ctx context.Context, h store.Hub) (SyncOutcome, error)
 	// Recheck stößt den Abgleich eines Hub-Eintrags an, nachdem über einen
 	// Proxy ein Paar zu einem Account abgewiesen wurde, den die Replica
 	// kennt (Logins.KnownInvalid; Task 025): Die Zeile kann veraltet sein,

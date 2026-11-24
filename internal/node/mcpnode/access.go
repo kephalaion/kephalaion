@@ -84,11 +84,13 @@ func toolFailure(ctx context.Context, err error) error {
 }
 
 // request ist der gemeinsame Stand einer Anfrage: die Anmeldungen und die
-// Hub-Einträge.
+// Hub-Einträge. hidden sagt, dass die Antwort verdeckt ist; dann sind beide
+// leer.
 type request struct {
 	nodes   store.Store
 	logins  Logins
 	entries map[string]store.Hub
+	hidden  bool
 }
 
 // requestHeader sind die HTTP-Header der Anfrage eines Werkzeugs.
@@ -112,7 +114,8 @@ func (n *Node) begin(ctx context.Context, req *mcp.CallToolRequest) (*request, e
 		return nil, err
 	}
 	if hides(header, logins) {
-		return &request{nodes: n.nodes, logins: Logins{Unknown: []string{}}, entries: map[string]store.Hub{}}, nil
+		return &request{nodes: n.nodes, logins: Logins{Unknown: []string{}}, entries: map[string]store.Hub{},
+			hidden: true}, nil
 	}
 	hubs, err := n.nodes.Hubs(ctx)
 	if err != nil {
@@ -156,11 +159,30 @@ type target struct {
 // <hub>:.
 func (t target) Address() string { return t.Hub + ":" + t.Collection }
 
+// defaultHub ist die Regel für den fehlenden Hub-Teil — die eine Stelle, die
+// resolve für eine Adresse ohne Hub-Teil und das Werkzeug sync für ein
+// fehlendes Feld hub rufen: der eine Hub, an dem der Client gültig angemeldet
+// ist; ist er an keinem angemeldet und hat der Node genau einen Eintrag,
+// dieser. Ergibt die Regel keinen Hub, ist ok false; valid sind die Hubs mit
+// gültiger Anmeldung, nach Alias.
+func (r *request) defaultHub() (hub string, valid []string, ok bool) {
+	valid = r.validHubs()
+	switch {
+	case len(valid) == 1:
+		return valid[0], valid, true
+	case len(valid) == 0 && len(r.entries) == 1:
+		for h := range r.entries {
+			hub = h
+		}
+		return hub, valid, true
+	}
+	return "", valid, false
+}
+
 // resolve löst eine Adresse auf: <hub>:<collection>, <hub>: für die Wurzel
 // eines Hubs, <collection> ohne Hub-Teil, oder leer — dann nur den Hub (für
-// read per id). Der fehlende Hub-Teil ist der eine Hub, an dem der Client
-// gültig angemeldet ist; ist er an keinem angemeldet und hat der Node genau
-// einen Eintrag, dieser. Sonst nennt der Fehler die möglichen Hubs.
+// read per id). Den fehlenden Hub-Teil wählt defaultHub; ergibt es keinen,
+// nennt der Fehler die möglichen Hubs.
 func (r *request) resolve(addr string) (target, error) {
 	what := fmt.Sprintf("Adresse %q", addr)
 	if addr == "" {
@@ -169,14 +191,10 @@ func (r *request) resolve(addr string) (target, error) {
 	hub, coll, withHub := strings.Cut(addr, ":")
 	if !withHub {
 		coll = addr
-		valid := r.validHubs()
-		switch {
-		case len(valid) == 1:
-			hub = valid[0]
-		case len(valid) == 0 && len(r.entries) == 1:
-			for h := range r.entries {
-				hub = h
-			}
+		var valid []string
+		var ok bool
+		switch hub, valid, ok = r.defaultHub(); {
+		case ok:
 		case len(valid) == 0:
 			return target{}, &toolError{msg: what + " ohne Hub: an keinem Hub gültig angemeldet; erwartet <hub>:<collection>"}
 		default:
@@ -252,30 +270,52 @@ func (r *request) open(ctx context.Context, t target) (*hubAccess, error) {
 	return a, nil
 }
 
-// errNoLogin meldet in openHub einen Hub ohne gültige Anmeldung.
-var errNoLogin = errors.New("keine gültige Anmeldung")
+// errNoLogin meldet in checkHub und openHub einen Hub ohne gültige
+// Anmeldung, errNeverSynced in checkHub einen Eintrag ohne Replica.
+var (
+	errNoLogin     = errors.New("keine gültige Anmeldung")
+	errNeverSynced = errors.New("noch nie abgeglichen")
+)
+
+// checkHub prüft einen Hub für die Anfrage und öffnet seine Replica — die
+// eine Reihenfolge, auf der die Werkzeuge, die lesen und schreiben (openHub),
+// und das Werkzeug sync aufsetzen: ein Hub ohne Eintrag ist errNoLogin; eine
+// Replica, die sich nicht lesen lässt, ein UnreadableError; ohne Replica
+// errNeverSynced — auch ohne gültige Anmeldung, denn ohne Replica ist jede
+// Anmeldung invalid; erst danach, ohne gültige Anmeldung, errNoLogin. Nach
+// Erfolg schließt der Aufrufer die Replica.
+func (r *request) checkHub(ctx context.Context, hub string) (store.Hub, Login, *replica.Replica, error) {
+	h, ok := r.entries[hub]
+	l, _ := r.login(hub)
+	if !ok {
+		return store.Hub{}, Login{}, nil, errNoLogin
+	}
+	if l.Unreadable != nil {
+		return h, l, nil, l.Unreadable
+	}
+	rep, err := openReplica(ctx, r.nodes, h)
+	if err != nil {
+		return h, l, nil, err
+	}
+	if rep == nil {
+		return h, l, nil, errNeverSynced
+	}
+	if l.State != LoginOK {
+		_ = rep.Close()
+		return h, l, nil, errNoLogin
+	}
+	return h, l, rep, nil
+}
 
 // openHub öffnet die Replica eines Hubs; siehe open. Ohne gültige Anmeldung
 // ist der Fehler errNoLogin.
 func (r *request) openHub(ctx context.Context, hub string) (*hubAccess, error) {
-	h, ok := r.entries[hub]
-	l, _ := r.login(hub)
-	if !ok {
-		return nil, errNoLogin
-	}
-	if l.Unreadable != nil {
-		return nil, l.Unreadable
-	}
-	rep, err := openReplica(ctx, r.nodes, h)
-	if err != nil {
-		return nil, err
-	}
-	if rep == nil {
+	_, l, rep, err := r.checkHub(ctx, hub)
+	if errors.Is(err, errNeverSynced) {
 		return nil, neverSynced(hub)
 	}
-	if l.State != LoginOK {
-		_ = rep.Close()
-		return nil, errNoLogin
+	if err != nil {
+		return nil, err
 	}
 	a := &hubAccess{hub: hub, rep: rep, rights: make(map[string]contract.Rights, len(l.Rights))}
 	for _, right := range l.Rights {

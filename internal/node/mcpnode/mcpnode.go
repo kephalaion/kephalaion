@@ -8,7 +8,8 @@
 // des Abgleichs; bei gültiger Anmeldung Account, User, Collections), zum
 // Lesen aus der Replica list, read und changes (access.go: gemeinsamer
 // Schritt aus Anmeldung, Adresse und Recht) und zum Schreiben über den Hub
-// create, write, delete und rename (write.go, auf demselben Schritt).
+// create, write, delete und rename (write.go, auf demselben Schritt); dazu
+// sync (sync.go), das einen Abgleich anfordert und auf sein Ergebnis wartet.
 // Transport und initialize gehen ohne Anmeldung; list, read und changes
 // liefern Inhalte nur aus Collections, in denen der gültig angemeldete
 // Account read hat, und nur dort reichen create, write, delete und rename an
@@ -140,6 +141,7 @@ func (n *Node) server(version string) *mcp.Server {
 	mcp.AddTool(srv, &mcp.Tool{Name: "rename", Description: renameDescription}, n.rename)
 	mcp.AddTool(srv, &mcp.Tool{Name: "fetch_release", Description: fetchReleaseDescription}, n.fetchRelease)
 	mcp.AddTool(srv, &mcp.Tool{Name: "rebuild_docs", Description: rebuildDocsDescription}, n.rebuildDocs)
+	mcp.AddTool(srv, &mcp.Tool{Name: "sync", Description: syncDescription}, n.sync)
 	return srv
 }
 

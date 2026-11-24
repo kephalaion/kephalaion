@@ -80,7 +80,10 @@ http und https den Hub unter seiner Adresse; ssh wird noch übergangen.
 Erfolg und letzter Fehler je Hub stehen in node.db (kephalaion status).
 kephalaion node sync läuft daneben wie immer. Nach einem Schreibvorgang über
 MCP (create, write, delete, rename) — gelungen oder mit unklarem Ausgang —
-gleicht serve den Hub außer der Reihe ab, auch bei sync_interval 0.
+gleicht serve den Hub außer der Reihe ab, auch bei sync_interval 0. Ebenso,
+wenn ein Client es über das Werkzeug sync anfordert: Der wartet auf das
+Ergebnis eines Abgleichs, der nach seiner Anfrage begonnen hat, höchstens
+40 s (kephalaion node sync nimmt auf einem reinen Client diesen Weg).
 
 Als Node fragt serve außerdem höchstens einmal am Tag bei GitHub nach dem
 neuesten Release (nach einem Fehler frühestens nach einer Stunde) und gibt
@@ -228,7 +231,8 @@ func serve(ctx context.Context, cfg config.Config, system bool, log *reqlog.Logg
 		bg = newBackgroundSync(bgCtx, nodes, cfg, hub, log)
 		for _, rl := range roles {
 			if rl.nodes != nil {
-				rl.server.Handler = newNodeHandler(rl.nodes, updates.Report, nodeHubLink(cfg, hub, bg.kick, bg.recheck))
+				rl.server.Handler = newNodeHandler(rl.nodes, updates.Report, nodeHubLink(cfg, hub, bg.kick, bg.recheck,
+					bg.kickWait))
 			}
 		}
 	}
@@ -503,11 +507,13 @@ func hubText(w http.ResponseWriter, r *http.Request, status int, text string) {
 // nodeHubLink ist der Weg der Werkzeuge des Nodes, die schreiben, zum Hub:
 // derselbe connector wie beim Abgleich — local nimmt hub, den Hub desselben
 // serve, wenn er ihn trägt —, kick stößt den Abgleich eines Eintrags an und
-// recheck den gedrosselten nach einem abgewiesenen Paar (Task 025). Ein
+// recheck den gedrosselten nach einem abgewiesenen Paar (Task 025), kickWait
+// den wartenden für das Werkzeug sync (Task 042). Ein
 // Transport, den der connector noch nicht kann (ssh), kommt als
 // mcpnode.ErrUnsupported an; jeder andere Fehler beim Verbinden heißt für
 // das Werkzeug: Hub nicht erreichbar.
-func nodeHubLink(cfg config.Config, hub hubstore.Store, kick, recheck func(nodestore.Hub)) mcpnode.HubLink {
+func nodeHubLink(cfg config.Config, hub hubstore.Store, kick, recheck func(nodestore.Hub),
+	kickWait func(context.Context, nodestore.Hub) (mcpnode.SyncOutcome, error)) mcpnode.HubLink {
 	return mcpnode.HubLink{
 		Connect: func(ctx context.Context, h nodestore.Hub) (contract.Hub, func(), error) {
 			conn := &connector{ctx: ctx, cfg: cfg, hub: hub}
@@ -521,8 +527,9 @@ func nodeHubLink(cfg config.Config, hub hubstore.Store, kick, recheck func(nodes
 			}
 			return c, conn.close, nil
 		},
-		Sync:    kick,
-		Recheck: recheck,
+		Sync:     kick,
+		Recheck:  recheck,
+		SyncWait: kickWait,
 	}
 }
 

@@ -185,21 +185,33 @@ func syncInfo(ctx context.Context, nodes store.Store, h store.Hub, st store.Sync
 	if st.Err != "" {
 		out.LastError, out.LastErrorAt = replica.ErrorKind(st.ErrKind).Text(), formatTime(st.ErrAt)
 	}
-	rep, err := openReplica(ctx, nodes, h)
+	rev, err := replicaRevision(ctx, nodes, h)
 	if err != nil {
 		return SyncInfo{}, err
 	}
-	if rep == nil {
+	if rev == nil {
 		out.NeverSynced = true
 		return out, nil
+	}
+	out.Revision = rev
+	return out, nil
+}
+
+// replicaRevision liest die Revision der Replica eines Eintrags: den Stand,
+// bis zu dem alle ihre Collections abgeglichen sind, ohne Collection 0. Ohne
+// Replica nil. Lässt sie sich nicht lesen, ist der Fehler ein
+// UnreadableError. whoami (syncInfo) und das Werkzeug sync rufen es.
+func replicaRevision(ctx context.Context, nodes store.Store, h store.Hub) (*int64, error) {
+	rep, err := openReplica(ctx, nodes, h)
+	if err != nil || rep == nil {
+		return nil, err
 	}
 	defer rep.Close()
 	rev, err := rep.Revision(ctx)
 	if err != nil {
-		return SyncInfo{}, unreadable(ctx, h.Name, err)
+		return nil, unreadable(ctx, h.Name, err)
 	}
-	out.Revision = &rev
-	return out, nil
+	return &rev, nil
 }
 
 // unreadableSync ist der Stand eines Eintrags, dessen Replica sich nicht
