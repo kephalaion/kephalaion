@@ -2524,6 +2524,44 @@ Werkzeuge eigens für k-playbook, dem ersten und wichtigsten Nutzer. Grundsatz: 
 Werkzeug für k-playbook ist eine bequeme Form über den allgemeinen Vorgängen, kein Sonderweg
 im Hub. Wo die Grenze liegt und ob etwas allgemein taugt, wird je Werkzeug entschieden.
 
+### Anleitung für Clients (entschieden am 2026-11-24, Task 040)
+
+Wer nur den MCP-Server sieht, kennt ohne Zutun weder das Grundprinzip noch den Einstieg, noch
+weiß er, was er nicht selbst beheben kann. Der Node gibt deshalb jedem Client in der Antwort auf
+`initialize` einen festen Text mit, die **Anleitung für Clients** (Feld `instructions` des
+MCP; `internal/node/mcpnode/instructions.md`, per `go:embed` im Binary). Claude Code führt ihn
+unter „MCP Server Instructions“ im Kontext, ohne dass der Client etwas lesen muss.
+
+- **Was drinsteht:** das Grundprinzip (Hub als einziger Schreiber, `list`, `read`, `search` und
+  `changes` aus der Replica, die vier Werkzeuge, die schreiben, über den Hub; die eigene Änderung
+  steht sofort in der Replica, Änderungen anderer, auch an Rechten, erst nach dem Abgleich;
+  `sync` für den Stand von jetzt), die Adresse `<hub>:<collection>` mit der Regel für den
+  fehlenden Hub-Teil, `whoami` als Einstieg und je Fall die Abhilfe auf der Kommandozeile mit
+  dem Rechner, an dem sie hilft: `login` `missing` am Rechner des Assistenten mit `node account
+  setup` bzw. `node mcp add`; `login` `invalid` mit `node account list` zur Prüfung des Tokens,
+  dann `node sync` am Rechner des Nodes oder neu `node account setup`; `never_synced` mit `node
+  sync` am Rechner des Nodes — auf einem reinen Client ruft `node sync` das Werkzeug `sync`, und
+  das behebt `never_synced` nicht. Dazu `docs/` als durchsuchbares Wissen und der Verweis auf
+  die Doku im Repo, auf `main`.
+- **Was bewusst nicht:** Einzelheiten der Werkzeuge (die stehen in ihren Beschreibungen),
+  Tokens, Header-Namen, k-playbook. Jedes Werkzeug und jedes Kommando, das der Text nennt, steht
+  in Backticks; ein Test prüft, dass es das Werkzeug bzw. das Kommando gibt.
+- **Statisch und auch verdeckt derselbe:** keine Version, keine Namen von Node, Hubs oder
+  Accounts. Der Text verrät nichts, was `serverInfo.name` nicht ohnehin sagt; eine zweite,
+  verdeckte Fassung gäbe es sonst neben der vollen, ohne dass sie etwas schützte. Der Link geht
+  auf `main`, nicht auf das Tag der laufenden Version: verdeckt gibt es keine Version, und
+  Dev-Builds haben kein Tag.
+- **Sprache:** deutsch, wie die Werkzeugbeschreibungen.
+- **Länge: höchstens 2048 Bytes (UTF-8)**, ein Test hält das fest. Claude Code kürzt
+  `instructions` seit v2.1.296 nach 4096 Zeichen, davor nach 2048 (Doku von Claude Code, „MCP“,
+  „Tool search for MCP server authors“; änderbar mit `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`).
+  Die Einheit sind Zeichen, nicht Bytes, gemessen am 2026-11-24 mit Claude Code 2.1.331: Ein
+  deutscher Text eines anderen Servers kam nach genau 4096 Zeichen gekürzt an, das waren 4158
+  Bytes. Bytes sind nie weniger als Zeichen; mit 2048 Bytes kommt der Text auch bei älteren
+  Fassungen ungekürzt an. OpenCode reicht `instructions` laut seiner Doku an die Agenten weiter,
+  eine Grenze nennt sie nicht; für Cursor ist sie nicht ohne Aufwand festzustellen.
+- **Ausgeschlossen:** MCP-Resources oder -Prompts als Träger. Clients lesen sie nicht von selbst.
+
 ### Allgemein — lesen
 
 **Adresse — entschieden am 2026-09-26:** Werkzeuge nennen eine Collection als

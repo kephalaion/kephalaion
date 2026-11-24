@@ -772,6 +772,14 @@ Ausführlich: [`konzept.md`](konzept.md).
   es erneut anstoßen — dann antwortet der Hub „schon aktuell“.
 - **tool** (Werkzeug) — ein MCP-Werkzeug des Nodes für Clients. Gesammelt in `konzept.md`,
   „Werkzeuge“.
+- **instructions** (Anleitung für Clients, Task 040) — der feste Text, den der Node jedem
+  **client** in der Antwort auf `initialize` mitgibt (Feld `instructions`): das Grundprinzip
+  (Hub als einziger Schreiber, Lesen aus der **replica**, Schreiben über den Hub, Sichtbarkeit
+  eigener und fremder Änderungen, `sync`), die Adresse `<hub>:<collection>`, `whoami` als
+  Einstieg und je Fall die Abhilfe auf der Kommandozeile, dazu der Verweis auf die Doku im Repo.
+  Statisch, im Binary (`internal/node/mcpnode/instructions.md`): ohne Version, ohne Namen von
+  Node, Hubs oder Accounts, **hidden** derselbe Text. Höchstens 2048 Bytes (`konzept.md`,
+  „Werkzeuge“, „Anleitung für Clients“).
 - **id** (Kennung) — stabile Kennung eines Dokuments, vom Hub vergeben.
 - **journal** (Journal) — fortlaufende Folge der Änderungen eines Hubs.
 - **revision** (Stand) — fortlaufende Nummer je Hub über alle Collections, vergeben beim
