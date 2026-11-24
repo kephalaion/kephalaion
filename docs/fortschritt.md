@@ -1,6 +1,7 @@
 # Fortschritt
 
-Stand: 2026-11-24 (Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
+Stand: 2026-11-24 (Task 039 Export und Restore des Hubs: `hub export` und `hub restore`
+gebaut und dokumentiert, noch in keinem Release; Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
 Text als `instructions` mit, gebaut und dokumentiert, noch in keinem Release; Task 042 Abgleich
 auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
 Client des Nodes gebaut und dokumentiert, noch in keinem Release — die Mindestversion für
@@ -460,6 +461,27 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 039 (`039-hub-export-restore`) — Hub-Export und -Restore unabhängig von der Datenbank**
+  (2026-11-24, Etappen 1–3 ausgeführt, noch in keinem Release):
+  - Format `internal/hub/archive` (Fassung 1): `tar.gz` mit `manifest.json` (Format,
+    Schemafassung, Revision, `hub_id`, `serve_stopped`, Zeitpunkt, Binary, Zeilen je Teil), je
+    Tabelle `<tabelle>.jsonl`, `files/<collection>/<name>` nur zum Lesen;
+  - `Store.Dump` liest alle Tabellen außer `requests` samt `db_info` in einer Lesetransaktion
+    mit `ReadOnly: true` (unter SQLite `BEGIN`, kein Schreiber wartet); die Spalten an einer
+    Stelle (`store.DumpTables`), ein Test hält sie am Schema fest. `Store.Restore` schreibt in
+    einen leeren Hub, in einer Transaktion, nichts Eigenes; die `SchemaVersion` blieb 7;
+  - `hub export` versucht die Sperre von `serve` (`serve_stopped`), `hub restore
+    [--keep-hub-id]` nur bei angehaltenem `serve`, `--keep-hub-id` nur nach `serve_stopped:
+    true`;
+  - Tests: Rundreise Export → Restore → Export je Teil als Multimenge samt Revision und
+    `hub_id`; ein Schreiber neben dem Export wartet nicht; Ablehnungen ohne Änderung; der Node
+    gleicht nach `--keep-hub-id` ohne Leeren weiter ab und leert nach einem Restore ohne die
+    Option seine Replica;
+  - Doku: `begriffe.md` (hub export, hub restore, dump, export archive), `konzept.md` („Export
+    und Restore des Hubs“), `installation.md` („Umzug und Wiederherstellen über einen Export“,
+    „Neue Schemafassung“), README; Projektregeln „Datenbanken“ nachgezogen (Ausnahme der
+    Lesetransaktion, Abbildung in `hub restore` bei neuer Schemafassung, „Abgeleitetes steht
+    nicht im Export“ meint `config export`).
 - **Task 040 (`040-mcp-instructions`) — Anleitung für Clients bei `initialize`** (2026-11-24,
   Etappen 1–3 ausgeführt, noch in keinem Release): Der Node gibt jedem Client einen festen Text
   als `instructions` mit — Grundprinzip, Adresse `<hub>:<collection>`, `whoami` als Einstieg, je
@@ -518,7 +540,7 @@ ist Nacharbeit des Nutzers)
   trägt keinen Hub mehr (`~/dev/vm/hub/README.md`; dort steht das Umzielen von Task 038 als
   Entscheidung des Nutzers). Zu entscheiden, bevor Etappe 3 läuft: Timer auf dem Rechner des Hubs
   (Playbook `hub`), über welchen Zugang die Stände geholt werden und wohin. Die Units selbst
-  stehen in `installation.md`. Folge-Task 039: Export und Restore unabhängig von der Datenbank.
+  stehen in `installation.md`. Export und Restore unabhängig von der Datenbank: Task 039 (oben).
 
 - **Task 037 (`037-upgrade-auto-signale`) — `upgrade --auto`: SIGTERM und SIGINT ohne halben
   Zustand** (2026-11-11, Etappen 1–4 ausgeführt): Signale fängt nur der Zweig `--auto` ab;
@@ -752,6 +774,13 @@ ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 039 — Export und Restore, Probe an einem echten Hub** (nur der Nutzer; nach dem Release
+  mit `hub export`, eingespielt über Ansible): neben dem laufenden Dienst `sudo -u kephalaion
+  kephalaion hub export --output …` (Zeile mit `serve_stopped: false`, kein Schreiber hängt),
+  das Archiv auf einem Wegwerf-Hub mit eigener config einspielen (`hub init --config …`, `hub
+  restore`), `kephalaion status` dort mit Revision und neuer `hub_id`; ein Node gegen den
+  Wegwerf-Hub leert seine Replica und gleicht neu ab. Der Umzug mit `--keep-hub-id` ist nur durch
+  Tests belegt (`cmd/kephalaion/hubrestore_test.go`), an einem echten Hub nicht geprobt.
 - **Task 042 — Abgleich auf Anforderung, Abnahme im Devcontainer** (nur der Nutzer; WSL und
   Dev-VM, nach dem Release mit dem Werkzeug `sync` und dem Neustart von `serve` auf dem Host):
   im Container `kephalaion status` (Node „läuft nicht hier“, `Antwort: ja` mit der neuen

@@ -1825,10 +1825,57 @@ Collections, Nodes, Accounts und Rechte. Ablauf und Units stehen in
   aus der Zeit der Sicherung. Ein danach rotiertes Token gibt der Verwalter neu aus — und macht
   damit das wieder gültige alte wertlos.
 - **Nur der Hub, nur SQLite.** `node.db` und Replicas werden nicht gesichert: Replicas sind
-  abgeleitet, die Hub-Einträge sichert `config export`. Ein Export unabhängig von der Datenbank
-  ist Task 039, PostgreSQL Task 017.
+  abgeleitet, die Hub-Einträge sichert `config export`. Den Export unabhängig von der Datenbank
+  bringt Task 039 (unten), PostgreSQL Task 017.
 - **Später denkbar:** eine Sicherung vor `upgrade --auto`; die Ablage außerhalb des Rechners
   (bisher holt der Verwalter die Stände von Hand).
+
+**Export und Restore des Hubs — gebaut in Task 039.** Der Snapshot hängt an SQLite und an der
+Schemafassung. `kephalaion hub export` schreibt den Inhalt des Hubs dagegen in ein Archiv, das
+an keiner Datenbank hängt, und `kephalaion hub restore` spielt es in einen frisch angelegten,
+leeren Hub ein — der Weg für einen Umzug, später auf PostgreSQL (Task 017), und über eine neue
+Schemafassung. Ablauf in [`installation.md`](installation.md), „Umzug und Wiederherstellen über
+einen Export“; hier die Entscheidungen:
+
+- **Ein vollständiger Abzug.** Alle Tabellen außer `requests` (Idempotenzschlüssel, laufen
+  ohnehin ab) und `db_info`, aus der Schemafassung, Revision und `hub_id` ins Manifest gehen.
+  Anders als `config export` trägt er auch `actions`, `principal_names` und den geholten Stand
+  einer Collection mit Quelle (`fetched_tag`, `fetched_at`): Der Restore schreibt nichts
+  Eigenes, und Export → Restore → Export ergibt denselben Inhalt. Die Spalten stehen an einer
+  Stelle (`store.DumpTables`); Lesen, Schreiben und Zählen entstehen daraus, und ein Test hält
+  sie am Schema fest — eine neue Spalte bricht ihn, bis sie im Abzug steht.
+- **Format, ohne kephalaion lesbar.** Ein `tar.gz` (`internal/hub/archive`, Fassung 1):
+  `manifest.json`, je Tabelle `<tabelle>.jsonl` (Spalten mit Namen, Ganzzahlen als Zahlen, NULL
+  als `null`) und `files/<collection>/<name>` mit dem lebenden Inhalt jedes Dokuments außer
+  `SYSTEM:`, nur zum Lesen. Die Zeilen stehen in fester Reihenfolge (nach Primärschlüssel,
+  `actions` nach allen Spalten mit `NULLS FIRST`), aber nichts hängt an ihr: Restore und Test
+  vergleichen jeden Teil als Multimenge. Text, den JSON nicht unverändert trüge (kein UTF-8),
+  lehnt der Export ab, statt ihn still zu ersetzen.
+- **Ein Lesestand, kein Schreiber wartet.** Gelesen wird in einer einzigen Lesetransaktion mit
+  `ReadOnly: true`: Unter SQLite beginnt sie damit als `BEGIN` statt `BEGIN IMMEDIATE` — die
+  eine Ausnahme von der Regel, dass jede Transaktion die Schreibsperre nimmt; WAL gibt ihr einen
+  festen Stand über alle Tabellen. Unter PostgreSQL ist sie `REPEATABLE READ READ ONLY`.
+- **`serve_stopped` entscheidet über die `hub_id`.** Der Export versucht ohne zu warten die
+  Sperre von `serve`; hält er sie, ist er der letzte Stand dieses Hubs, solange gegen die alte
+  Datenbank nichts mehr schreibt. Nur ein solcher Export erlaubt `hub restore --keep-hub-id`;
+  die Nodes gleichen dann ohne Neuaufbau weiter ab. Ohne die Option behält der Ziel-Hub die
+  `hub_id` aus `hub init`, und jeder Node baut seine Replica neu auf — wie nach `hub reset-id`,
+  aus demselben Grund: Ein Export aus dem laufenden Betrieb ist nie sicher der letzte Stand.
+- **Nur in einen leeren Hub, alles oder nichts.** Leer heißt: keine Tabelle des Abzugs hat eine
+  Zeile — ein frisches `hub init` erfüllt das, sonst nennt die Meldung die belegte Tabelle.
+  Geschrieben wird in einer Transaktion, bei angehaltenem `serve` (dessen Sperre). Darüber
+  hinaus schreibt `restore` nichts: keine Zeile in `actions`, in `db_info` nur die Revision und
+  mit `--keep-hub-id` die `hub_id`. Abgelehnt werden eine unbekannte Format-Fassung, Zeilen, die
+  nicht zum Manifest passen, und eine Zeile mit höherer Revision als der Export.
+- **Schemafassungen.** Fassung 1 des Formats nimmt nur Exporte der eigenen Schemafassung an.
+  Wer die Schemafassung des Hubs erhöht, ergänzt die Abbildung in `hub restore` für Exporte der
+  Vorfassung, samt Test mit einem Export der Vorfassung — so führt der Export über jede
+  Schemafassung hinweg, statt wie bisher über `config export` und `hub import`.
+- **Name `restore`, nicht `import`:** `hub import` spielt ein Verzeichnis als Dokumente ein (eine
+  Revision, ohne Geschichte) und bleibt so. `config export` bleibt daneben: Er trägt die
+  config-Seite beider Rollen samt Tokens der Node-Einträge, `hub export` den Inhalt der
+  Hub-Datenbank mit Tokens nur als Hash; beides zusammen ist der vollständige Stand.
+- **Später:** ein Export auf dem Rechner des Hubs per Timer, neben dem Snapshot.
 
 ## Installation und Betrieb
 
@@ -2290,7 +2337,8 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
 - **Lokale Tabellen:** Einzelne Werte stehen in `settings` (Schlüssel, Wert); Listen mit
   Struktur bekommen eigene Tabellen. Nichts davon gleicht sich ab. `config export` und
   `config import` nehmen sie mit (Exportformat 4, `tables:` je Rolle), `db_info`, `actions`
-  und das abgeleitete `principal_names` nicht. Änderungen an ihnen zählen keine Revision hoch — außer bei Accounts, deren
+  und das abgeleitete `principal_names` nicht. Den vollständigen Abzug des Hubs, samt dem
+  Abgeleiteten und dem Protokoll, schreibt `hub export` („Export und Restore des Hubs“). Änderungen an ihnen zählen keine Revision hoch — außer bei Accounts, deren
   Rechte in `SYSTEM:A:`-Zeilen stehen. Der Export nimmt je Account Beschreibung, gesperrt,
   Hash und die Rechte je Collection mit; der Import gleicht die `SYSTEM:A:`-Zeilen daran an —
   vorhandene ändern, fehlende werden Löschmarken, neue entstehen —, unter einer Revision in
@@ -2417,7 +2465,8 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   die Schreiber hintereinander; so gilt in SQLite und PostgreSQL dasselbe. Umgesetzt: In
   PostgreSQL sperrt ein `UPDATE db_info SET value = value` die Zeile, bevor sie gelesen
   wird; in SQLite beginnt jede Transaktion als `BEGIN IMMEDIATE` und hält die Sperre von
-  Anfang an.
+  Anfang an — einzige Ausnahme ist die Lesetransaktion von `hub export` (`ReadOnly: true`,
+  `BEGIN`), die nie schreibt.
 - **Die Revision sperrt zu spät für Accounts (Task 007).** Sie sperrt erst beim ersten
   Schreiben einer Zeile; unter PostgreSQL (READ COMMITTED) läse ein `grant` oder `lock` davor
   den Hash aus `accounts`, ein gleichzeitiger `rotate` ersetzte ihn, und danach schriebe der
@@ -2442,7 +2491,9 @@ CREATE TABLE hub_sync (                -- Stand des Abgleichs; abgeleitet, nicht
   Sicherung zurückgespielter Hub braucht eine neue `hub_id`. Seit Task 038 vergibt sie
   `kephalaion hub reset-id`, bei angehaltenem `serve`, als fester Schritt des Wiederherstellens
   — eine Sicherung (`hub backup`) entsteht im laufenden Betrieb und ist nie sicher der letzte
-  Stand ([`installation.md`](installation.md), „Sicherung und Wiederherstellung“).
+  Stand ([`installation.md`](installation.md), „Sicherung und Wiederherstellung“). Ein Hub aus
+  einem Export (`hub restore`, Task 039) behält die `hub_id` aus `hub init`; die alte übernimmt
+  er nur mit `--keep-hub-id` nach einem Export bei angehaltenem `serve`.
 - **Eine Abfrage für alle Collections.** Der Node schickt eine Liste von Paaren (Collection,
   seit); der Hub fragt einmal ab, nach Revision sortiert, jede Collection über den Index
   `(collection, revision)`:

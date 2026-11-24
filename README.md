@@ -44,7 +44,9 @@ schreibt der Hub je Verzeichnis eine `index.md` nach Google OKF und `docs/README
 Anleitung, der Node hält einen Volltextindex für `search` ([`docs/indizierung.md`](docs/indizierung.md)).
 Die Datenbank des Hubs sichert `hub backup` neben dem laufenden Dienst; nach dem Zurückspielen
 vergibt `hub reset-id` eine neue `hub_id` ([`docs/installation.md`](docs/installation.md),
-„Sicherung und Wiederherstellung“).
+„Sicherung und Wiederherstellung“). Unabhängig von Datenbank und Schemafassung schreibt `hub
+export` den ganzen Inhalt des Hubs in ein Archiv, und `hub restore` spielt es in einen frisch
+angelegten Hub ein — der Weg für einen Umzug.
 Noch nicht gebaut: `ssh`, semantische Suche, weitere Werkzeuge (`create_numbered`, `append`,
 `replace_section`, `supersede`, `replace_directory`).
 
@@ -189,6 +191,7 @@ kephalaion config set hub alias vm                   # der Alias, unter dem Node
 kephalaion config export --output keph-config.yaml   # Einstellungen sichern, ohne Inhalte
 kephalaion config import keph-config.yaml            # in eingerichtete Rollen zurückschreiben
 kephalaion hub backup                                # die ganze Hub-Datenbank sichern, neben dem laufenden serve
+kephalaion hub export --output hub-export.tar.gz     # der ganze Inhalt des Hubs als Archiv, unabhängig von der Datenbank
 ```
 
 `status` und alle anderen Kommandos öffnen nur vorhandene Datenbanken, angelegt wird nur mit
@@ -237,10 +240,25 @@ laufenden `serve` —, und jeder Node leert daraufhin seine Replica und gleicht 
 das liefen Replicas, die schon weiter waren als die Sicherung, still auseinander. Was nach der
 Sicherung geschah, fehlt dem Hub, auch ein danach rotiertes Token: Der Verwalter gibt es neu aus
 (`hub node token`, `hub account token`). Eine Sicherung passt nur zu einem Binary mit derselben
-Schemafassung; über einen Sprung hinweg bleibt es bei `config export` und `hub import`. `node.db`
+Schemafassung; über einen Sprung hinweg bleibt es bei `config export` und `hub import` oder dem
+Export unten. `node.db`
 und Replicas brauchen keine Sicherung: Replicas sind abgeleitet, die Hub-Einträge sichert `config
 export`. Ablauf, Timer für die globale Installation und Grenzen:
 [`docs/installation.md`](docs/installation.md), „Sicherung und Wiederherstellung“.
+
+**Export und Restore des Hubs.** `kephalaion hub export --output <datei>` schreibt den ganzen
+Inhalt der Hub-Datenbank — Dokumente samt Versionsgeschichte und Löschmarken, Protokoll,
+Collections, Nodes, Accounts mit Rechten, `settings`, Revision und `hub_id` — in ein `tar.gz`,
+das ohne kephalaion lesbar ist (`manifest.json`, je Tabelle eine Datei JSON Lines, der Inhalt der
+Dokumente unter `files/`). Gelesen wird in einer Lesetransaktion, ohne dass ein Schreiber wartet;
+ist `serve` angehalten, hält der Export dessen Sperre und vermerkt `serve_stopped: true`.
+`kephalaion hub restore [--keep-hub-id] <datei>` spielt das Archiv bei angehaltenem Dienst in
+einen frisch angelegten, leeren Hub ein — mit eigener config, weil `hub init` einen schon
+eingetragenen Hub nicht überschreibt —, in einer Transaktion und ohne etwas Eigenes zu schreiben.
+Ohne Option behält der neue Hub die `hub_id` aus `hub init`, und die Nodes bauen ihre Replica neu
+auf; `--keep-hub-id` übernimmt die alte nur nach einem Export bei angehaltenem `serve`. Danach in
+der config des Dienstes im Abschnitt `hub:` nur `db` umstellen. Ablauf:
+[`docs/installation.md`](docs/installation.md), „Umzug und Wiederherstellen über einen Export“.
 
 ### Hub und Node auf einem Rechner
 

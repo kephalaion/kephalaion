@@ -1728,8 +1728,9 @@ $K status                                                        # 6. Revision d
   `hub reset-id` mit Exit-Code 1 und ändert nichts.
 - **Dieselbe Schemafassung:** Eine Sicherung passt nur zu einem Binary mit der Schemafassung, mit
   der sie geschrieben wurde (`kephalaion status` zeigt sie). Passt sie nicht, lehnen `hub
-  reset-id` und `serve` die Datei ab. Über einen Sprung der Schemafassung hinweg führt nur der
-  Weg unter „Neue Schemafassung“ (`config export`, `hub import`).
+  reset-id` und `serve` die Datei ab. Über einen Sprung der Schemafassung hinweg führt der Weg
+  über einen Export (unten), sobald `hub restore` die Vorfassung abbilden kann, sonst der unter
+  „Neue Schemafassung“ (`config export`, `hub import`).
 
 Pro User dasselbe ohne `sudo`, mit den Orten unter `~/.local/share/kephalaion/` und `kephalaion
 service uninstall` bzw. `install` statt `systemctl`.
@@ -1780,6 +1781,86 @@ nichts. Es zeigt sich am Node (`node hub check <alias>`, `node account list`). N
 Accounts, die erst nach der Sicherung angelegt wurden, gibt es am Hub nicht mehr; sie werden neu
 angelegt.
 
+### Umzug und Wiederherstellen über einen Export
+
+`hub backup` kopiert die SQLite-Datei: Sie passt nur zu SQLite und nur zu einem Binary mit
+derselben Schemafassung. `kephalaion hub export` schreibt den Inhalt des Hubs dagegen in ein
+Archiv, das an keiner Datenbank hängt, und `kephalaion hub restore` spielt es in einen frisch
+angelegten, leeren Hub ein — der Weg für einen Umzug (auf einen anderen Rechner, später auf
+PostgreSQL) und über eine neue Schemafassung.
+
+```sh
+sudo -u kephalaion kephalaion hub export --output /var/lib/kephalaion/hub-export.tar.gz
+# Export: /var/lib/kephalaion/hub-export.tar.gz (9512338 Bytes, Revision 5411, hub_id 01J…, 23817 Zeilen, 1210 Dateien), bei angehaltenem serve (serve_stopped: true).
+```
+
+- **Inhalt:** alles aus der Datenbank des Hubs — Dokumente samt Versionsgeschichte und
+  Löschmarken, Protokoll (`actions`), Collections samt geholtem Stand, Nodes, Accounts mit
+  Rechten, `settings`, Revision und `hub_id`; nur `requests` (Idempotenzschlüssel, gelten 24
+  Stunden) nicht. Im `tar.gz`, ohne kephalaion lesbar: `manifest.json`, je Tabelle
+  `<tabelle>.jsonl` (eine Zeile JSON je Datenbankzeile) und unter `files/<collection>/<name>`
+  der lebende Inhalt jedes Dokuments, nur zum Lesen.
+- **Ein Stand, kein Schreiber wartet:** gelesen in einer einzigen Lesetransaktion, auch neben
+  `serve`. Vorher versucht `hub export`, ohne zu warten, die Sperre von `serve` zu nehmen
+  (`<db>.lock`); gelingt das, hält es sie bis zum Ende und vermerkt `serve_stopped: true` im
+  Manifest, sonst `false`.
+- **Datei `0600`,** erst verdeckt neben dem Ziel, dann umbenannt; eine vorhandene Datei wird
+  ersetzt. Sie enthält alle Inhalte und die Hashes der Tokens — nach dem Umzug löschen.
+- **Abgrenzung:** `config export` trägt die config beider Rollen, `settings` und die lokalen
+  Tabellen samt den Tokens der Hub-Einträge des Nodes, aber keine Inhalte; `hub export` trägt den
+  Inhalt der Hub-Datenbank, Tokens nur als Hash. Beides zusammen ist der vollständige Stand.
+
+Der Ablauf, global als Verwalter. Der Ziel-Hub bekommt eine **eigene config**, denn `hub init`
+bricht ab, solange die config schon einen Abschnitt `hub:` hat; sie liegt ebenfalls in
+`/etc/kephalaion/` (das Verzeichnis gehört `kephalaion`, der laufende Dienst schreibt dort nie):
+
+```sh
+K="sudo -u kephalaion kephalaion"
+sudo systemctl stop kephalaion                                    # 1. serve anhalten
+$K hub export --output /var/lib/kephalaion/hub-export.tar.gz      # 2. serve_stopped: true
+$K hub init --config /etc/kephalaion/hub-neu.yaml   --db sqlite:///var/lib/kephalaion/hub-neu.db                    # 3. Ziel-Hub, leer, eigene config
+$K hub restore --config /etc/kephalaion/hub-neu.yaml --keep-hub-id   /var/lib/kephalaion/hub-export.tar.gz                           # 4. einspielen, alte hub_id
+sudo -u kephalaion $EDITOR /etc/kephalaion/config.yaml            # 5. in hub: nur db auf den Wert aus hub-neu.yaml
+sudo systemctl start kephalaion                                   # 6. Dienst starten
+$K status                                                         # 7. Revision des Exports, hub_id, serve läuft
+```
+
+- **Schritt 1 und `--keep-hub-id`:** Nur ein Export bei angehaltenem `serve` ist sicher der
+  letzte Stand; nur er trägt `serve_stopped: true`, und nur dann nimmt `hub restore
+  --keep-hub-id` an — die Nodes gleichen danach ohne Neuaufbau weiter ab. Zwischen Export und
+  Schritt 5 darf gegen die alte Datenbank nichts mehr schreiben: weder `serve` noch ein
+  schreibendes `hub`-Kommando. Ohne die Option (auch nach einem Export aus dem laufenden Betrieb,
+  etwa zum Wiederherstellen) behält der neue Hub die `hub_id` aus `hub init`, und jeder Node leert
+  beim nächsten Abgleich seine Replica und gleicht von vorn ab — wie nach `hub reset-id` oben.
+- **Schritt 3:** `hub restore` schreibt nur in einen leeren Hub: keine Tabelle des Exports hat
+  eine Zeile (`requests` zählt nicht). Ein frisches `hub init` erfüllt das; sonst nennt die
+  Meldung die belegte Tabelle, und nichts ändert sich. `--db` mit neuem Pfad, solange der alte
+  belegt ist.
+- **Schritt 4** läuft nur bei angehaltenem `serve` (es nimmt dessen Sperre) und schreibt alles
+  oder nichts, in einer Transaktion. Darüber hinaus schreibt es nichts: keine Zeile ins
+  Protokoll, in `db_info` nur die Revision des Exports und mit `--keep-hub-id` dessen `hub_id`.
+  Es lehnt ab, ohne etwas zu ändern: eine unbekannte Format-Fassung, eine Schemafassung, für die
+  das Binary keine Abbildung kennt, Teile, deren Zeilen nicht zum Manifest passen,
+  `--keep-hub-id` nach einem Export mit `serve_stopped: false`.
+- **Schritt 5:** Im Abschnitt `hub:` der config des Dienstes nur `db` umstellen (unter
+  PostgreSQL samt `db_password_env`, wenn die neue config es nennt); `listen` und ein Abschnitt
+  `node:` bleiben — in der globalen Installation stehen `hub:` und `node:` meist zusammen in
+  `/etc/kephalaion/config.yaml`. Die Datei tauschen nur, wenn sie allein `hub:` trägt. Wo
+  Ansible den Hub einrichtet, stellt die Rolle die config um (ihre Vorlage der config), nicht
+  die Hand; `hub init`, `hub export` und `hub restore` laufen dort wie hier von Hand.
+- **Als Systembenutzer:** `hub init`, `hub export` und `hub restore` in der globalen
+  Installation nur als `sudo -u kephalaion …`. Als root angelegt, gehörten Datenbank und
+  Sperrdatei `<db>.lock` root, und `serve` scheiterte als `kephalaion` daran.
+- **Danach:** Die alte Datenbank (`hub.db` samt `-wal`, `-shm`, `.lock`) beiseitelegen, wie unter
+  „Wiederherstellen“, und löschen, wenn der Hub wieder läuft; ebenso den Export.
+- **Tokens:** Was nach dem Export geschah, fehlt dem Hub — auch jedes Token, das danach rotiert
+  wurde. Es gilt dasselbe wie nach einer Sicherung („Was nach der Sicherung geschah, fehlt dem
+  Hub“, oben): Der Verwalter gibt es neu aus. Nach einem Export bei angehaltenem `serve` kann
+  nichts dazwischen liegen.
+
+Pro User dasselbe ohne `sudo`, mit einer eigenen config etwa unter `~/.config/kephalaion/hub-neu.yaml`
+und `kephalaion service uninstall` bzw. `install` statt `systemctl`.
+
 ## Neue Schemafassung: node.db oder hub.db neu anlegen
 
 `kephalaion upgrade --auto` erkennt einen solchen Sprung vor dem Ersetzen (die Probe mit dem neuen
@@ -1821,6 +1902,14 @@ sqlite:///var/lib/kephalaion/hub.db --listen 127.0.0.1:7434`, `config import` �
 $K hub import wissen /pfad/zur/sicherung/wissen       # Dokumente zurück, je Collection
 $K hub collection fetch k-playbook                    # eine Collection mit Quelle holt neu
 ```
+
+**Über einen Export (Task 039).** Mit `hub export` (altes Binary) und `hub restore` (neues
+Binary) kommt der ganze Inhalt samt Versionsgeschichte über den Sprung — ohne `hub import` und
+ohne neues Holen —, Ablauf wie unter „Umzug und Wiederherstellen über einen Export“. Wer die
+Schemafassung des Hubs erhöht, ergänzt die Abbildung in `hub restore` für Exporte der
+Vorfassung, samt Test mit einem Export der Vorfassung. Bis ein Binary eine solche Abbildung
+kennt, nimmt `hub restore` nur Exporte seiner eigenen Schemafassung an, und es bleibt beim Weg
+hier.
 
 Der neue Hub hat eine neue `hub_id`; jeder Node verwirft beim nächsten Abgleich seine Replica
 und gleicht von vorn ab. Den geholten Stand trägt der Export nicht — sonst gälte die leere
