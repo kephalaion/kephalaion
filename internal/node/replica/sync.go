@@ -101,6 +101,12 @@ type HubResult struct {
 	// demselben Alias neu angelegt wurde. Dann ist nichts festgehalten, auch
 	// kein Fehler: Der neue Eintrag hat seinen eigenen Stand.
 	Gone bool
+	// RecordedAt ist der Zeitpunkt (ms seit 1970), unter dem SyncEntry das
+	// Ergebnis im Stand des Eintrags festgehalten hat (hub_sync) — bei einem
+	// Erfolg also last_success dieses Abgleichs. 0, wenn nichts festgehalten
+	// ist: SyncHub allein, Gone, abgebrochener ctx, oder das Festhalten
+	// scheiterte.
+	RecordedAt int64
 }
 
 // ErrorKind ist die Art eines gescheiterten Abgleichs. Sie steht mit der
@@ -241,10 +247,15 @@ func (s *Syncer) SyncEntry(ctx context.Context, h store.Hub, connect Connect) Hu
 	if res.Err != nil {
 		rec.Err, rec.ErrKind = res.Err.Error(), string(res.Kind)
 	}
-	if err := s.Nodes.RecordSync(ctx, h.Name, h.EntryID, rec); errors.Is(err, store.ErrEntryGone) {
+	switch err := s.Nodes.RecordSync(ctx, h.Name, h.EntryID, rec); {
+	case errors.Is(err, store.ErrEntryGone):
 		res.Gone = true
-	} else if err != nil && res.Err == nil {
-		res.Err, res.Kind = err, KindReplica
+	case err != nil:
+		if res.Err == nil {
+			res.Err, res.Kind = err, KindReplica
+		}
+	default:
+		res.RecordedAt = rec.At
 	}
 	return res
 }
