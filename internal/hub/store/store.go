@@ -167,6 +167,11 @@ type Store interface {
 	// Änderung). Es liefert die Zeilen des Accounts in diesen Collections.
 	RotateAccount(ctx context.Context, name, oldHash, newHash, carrier string, shared []string) ([]contract.Row, error)
 
+	// Dump liest den vollständigen Abzug für hub export (dump.go, Task 039):
+	// jede Zeile jeder Tabelle aus DumpTables, in einer einzigen
+	// Lesetransaktion, die keinen Schreiber aufhält; Info aus derselben.
+	Dump(ctx context.Context, row func(table string, values []any) error) (Info, error)
+
 	// Tables liest die lokalen Tabellen für den Export.
 	Tables(ctx context.Context) (Tables, error)
 	// Import ersetzt in einer Transaktion die settings (vorher geprüft wie
@@ -665,19 +670,7 @@ type sqliteStore struct {
 func q(text string) string { return sqlq.Bind(sqlq.SQLite, text) }
 
 func (s *sqliteStore) Info(ctx context.Context) (Info, error) {
-	info, err := sqlitedb.ReadInfo(ctx, s.db)
-	if err != nil {
-		return Info{}, err
-	}
-	v, err := strconv.Atoi(info[sqlitedb.KeySchemaVersion])
-	if err != nil {
-		return Info{}, fmt.Errorf("db_info: Schemafassung %q: %w", info[sqlitedb.KeySchemaVersion], err)
-	}
-	rev, err := parseRevision(info[keyRevision])
-	if err != nil {
-		return Info{}, err
-	}
-	return Info{SchemaVersion: v, Revision: rev, HubID: info[keyHubID]}, nil
+	return readInfo(ctx, s.db)
 }
 
 func (s *sqliteStore) Stats(ctx context.Context) (Stats, error) {

@@ -517,6 +517,25 @@ Ausführlich: [`konzept.md`](konzept.md).
   nächsten Abgleich seine Replica und gleicht von vorn ab. Nur bei angehaltenem `serve` — es
   nimmt dessen **lock file** und endet sonst mit Exit-Code 1, ohne etwas zu ändern. In
   **actions** steht `hub.reset_id` mit der bisherigen `hub_id` als `subject`.
+- **hub export** — `kephalaion hub export --output <datei>` (Task 039): schreibt den **dump**
+  des Hubs in ein **export archive**, unabhängig von Datenbank und Schemafassung. Gelesen in
+  einer einzigen Lesetransaktion (`ReadOnly`, unter SQLite ohne `IMMEDIATE`), ohne einen
+  Schreiber aufzuhalten. Vorher versucht es, ohne zu warten, die **lock file** von `serve` zu
+  nehmen: Gelingt das, hält es sie bis zum Ende und vermerkt `serve_stopped: true` im
+  Manifest, sonst `false`. Datei `0600`, erst verdeckt neben dem Ziel, dann umbenannt. Nicht zu
+  verwechseln mit `config export` (config, `settings` und lokale Tabellen ohne Inhalte) und mit
+  **hub backup** (Kopie der SQLite-Datei).
+- **dump** (Abzug) — der vollständige Inhalt der Hub-Datenbank, Tabelle für Tabelle: alle
+  Tabellen außer `requests` und `db_info`, aus der nur Schemafassung, Revision und `hub_id`
+  mitgehen. Anders als `config export` auch das Abgeleitete (`principal_names`, der geholte
+  Stand einer Collection mit Quelle) und das Protokoll **actions**.
+- **export archive** (Export-Archiv) — die Datei von **hub export**, ein `tar.gz` im Format
+  Fassung 1: `manifest.json` (Format-Fassung, Schemafassung der Quelle, Revision, `hub_id`,
+  `serve_stopped`, Zeitpunkt, Binary, Zeilen je Teil), je Tabelle `<tabelle>.jsonl` (eine
+  Zeile JSON je Datenbankzeile, Spalten mit Namen, Ganzzahlen als Zahlen, NULL als `null`) und
+  unter `files/<collection>/<name>` der lebende Inhalt jedes Dokuments außer `SYSTEM:`, nur
+  zum Lesen. Ohne kephalaion lesbar; die Reihenfolge der Zeilen ist fest, aber nichts hängt an
+  ihr.
 - **vendor/** — Oberstes Verzeichnis jeder Collection für mitgelieferte
   Vorlagen, etwa `vendor/k-playbook/`. Lesen darf jeder mit `read`; schreiben unter
   `vendor/<name>/` nur mit dem Scope `vendor/<name>` (siehe „scope“), direkt in `vendor/`
