@@ -171,6 +171,11 @@ type Store interface {
 	// jede Zeile jeder Tabelle aus DumpTables, in einer einzigen
 	// Lesetransaktion, die keinen Schreiber aufhält; Info aus derselben.
 	Dump(ctx context.Context, row func(table string, values []any) error) (Info, error)
+	// Restore schreibt einen Abzug in einen leeren Hub (restore.go, Task
+	// 039): in einer Transaktion, alles oder nichts, ohne eigene Zeile in
+	// actions; in db_info nur die Revision und wahlweise die hub_id. Nur bei
+	// angehaltenem serve; das prüft der Aufrufer.
+	Restore(ctx context.Context, in RestoreInput) error
 
 	// Tables liest die lokalen Tabellen für den Export.
 	Tables(ctx context.Context) (Tables, error)

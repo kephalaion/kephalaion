@@ -149,6 +149,7 @@ const hubUsage = `Aufruf:
   kephalaion hub backup [--dir verzeichnis] [--keep n]
   kephalaion hub reset-id
   kephalaion hub export --output datei
+  kephalaion hub restore [--keep-hub-id] <datei>
 
 Kommandos:
   init         richtet den Hub ein: Datenbank, Schema, Abschnitt hub: in der config
@@ -165,11 +166,14 @@ Kommandos:
                einer Sicherung, nur bei angehaltenem serve
   export       schreibt den vollständigen Inhalt des Hubs in ein Archiv,
                unabhängig von Datenbank und Schemafassung
+  restore      spielt ein solches Archiv in einen frisch angelegten Hub ein,
+               nur bei angehaltenem serve
 
 Hilfe: kephalaion hub collection --help, kephalaion hub node --help,
 kephalaion hub account --help, kephalaion hub doc --help,
 kephalaion hub import --help, kephalaion hub backup --help,
-kephalaion hub reset-id --help, kephalaion hub export --help
+kephalaion hub reset-id --help, kephalaion hub export --help,
+kephalaion hub restore --help
 `
 
 const nodeUsage = `Aufruf:
@@ -254,6 +258,8 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 		return runHubResetID(args[1:], stdout, stderr)
 	case r == config.Hub && args[0] == "export":
 		return runHubExport(args[1:], stdout, stderr)
+	case r == config.Hub && args[0] == "restore":
+		return runHubRestore(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "setup":
 		return runNodeSetup(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "hub":

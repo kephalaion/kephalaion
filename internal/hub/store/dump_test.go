@@ -20,6 +20,11 @@ func TestDumpQueriesPortable(t *testing.T) {
 			}
 		}
 	}
+	for _, m := range dumpMaxRevision {
+		if err := sqlq.Check(m.query); err != nil {
+			t.Errorf("%s: %v", m.table, err)
+		}
+	}
 	if got := dumpInsert(dumpTables[3]); !strings.Contains(got, `"user"`) || !strings.Contains(got, "$8") {
 		t.Errorf("accounts: %s", got)
 	}

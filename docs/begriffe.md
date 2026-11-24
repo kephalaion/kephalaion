@@ -525,6 +525,15 @@ Ausführlich: [`konzept.md`](konzept.md).
   Manifest, sonst `false`. Datei `0600`, erst verdeckt neben dem Ziel, dann umbenannt. Nicht zu
   verwechseln mit `config export` (config, `settings` und lokale Tabellen ohne Inhalte) und mit
   **hub backup** (Kopie der SQLite-Datei).
+- **hub restore** — `kephalaion hub restore [--keep-hub-id] <datei>` (Task 039): spielt ein
+  **export archive** in einen frisch angelegten, leeren Hub ein (keine Tabelle des **dump** hat
+  eine Zeile; `requests` zählt nicht), in einer Transaktion, nur bei angehaltenem `serve` (es
+  nimmt dessen **lock file**). Schreibt nichts Eigenes: keine Zeile in **actions**, in
+  `db_info` nur die Revision des Exports und mit `--keep-hub-id` dessen `hub_id`. Ohne die
+  Option bleibt die `hub_id` aus `hub init`, und jeder Node leert beim nächsten Abgleich seine
+  Replica; `--keep-hub-id` nur nach einem Export mit `serve_stopped: true`. Lehnt eine
+  unbekannte Format-Fassung und eine Schemafassung ohne Abbildung ab. Nicht zu verwechseln mit
+  **hub import** (ein Verzeichnis als Dokumente) und `config import`.
 - **dump** (Abzug) — der vollständige Inhalt der Hub-Datenbank, Tabelle für Tabelle: alle
   Tabellen außer `requests` und `db_info`, aus der nur Schemafassung, Revision und `hub_id`
   mitgehen. Anders als `config export` auch das Abgeleitete (`principal_names`, der geholte
