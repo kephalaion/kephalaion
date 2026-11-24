@@ -74,7 +74,8 @@ const searchDescription = "Volltextsuche über docs/ der lesbaren Collections (R
 	"(heading, headings, anchor) und excerpt; höchstens drei Abschnitte je Dokument. Zum Weiterlesen name und " +
 	"section.anchor an read geben (name, section). path grenzt auf ein Verzeichnis unter docs/ ein, limit (Standard " +
 	"10, höchstens 50) gilt je Collection. Ohne Treffer: hint auf docs/index.md, die Übersicht. index.md, " +
-	"docs/README.md und Mahnungen sind nie Treffer; neu Geschriebenes erst nach dem Abgleich."
+	"docs/README.md und Mahnungen sind nie Treffer. Eigene Schreibvorgänge findet search sofort, Änderungen anderer " +
+	"erst nach dem Abgleich."
 
 func (n *Node) search(ctx context.Context, req *mcp.CallToolRequest, in SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
 	reqlog.Note(ctx, "op", "search")

@@ -184,3 +184,28 @@ func TestChangesFrontmatter(t *testing.T) {
 		t.Errorf("ohne frontmatter: %+v %q", plain, errText)
 	}
 }
+
+// Ein eigener Schreibvorgang steht sofort im Index: search findet ihn ohne
+// Abgleich, wie read und list (Anleitung für Clients, Beschreibung von
+// search).
+func TestSearchFindsOwnWrite(t *testing.T) {
+	e := newDocEnv(t)
+	out := e.callWrite(t, e.anna(), "create", CreateInput{Collection: "keph:wissen", Name: "docs/probe.md",
+		Content: "# Probe\nzanzibar quokka\n"})
+	if out.Error != nil {
+		t.Fatalf("create: %+v", out.Error)
+	}
+	var got SearchOutput
+	if _, errText := e.call(t, e.anna(), "search", SearchInput{Query: "zanzibar quokka"}, &got); errText != "" {
+		t.Fatal(errText)
+	}
+	var names []string
+	for _, r := range got.Results {
+		for _, h := range r.Hits {
+			names = append(names, r.Address+" "+h.Name)
+		}
+	}
+	if !reflect.DeepEqual(names, []string{"keph:wissen docs/probe.md"}) {
+		t.Errorf("Treffer ohne Abgleich: %v", names)
+	}
+}

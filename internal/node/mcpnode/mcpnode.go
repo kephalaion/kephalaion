@@ -10,7 +10,8 @@
 // Schritt aus Anmeldung, Adresse und Recht) und zum Schreiben über den Hub
 // create, write, delete und rename (write.go, auf demselben Schritt); dazu
 // sync (sync.go), das einen Abgleich anfordert und auf sein Ergebnis wartet.
-// Transport und initialize gehen ohne Anmeldung; list, read und changes
+// Die Antwort auf initialize trägt die Anleitung für Clients
+// (instructions.go). Transport und initialize gehen ohne Anmeldung; list, read und changes
 // liefern Inhalte nur aus Collections, in denen der gültig angemeldete
 // Account read hat, und nur dort reichen create, write, delete und rename an
 // den Hub weiter. Die Anmeldung über alle Hubs prüft Authenticate, einmal je
@@ -121,9 +122,11 @@ func NewHandler(nodes store.Store, version string, update func() upgrade.Report,
 }
 
 // server ist der MCP-Server mit allen Werkzeugen; version steht in
-// serverInfo, verdeckt leer.
+// serverInfo, verdeckt leer. Die Anleitung für Clients (instructions.go)
+// ist voll wie verdeckt dieselbe.
 func (n *Node) server(version string) *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "kephalaion", Version: version}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "kephalaion", Version: version},
+		&mcp.ServerOptions{Instructions: instructions})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "whoami",
 		Description: "Zeigt die Version des Nodes, ob es eine neuere gibt und wie das Upgrade geht (update), und je " +
