@@ -1,6 +1,8 @@
 # Fortschritt
 
-Stand: 2026-11-24 (Task 042 Abgleich auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
+Stand: 2026-11-24 (Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
+Text als `instructions` mit, gebaut und dokumentiert, noch in keinem Release; Task 042 Abgleich
+auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
 Client des Nodes gebaut und dokumentiert, noch in keinem Release — die Mindestversion für
 k-playbook trägt das Release ein;
 2026-11-14: Task 038 Sicherung des Hubs: `hub backup` und `hub reset-id` gebaut und
@@ -458,6 +460,22 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 040 (`040-mcp-instructions`) — Anleitung für Clients bei `initialize`** (2026-11-24,
+  Etappen 1–3 ausgeführt, noch in keinem Release): Der Node gibt jedem Client einen festen Text
+  als `instructions` mit — Grundprinzip, Adresse `<hub>:<collection>`, `whoami` als Einstieg, je
+  Fall (`login` `missing`, `invalid`, `never_synced`) die Abhilfe auf der Kommandozeile und der
+  Verweis auf die Doku im Repo.
+  - Text in `internal/node/mcpnode/instructions.md` (`go:embed`), voll und verdeckt derselbe,
+    ohne Version und Namen; höchstens 2048 Bytes. Claude Code kürzt `instructions` nach 4096
+    Zeichen (vor v2.1.296 nach 2048), belegt aus seiner Doku und gemessen mit 2.1.331;
+  - Tests: gleicher Text lokal, verdeckt und über den Proxy angemeldet, Länge, keine Namen des
+    Test-Setups; jedes Wort in Backticks ist ein Werkzeug oder ein Feld aus `whoami`, jedes
+    genannte Kommando gibt es (`cmd/kephalaion`);
+  - nebenbei richtiggestellt: Die Beschreibung von `search` sagte, neu Geschriebenes finde es
+    erst nach dem Abgleich — eigene Schreibvorgänge stehen sofort im Index (Test
+    `TestSearchFindsOwnWrite`);
+  - Doku: `begriffe.md` (instructions), `konzept.md` („Werkzeuge“, „Anleitung für Clients“),
+    `installation.md` („Bei den Assistenten anmelden“), README.
 - **Task 042 (`042-abgleich-auf-anforderung`) — Abgleich auf Anforderung: MCP-Werkzeug `sync` am
   Node, `node sync` auch vom reinen Client aus** (2026-11-24, Etappen 1–5 ausgeführt, noch in
   keinem Release): Anlass war die Befund-Vorprüfung von k-playbook, die im Devcontainer an

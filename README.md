@@ -26,7 +26,9 @@ gelesen und gesucht wird aus der Replica, ohne Netz — und `create`, `write`, `
 `rename` — geschrieben wird über den Hub, mit Rechten je Collection —, dazu `fetch_release` (der
 Hub holt das neueste Release einer Collection mit Quelle, etwa `k-playbook`), `rebuild_docs`
 (der Hub baut den Index von `docs/` neu) und `sync` (ein Client fordert einen Abgleich an und
-wartet auf sein Ergebnis), und gleicht als Node im Hintergrund ab.
+wartet auf sein Ergebnis), und gleicht als Node im Hintergrund ab. Jeder Client bekommt bei
+`initialize` die Anleitung für Clients: Grundprinzip, Adressen, `whoami` als Einstieg und die
+Abhilfe auf der Kommandozeile ([`docs/konzept.md`](docs/konzept.md), „Anleitung für Clients“).
 Öffentliche Collections liest jeder Account des Hubs.
 Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account

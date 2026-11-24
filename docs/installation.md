@@ -401,6 +401,11 @@ kephalaion node mcp remove --assistant opencode       # nur diesen Eintrag entfe
 | Codex | `[mcp_servers.kephalaion]` in `~/.codex/config.toml` (bzw. `$CODEX_HOME`) | der Helfer, wie bei Claude Code |
 | VS Code (Copilot) | die Erweiterung für VS Code meldet den Node selbst ([`vscode.md`](vscode.md), „MCP-Server für Copilot“) | aus den Token-Dateien, erst beim Start des Servers |
 
+Beim Verbinden bekommt jeder Client in der Antwort auf `initialize` die **Anleitung für
+Clients** (`instructions`): Grundprinzip, Adressen, `whoami` als Einstieg und je Fall die
+Abhilfe auf der Kommandozeile; Claude Code führt sie unter „MCP Server Instructions“
+([`konzept.md`](konzept.md), „Anleitung für Clients“).
+
 Der Helfer steht mit absolutem Pfad im Eintrag (`/home/<user>/.local/bin/kephalaion node mcp
 headers --tokens-dir …`, dazu `--account <hub>=<account>` nur für eine ausdrückliche Wahl):
 Assistenten aus einer GUI erben kein `PATH`, und Codex leert die Umgebung. Alles andere in den Dateien bleibt, auch Kommentare.
