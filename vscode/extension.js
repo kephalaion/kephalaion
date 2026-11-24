@@ -1320,10 +1320,47 @@ class KephFs {
 
 let ext;
 
+function terminalProject() {
+  const folders = vscode.workspace.workspaceFolders || [];
+  if (!folders.some((f) => f.uri.scheme === SCHEME)) return;
+  const projects = folders.filter((f) => f.uri.scheme === 'file' || f.uri.scheme === 'vscode-remote');
+  if (projects.length !== 1) return;
+  const project = projects[0];
+  if (!project.name || /[${}]/.test(project.name)
+    || folders.filter((f) => f.name === project.name).length !== 1) return;
+  return project;
+}
+
+async function ensureTerminalCwd(log) {
+  try {
+    const project = terminalProject();
+    if (!project) return;
+    const folders = vscode.workspace.workspaceFolders || [];
+    for (const resource of [undefined, ...folders.map((f) => f.uri)]) {
+      const value = vscode.workspace.getConfiguration('terminal.integrated', resource).inspect('cwd');
+      if (!value) return;
+      if (['globalValue', 'workspaceValue', 'workspaceFolderValue', 'globalLanguageValue',
+        'workspaceLanguageValue', 'workspaceFolderLanguageValue'].some((key) => value[key] !== undefined)) return;
+    }
+    await vscode.workspace.getConfiguration('terminal.integrated').update(
+      'cwd', `\${workspaceFolder:${project.name}}`, vscode.ConfigurationTarget.Workspace);
+    log('Terminal: Workspace-cwd ergänzt; für ein Terminal ohne Ordnerauswahl „Kephalaion: Projektterminal öffnen“ verwenden');
+  } catch (e) {
+    log(`Terminal: Workspace-cwd konnte nicht ergänzt werden: ${e.message}`);
+  }
+}
+
 function activate(context) {
   ext = context.extension;
   const out = vscode.window.createOutputChannel('Kephalaion');
   const log = (s) => out.appendLine(`${new Date().toISOString()} ${s}`);
+  let terminalSettings = Promise.resolve();
+  const updateTerminalCwd = () => {
+    terminalSettings = terminalSettings.then(() => ensureTerminalCwd(log));
+    return terminalSettings;
+  };
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(updateTerminalCwd));
+  updateTerminalCwd();
   let status;
   const node = new Node(log, () => status && status.render());
   status = new Status(node, log);
@@ -1369,6 +1406,14 @@ function activate(context) {
       // (Scope machine-overridable); ein Workspace kann es überschreiben.
       await cfg.update('accounts', { ...chosenAccounts(), [pick.hub]: pick.account }, vscode.ConfigurationTarget.Global);
       log(`Hub ${pick.hub}: Account ${pick.account} gewählt`);
+    }),
+    vscode.commands.registerCommand('kephalaion.openProjectTerminal', () => {
+      const project = terminalProject();
+      if (!project) {
+        vscode.window.showWarningMessage('Kephalaion: Projektterminal braucht genau einen echten Projektordner mit eindeutigem Namen neben einer Collection.');
+        return;
+      }
+      vscode.window.createTerminal({ cwd: project.uri }).show();
     }),
     vscode.commands.registerCommand('kephalaion.showLog', () => out.show()),
     vscode.commands.registerCommand('kephalaion.showStatus', async () => {

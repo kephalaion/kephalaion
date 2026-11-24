@@ -31,7 +31,10 @@ Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über eine
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
 list`); am eigenen Node tauscht `node account rotate` ein Token; `node whoami` zeigt, wen der
 Node kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
-ein, zum Lesen und Schreiben. Ein Node auf einem anderen Rechner erreicht den Hub über
+ein, zum Lesen und Schreiben. Bei Collections neben genau einem echten Projekt ergänzt sie
+sicher die Workspace-Terminal-cwd; „Kephalaion: Projektterminal öffnen“ umgeht die weiterhin
+mögliche Ordnerauswahl des VS-Code-Standardbefehls ([Details](docs/vscode.md#terminal-im-projektordner)).
+Ein Node auf einem anderen Rechner erreicht den Hub über
 `https`: TLS beendet ein Reverse-Proxy vor dem Hub, der auf Loopback bleibt
 ([`docs/installation.md`](docs/installation.md)). Für das Verzeichnis `docs/` einer Collection
 schreibt der Hub je Verzeichnis eine `index.md` nach Google OKF und `docs/README.md` als

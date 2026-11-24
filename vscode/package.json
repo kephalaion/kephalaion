@@ -17,6 +17,7 @@
       { "command": "kephalaion.refresh", "title": "Kephalaion: Neu verbinden" },
       { "command": "kephalaion.chooseAccount", "title": "Kephalaion: Account wählen" },
       { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
+      { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" }
     ],
     "mcpServerDefinitionProviders": [

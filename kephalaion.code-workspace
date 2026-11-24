@@ -26,6 +26,7 @@
 			"titleBar.activeBackground": "#004d40",
 			"titleBar.activeForeground": "#ffffff",
 			"statusBar.background": "#004d40"
-		}
+		},
+		"terminal.integrated.cwd": "${workspaceFolder:kephalaion}"
 	}
 }

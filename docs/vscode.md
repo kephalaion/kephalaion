@@ -66,6 +66,36 @@ Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS 
 ]}
 ```
 
+### Terminal im Projektordner
+
+Beim Aktivieren (auch nach Upgrade/Reload) und nach tatsächlichen Änderungen der
+Workspace-Ordner ergänzt die Erweiterung `terminal.integrated.cwd` auf Workspace-Ebene als
+`${workspaceFolder:<Name>}`. Voraussetzung: mindestens ein `keph`-Ordner und genau ein echter
+Projektordner (`file` oder `vscode-remote`), dessen Name im gesamten Workspace eindeutig ist
+und keine Variablenbegrenzer enthält. Mehrere echte Projekte, virtuelle Fremdordner ohne
+Projekt und reine Collection-Workspaces bleiben unverändert. Explizite cwd-Werte auf Benutzer-,
+Workspace- oder irgendeiner Ordner-Ebene bleiben erhalten, auch leere Werte. Schreibfehler
+stehen im Output „Kephalaion“ und unterbrechen weder Aktivierung noch Collection-Einbindung.
+Die Prüfung erfolgt nach dem Workspace-Ereignis, nicht unmittelbar nach dem asynchronen
+`updateWorkspaceFolders`; beim Wechsel vom Einzelordner zum Workspace greift auch die
+Aktivierung nach dem Neustart des Extension Hosts.
+
+**Grenze des Standardbefehls:** Diese cwd-Vorgabe allein beseitigt die Ordnerauswahl bei
+„Terminal: Neues Terminal erstellen“ nicht. VS Code bildet pro Workspace-Ordner eine cwd-URI
+unter Beibehaltung von Schema und Authority; gleiche Pfade mit `file` und `keph` bleiben
+verschiedene Kandidaten. Belegt an der offiziellen Quelle
+[`terminalActions.ts` (VS Code 1.101.0)](https://github.com/microsoft/vscode/blob/1.101.0/src/vs/workbench/contrib/terminal/browser/terminalActions.ts),
+Funktionen `pickTerminalCwd`, `resolveWorkspaceFolderCwd`, `shrinkWorkspaceFolderCwdPairs`,
+und am Stand `main` vom 2026-11-16. Keine gegenteilige GUI-Abnahme behauptet.
+
+**Ohne Ordnerauswahl:** „Kephalaion: Projektterminal öffnen“ öffnet über
+`window.createTerminal({ cwd: project.uri })` direkt im eindeutig bestimmbaren Projekt
+(gleiche Auswahlregel, Remote-URI bleibt erhalten). Dieser ausdrücklich gewählte Befehl
+verwendet den Projektordner unabhängig von cwd-Einstellungen, ändert diese aber nicht.
+Bei Mehrdeutigkeit erscheint nur ein Hinweis. Standardbefehle, Tastenkürzel und vorhandene
+Terminals werden nicht überschrieben. Den Standard-Picker global zu unterdrücken ist mit
+einer cwd-Einstellung allein nicht möglich; dafür ist dieser separate sichere Weg vorgesehen.
+
 ### Die Vorgänge und ihre Entsprechung
 
 | `FileSystemProvider` | Kephalaion (MCP-Werkzeug des Nodes) |

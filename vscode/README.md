@@ -33,6 +33,15 @@ oder neuer.
   neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten). Abschalten mit
   `kephalaion.mcpServer.enabled: false`.
 
+**Terminal:** Bei Collections neben genau einem echten Projekt ergänzt die Erweiterung beim
+Start und nach Workspace-Änderungen eine portable Workspace-cwd-Vorgabe, ohne explizite
+Benutzer-/Workspace-/Ordner-Werte zu überschreiben. Mehrere Projekte oder mehrdeutige Namen
+bleiben unverändert; Schreibfehler stehen nur im Log. VS Codes Standardbefehl kann wegen der
+verschiedenen URI-Schemata trotzdem nach dem Ordner fragen. **„Kephalaion: Projektterminal
+öffnen“** startet direkt im eindeutigen Projekt, ohne Auswahl und ohne Einstellungen zu ändern
+(expliziter Projektbefehl, unabhängig von cwd-Vorgaben). Details und Quellen in
+[`../docs/vscode.md`](../docs/vscode.md#terminal-im-projektordner).
+
 Bauen und installieren (unter WSL aus einem WSL-Terminal, dann landet die Erweiterung im
 VS-Code-Server der WSL):
 

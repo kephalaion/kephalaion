@@ -46,6 +46,11 @@ let fsProvider;
 let statusItem;
 const registered = {};
 const disposables = [];
+const terminalUpdates = [];
+const terminalValues = new Map();
+const terminals = [];
+let terminalWriteError;
+let workspaceChanged;
 
 class Disposable {
   constructor(fn) {
@@ -72,7 +77,18 @@ for (const code of ['FileNotFound', 'FileExists', 'FileNotADirectory', 'FileIsAD
 
 const vscode = {
   workspace: {
-    getConfiguration: () => ({ get: (k, d) => (k in settings ? settings[k] : d), update: async () => {} }),
+    getConfiguration: (section, resource) => section === 'terminal.integrated' ? {
+      inspect: () => ({ ...(terminalValues.get(resource) || {}) }),
+      update: async (key, value, target) => {
+        if (terminalWriteError) throw terminalWriteError;
+        terminalUpdates.push({ key, value, target });
+        terminalValues.set(undefined, { workspaceValue: value });
+      },
+    } : { get: (k, d) => (k in settings ? settings[k] : d), update: async () => {} },
+    onDidChangeWorkspaceFolders: (fn) => {
+      workspaceChanged = fn;
+      return new Disposable(() => { workspaceChanged = undefined; });
+    },
     registerFileSystemProvider: (scheme, p) => {
       fsProvider = p;
       return new Disposable();
@@ -86,6 +102,11 @@ const vscode = {
     createStatusBarItem: () => {
       statusItem = { show: () => {}, dispose: () => {} };
       return statusItem;
+    },
+    createTerminal: (options) => {
+      const terminal = { options, shown: false, show() { this.shown = true; } };
+      terminals.push(terminal);
+      return terminal;
     },
     showWarningMessage: () => {},
     showQuickPick: async () => undefined,
@@ -131,7 +152,7 @@ const vscode = {
   FilePermission: { Readonly: 1 },
   FileSystemError,
   QuickPickItemKind: { Separator: -1 },
-  ConfigurationTarget: { Global: 1 },
+  ConfigurationTarget: { Global: 1, Workspace: 2 },
   Uri: { parse: (s) => ({ toString: () => s, s }), from: (o) => o },
   McpHttpServerDefinition: class {
     constructor(label, uri, headers, version) {
@@ -196,8 +217,130 @@ const settle = () => new Promise((r) => setTimeout(r, 50));
 
 // Nach jedem Test die Erweiterung beenden, auch nach einem Fehler: Ihre Zeitgeber hielten den
 // Prozess sonst am Leben.
-test.afterEach(() => stop());
+test.afterEach(() => {
+  stop();
+  vscode.workspace.workspaceFolders = [];
+  terminalValues.clear();
+  terminalUpdates.length = 0;
+  terminals.length = 0;
+  terminalWriteError = undefined;
+});
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+const folder = (name, scheme = 'file') => ({ name, uri: { scheme, authority: scheme === 'keph' ? 'vm' : '', path: `/${name}` } });
+
+test('Terminal-cwd: bestehender Workspace beim Aktivieren, portabel und nur einmal', async () => {
+  vscode.workspace.workspaceFolders = [folder('Wissen', 'keph'), folder('mein Projekt')];
+  start();
+  await settle();
+  assert.deepStrictEqual(terminalUpdates, [{ key: 'cwd', value: '${workspaceFolder:mein Projekt}', target: 2 }]);
+  await workspaceChanged();
+  assert.strictEqual(terminalUpdates.length, 1);
+  registered['kephalaion.openProjectTerminal']();
+  assert.strictEqual(terminals[0].options.cwd, vscode.workspace.workspaceFolders[1].uri);
+  assert.strictEqual(terminals[0].shown, true);
+});
+
+test('Terminal-cwd: erst nach tatsächlicher Workspace-Änderung, auch Remote-Projekt', async () => {
+  const project = folder('Projekt', 'vscode-remote');
+  project.uri.authority = 'wsl+Ubuntu';
+  vscode.workspace.workspaceFolders = [project];
+  start();
+  await settle();
+  assert.strictEqual(terminalUpdates.length, 0);
+  vscode.workspace.workspaceFolders.push(folder('Wissen', 'keph'));
+  await Promise.all([workspaceChanged(), workspaceChanged()]);
+  assert.strictEqual(terminalUpdates.length, 1);
+  registered['kephalaion.openProjectTerminal']();
+  assert.strictEqual(terminals[0].options.cwd, project.uri);
+});
+
+test('Terminal-cwd: globale, Workspace- und Folder-Werte einschließlich leer/null respektieren', async () => {
+  for (const key of ['globalValue', 'workspaceValue', 'workspaceFolderValue', 'globalLanguageValue',
+    'workspaceLanguageValue', 'workspaceFolderLanguageValue']) {
+    for (const value of ['', null, '/eigen']) {
+      const project = folder('Projekt');
+      const collection = folder('Wissen', 'keph');
+      vscode.workspace.workspaceFolders = [project, collection];
+      terminalValues.clear();
+      terminalValues.set(key.startsWith('workspaceFolder') ? collection.uri : undefined, { [key]: value });
+      start();
+      await settle();
+      assert.strictEqual(terminalUpdates.length, 0, `${key}: ${value}`);
+      stop();
+    }
+  }
+});
+
+test('Terminal-cwd: ohne eindeutiges echtes Projekt nichts ändern oder öffnen', async () => {
+  for (const folders of [[], [folder('Wissen', 'keph')], [folder('Projekt')],
+    [folder('Wissen', 'keph'), folder('A'), folder('B')],
+    [folder('Projekt', 'keph'), folder('Projekt')],
+    [folder('Wissen', 'keph'), folder('x${env:HOME}')],
+    [folder('Wissen', 'keph'), folder('virtuell', 'memfs')]]) {
+    vscode.workspace.workspaceFolders = folders;
+    start();
+    await settle();
+    registered['kephalaion.openProjectTerminal']();
+    assert.strictEqual(terminalUpdates.length, 0);
+    assert.strictEqual(terminals.length, 0);
+    stop();
+  }
+});
+
+test('Collection einbinden: Settings erst beim bestätigten Ereignis, Schreibfehler brechen Befehl nicht ab', async () => {
+  const oldPick = vscode.window.showQuickPick;
+  const oldUpdate = vscode.workspace.updateWorkspaceFolders;
+  const project = folder('Projekt');
+  vscode.workspace.workspaceFolders = [project];
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [] });
+  putToken('vm', 'kamran', TOKEN_A);
+  reply = (params, headers) => {
+    const result = validNode(params, headers);
+    if (params.name === 'whoami') {
+      for (const hub of result.structuredContent.hubs) {
+        hub.collections = [{ address: `${hub.hub}:wissen`, collection: 'wissen', rights: ['read'] }];
+      }
+    }
+    return result;
+  };
+  try {
+    vscode.window.showQuickPick = async (items) => items[0];
+    let added;
+    vscode.workspace.updateWorkspaceFolders = (index, count, value) => {
+      assert.strictEqual(index, 1);
+      assert.strictEqual(count, 0);
+      added = value;
+      return true;
+    };
+    start();
+    await settle();
+    await registered['kephalaion.addCollection']();
+    assert.ok(added);
+    assert.strictEqual(terminalUpdates.length, 0);
+    vscode.workspace.workspaceFolders.push(added);
+    terminalWriteError = new Error('Workspace nicht schreibbar');
+    await workspaceChanged();
+    assert.strictEqual(terminalUpdates.length, 0);
+    assert.ok(logs.some((l) => l.includes('Workspace nicht schreibbar')));
+  } finally {
+    vscode.window.showQuickPick = oldPick;
+    vscode.workspace.updateWorkspaceFolders = oldUpdate;
+    reply = null;
+  }
+});
+
+test('Terminal-cwd: Schreibfehler bleiben lokal und spätere Einbindung funktioniert', async () => {
+  vscode.workspace.workspaceFolders = [folder('Projekt'), folder('Wissen', 'keph')];
+  terminalWriteError = new Error('settings schreibgeschützt');
+  start();
+  await settle();
+  assert.ok(registered['kephalaion.addCollection']);
+  assert.ok(logs.some((l) => l.includes('Workspace-cwd konnte nicht ergänzt werden: settings schreibgeschützt')));
+  terminalWriteError = undefined;
+  await workspaceChanged();
+  assert.strictEqual(terminalUpdates.length, 1);
+});
 
 test('entfernte nodeUrl: nur die gewählten Hubs, auch nach einem neuen Hub unter tokens/', async () => {
   putToken('vm', 'kamran', TOKEN_A);
