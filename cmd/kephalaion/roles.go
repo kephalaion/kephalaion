@@ -175,7 +175,7 @@ const nodeUsage = `Aufruf:
   kephalaion node hub add|check|list|show|set|rm|token|rotate …
   kephalaion node collection add|list|rm …
   kephalaion node account setup|rotate|check|list|default …
-  kephalaion node sync [<alias>]
+  kephalaion node sync [<alias>] [--node <url>] …
   kephalaion node doc list|get …
   kephalaion node dir push|pull …
   kephalaion node mcp add|remove|status|headers …
@@ -195,7 +195,8 @@ Kommandos:
                (check), zeigt alle Token-Dateien mit Zustand (list) und
                setzt den Standard-Account je Hub (default)
   sync         gleicht die Replicas mit den Hubs ab (Transport local, http und
-               https); serve tut das im Hintergrund selbst
+               https); serve tut das im Hintergrund selbst. Auf einem reinen
+               Client oder mit --node fordert es den Abgleich beim Node an
   doc          listet und liest Dokumente aus der Replica
   dir          gleicht einen lokalen Ordner mit einem Verzeichnis einer
                Collection ab, als Client des Nodes über MCP: push ersetzt den
@@ -257,7 +258,7 @@ func runRole(r config.Role, args []string, stdin io.Reader, stdout, stderr io.Wr
 	case r == config.Node && args[0] == "account":
 		return runNodeAccount(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "sync":
-		return runNodeSync(args[1:], stdout, stderr)
+		return runNodeSync(args[1:], stdin, stdout, stderr)
 	case r == config.Node && args[0] == "doc":
 		return runNodeDoc(args[1:], stdout, stderr)
 	case r == config.Node && args[0] == "dir":
@@ -495,7 +496,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "%s: nicht eingerichtet\n", r)
 			continue
 		}
-		if dbDir, ok := roleNotHere(sec); ok && !(loc.System() && systemDBUnreadable(sec)) {
+		if dbDir, ok := pureClient(loc, sec); ok {
 			// Ein reiner Client, etwa ein Devcontainer mit der config des
 			// Hosts (Task 037): kein Fehler, trägt nicht zum Exit-Code bei.
 			fmt.Fprintf(stdout, "%s: läuft nicht hier\n", r)
@@ -669,6 +670,20 @@ func roleNotHere(sec *config.Section) (dir string, ok bool) {
 		return "", false
 	}
 	return dir, true
+}
+
+// pureClient sagt, ob dieser Rechner für eine Rolle der config ein reiner
+// Client ist — die eine Erkennung, die status („läuft nicht hier“) und node
+// sync (Task 042: dann über MCP an den Node) beide rufen: roleNotHere, außer
+// bei der globalen Installation, deren Datenbanken der Aufrufer nicht lesen
+// darf — dort läuft die Rolle hier, nur nicht für diesen User. Die Regel
+// selbst steht in roleNotHere. dir ist das fehlende Verzeichnis.
+func pureClient(loc config.Location, sec *config.Section) (dir string, ok bool) {
+	dir, ok = roleNotHere(sec)
+	if ok && loc.System() && systemDBUnreadable(sec) {
+		return "", false
+	}
+	return dir, ok
 }
 
 // systemDBUnreadable sagt, ob die Datenbank einer Rolle mangels Rechten nicht

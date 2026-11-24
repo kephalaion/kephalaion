@@ -214,7 +214,7 @@ func TestWriteCheckedAtNode(t *testing.T) {
 		{"unbekannt", e.anna(), create("keph:gibtsnicht", "x.md"), "not_readable", "keph:gibtsnicht nicht lesbar"},
 		{"unbekannter Hub", e.anna(), create("fremd:wissen", "x.md"), "not_readable", "fremd:wissen nicht lesbar"},
 		{"noch nie abgeglichen", e.anna(), create("neu:wissen", "x.md"), "not_readable",
-			"Hub neu: noch nie abgeglichen, der Node hat keine Replica; zuerst: kephalaion node sync neu"},
+			"Hub neu: noch nie abgeglichen, der Node hat keine Replica; zuerst am Rechner des Nodes: kephalaion node sync neu"},
 		{"Replica nicht lesbar", e.anna(), create("team:notizen", "x.md"), CodeInternal, "Hub team: Replica nicht lesbar"},
 		{"ohne Collection", e.anna(), create("keph:", "x.md"), "invalid", "ohne Collection"},
 		{"Adresse ungültig", e.anna(), create("keph:Wissen", "x.md"), "invalid", "Collection"},

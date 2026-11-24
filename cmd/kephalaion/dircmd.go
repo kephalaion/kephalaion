@@ -7,13 +7,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/kephalaion/kephalaion/internal/assistant"
-	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/dirsync"
 	"github.com/kephalaion/kephalaion/internal/ident"
@@ -133,12 +130,7 @@ func runNodeDir(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	leaf := func(name string, pull bool) func([]string) int {
 		return func(a []string) int {
 			c := newCommand("node dir "+name, u, stdout, stderr, "<hub>:<collection>", "<verzeichnis>", "<lokaler-ordner>")
-			d := &dirCommand{c: c, pull: pull, stdin: stdin}
-			d.node = c.fs.String("node", "", "")
-			d.caFile = c.fs.String("ca-file", "", "")
-			d.account = c.fs.String("account", "", "")
-			d.tokenFile = c.fs.String("token-file", "", "")
-			d.tokenStdin = c.fs.Bool("token-stdin", false, "")
+			d := &dirCommand{c: c, pull: pull, login: addNodeLogin(c, stdin)}
 			c.fs.Var(&d.exclude, "exclude", "")
 			d.dryRun = c.fs.Bool("dry-run", false, "")
 			d.timeout = c.fs.Duration("timeout", 0, "")
@@ -160,21 +152,17 @@ func runNodeDir(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	})
 }
 
-// dirCommand ist ein Aufruf von push oder pull mit seinen Optionen.
+// dirCommand ist ein Aufruf von push oder pull mit seinen Optionen; login
+// sind die der Anmeldung am Node (nodelogin.go).
 type dirCommand struct {
-	c          *command
-	pull       bool
-	stdin      io.Reader
-	node       *string
-	caFile     *string
-	account    *string
-	tokenFile  *string
-	tokenStdin *bool
-	exclude    stringList
-	dryRun     *bool
-	timeout    *time.Duration
-	del        *bool
-	last       *string
+	c       *command
+	pull    bool
+	login   *nodeLogin
+	exclude stringList
+	dryRun  *bool
+	timeout *time.Duration
+	del     *bool
+	last    *string
 }
 
 // usageError ist ein falscher Aufruf: Meldung und Exit-Code 2.
@@ -210,26 +198,18 @@ func (d *dirCommand) run(pos []string) int {
 	if *d.timeout < 0 {
 		return d.usageError("--timeout %s: erwartet eine Dauer ab 0", *d.timeout)
 	}
-	if *d.tokenFile != "" && *d.tokenStdin {
-		return d.usageError("--token-file und --token-stdin schließen sich aus; das Token wird nie als Argument übergeben")
+	if err := d.login.check(); err != nil {
+		return d.usageError("%v", err)
 	}
-	if (*d.tokenFile != "" || *d.tokenStdin) && *d.account == "" {
-		return d.usageError("--account fehlt: mit --token-file oder --token-stdin ist der Account anzugeben")
-	}
-	if *d.account != "" {
-		if err := ident.CheckPrincipalName("Account", *d.account); err != nil {
-			return d.usageError("%v", err)
-		}
-	}
-	addr, err := d.address()
+	addr, err := d.login.address()
 	if err != nil {
 		return d.c.fail(err)
 	}
-	rootCAs, err := readNodeCA(addr, *d.caFile)
+	rootCAs, err := readNodeCA(addr, *d.login.caFile)
 	if err != nil {
 		return d.c.fail(err)
 	}
-	account, token, err := d.credentials(hub)
+	account, token, err := d.login.credentials(hub)
 	if err != nil {
 		return d.c.fail(err)
 	}
@@ -243,8 +223,8 @@ func (d *dirCommand) run(pos []string) int {
 	}
 	// Die Verbindung selbst und jeder Vorgang laufen ohne den Abbruch: Der
 	// laufende Vorgang geht zu Ende.
-	tgt, closeNode, err := connectNode(context.WithoutCancel(ctx), addr, rootCAs, *d.caFile, hub, collection, account,
-		token)
+	tgt, closeNode, err := connectNode(context.WithoutCancel(ctx), addr, rootCAs, *d.login.caFile, hub, collection,
+		account, token)
 	if err != nil {
 		return d.c.fail(err)
 	}
@@ -305,69 +285,4 @@ func (d *dirCommand) checkDirScope(ctx context.Context, tgt *mcpTarget, dir stri
 		"die übrigen wiederholen).\n"+
 		"Eine eben erteilte Freigabe kennt der Node erst nach dem Abgleich: kephalaion node sync %s",
 		contract.VendorDir, tgt.account, tgt.addr, dirsync.DirName(dir), granted, tgt.account, tgt.collection, tgt.hub), false
-}
-
-// address ist die Adresse des Nodes: --node, sonst listen im Abschnitt node:
-// der config.
-func (d *dirCommand) address() (nodeAddress, error) {
-	if *d.node != "" {
-		return parseNodeAddress(*d.node)
-	}
-	if *d.caFile != "" {
-		return nodeAddress{}, errors.New("--ca-file nur zusammen mit --node https://…")
-	}
-	loc, err := config.Locate(*d.c.cfg)
-	if err != nil {
-		return nodeAddress{}, err
-	}
-	cfg, _, err := config.Load(loc.Path)
-	if err != nil {
-		return nodeAddress{}, err
-	}
-	listen := cfg.Listen(config.Node)
-	if listen == "" {
-		return nodeAddress{}, fmt.Errorf("kein Node in der config %s; Adresse mit --node <url> angeben", loc.Path)
-	}
-	return localNodeAddress(listen), nil
-}
-
-// credentials liefert Account und Token: --token-file oder --token-stdin
-// mit --account, sonst die Token-Datei unter tokens/<hub>/ nach der
-// Reihenfolge der Wahl (Task 037): --account, der Standard, die einzige.
-// Fehlt die Wahl, bricht es mit den Kandidaten ab.
-func (d *dirCommand) credentials(hub string) (account, token string, err error) {
-	switch {
-	case *d.tokenFile != "":
-		token, err = readTokenFile(*d.tokenFile)
-		return *d.account, token, err
-	case *d.tokenStdin:
-		token, err = readToken(d.stdin)
-		return *d.account, token, err
-	}
-	// Dieselben Token-Dateien und dieselbe Wahl wie node mcp
-	// (internal/assistant).
-	base, err := assistant.TokensDir()
-	if err != nil {
-		return "", "", err
-	}
-	dir := filepath.Join(base, hub)
-	r := assistant.Resolve(base, hub, *d.account)
-	for _, n := range r.Notes {
-		fmt.Fprintf(d.c.stderr, "%s: Hinweis: Hub %s: %s\n", d.c.name, hub, n)
-	}
-	switch {
-	case r.How == assistant.ByOverride && r.File == "":
-		// Ohne Rückfall: Die Meldung nennt die fehlende Datei.
-		return "", "", fmt.Errorf("Token-Datei %s fehlt: %s hat keine Token-Datei an diesem Hub",
-			assistant.TokenFile(base, hub, r.Account), r.Account)
-	case r.File != "":
-		token, err = readTokenFile(r.File)
-		return r.Account, token, err
-	case len(r.Candidates) > 1:
-		return "", "", fmt.Errorf("Wahl fehlt: mehrere Token-Dateien unter %s: %s, kein Standard; --account wählt, "+
-			"oder dauerhaft: kephalaion node account default %s <account>", dir, strings.Join(r.Candidates, ", "), hub)
-	case r.Reason != "":
-		return "", "", errors.New(r.Reason)
-	}
-	return "", "", fmt.Errorf("keine Token-Datei unter %s (<account>.token); --account mit --token-file oder --token-stdin", dir)
 }

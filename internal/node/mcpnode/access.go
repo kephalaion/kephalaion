@@ -51,8 +51,8 @@ func notReadable(addr string) error {
 // whoami — und nennt den Ausweg. Für die Werkzeuge, die schreiben, ist das
 // nicht lesbar: Der Node prüft vor dem Schreiben gegen die Replica.
 func neverSynced(hub string) error {
-	return &toolError{msg: "Hub " + hub + ": noch nie abgeglichen, der Node hat keine Replica; zuerst: kephalaion node sync " +
-		hub, code: string(contract.CodeNotReadable)}
+	return &toolError{msg: "Hub " + hub + ": noch nie abgeglichen, der Node hat keine Replica; zuerst am Rechner des " +
+		"Nodes: kephalaion node sync " + hub, code: string(contract.CodeNotReadable)}
 }
 
 // replicaUnreadable ist die Meldung zu einem Hub, dessen Replica sich nicht

@@ -16,11 +16,12 @@ import (
 	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
 )
 
-// Die Kommandozeile als Client des Nodes über MCP (node dir push|pull): der
-// Client des go-sdk gegen /mcp, mit dem Header-Paar eines Hubs, und darüber
-// dirsync.Target aus den Werkzeugen list, read, create, write und delete;
-// dazu whoami für die Verzeichnis-Scopes, die push außerhalb von vendor/
-// braucht. Das Token steht nur im Header; keine Meldung nennt es.
+// Die Kommandozeile als Client des Nodes über MCP (node dir push|pull, node
+// sync auf einem reinen Client oder mit --node): der Client des go-sdk gegen
+// /mcp, mit dem Header-Paar eines Hubs, und darüber dirsync.Target aus den
+// Werkzeugen list, read, create, write und delete; dazu whoami für die
+// Verzeichnis-Scopes, die push außerhalb von vendor/ braucht, und sync für
+// node sync. Das Token steht nur im Header; keine Meldung nennt es.
 
 // headerTransport setzt die Header eines Clients an jede Anfrage.
 type headerTransport struct {
@@ -44,14 +45,27 @@ type mcpTarget struct {
 	hub, collection, account string
 }
 
-// connectNode verbindet sich mit dem MCP-Eingang unter addr, angemeldet am
-// Hub hub als account mit token, und liefert das Ziel für die Collection.
-// Zuerst prüft es den Node ohne Token (probeNode): Ein Zertifikatsfehler,
-// eine Anmeldung des Proxys oder ein falscher Präfix fällt so auf, bevor ein
-// Token hinausgeht. rootCAs prüft das Zertifikat bei https (nil:
-// System-Roots), caFile nennt die Meldung. done beendet die Sitzung.
+// connectNode verbindet sich mit dem MCP-Eingang unter addr
+// (connectNodeSession) und liefert das Ziel für die Collection. done beendet
+// die Sitzung.
 func connectNode(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, caFile, hub, collection, account,
 	token string) (tgt *mcpTarget, done func(), err error) {
+	session, done, err := connectNodeSession(ctx, addr, rootCAs, caFile, hub, account, token)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &mcpTarget{session: session, addr: hub + ":" + collection, hub: hub, collection: collection, account: account},
+		done, nil
+}
+
+// connectNodeSession verbindet sich mit dem MCP-Eingang unter addr,
+// angemeldet am Hub hub als account mit token — für node dir (connectNode)
+// und node sync. Zuerst prüft es den Node ohne Token (probeNode): Ein
+// Zertifikatsfehler, eine Anmeldung des Proxys oder ein falscher Präfix fällt
+// so auf, bevor ein Token hinausgeht. rootCAs prüft das Zertifikat bei https
+// (nil: System-Roots), caFile nennt die Meldung. done beendet die Sitzung.
+func connectNodeSession(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, caFile, hub, account,
+	token string) (session *mcp.ClientSession, done func(), err error) {
 	if _, err := probeNode(ctx, addr, rootCAs, caFile); err != nil {
 		return nil, nil, err
 	}
@@ -59,13 +73,12 @@ func connectNode(ctx context.Context, addr nodeAddress, rootCAs *x509.CertPool, 
 	h.Set("X-Keph-Account-"+hub, account)
 	h.Set("X-Keph-Token-"+hub, token)
 	client := mcp.NewClient(&mcp.Implementation{Name: "kephalaion", Version: "1"}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: addr.Endpoint(),
+	session, err = client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: addr.Endpoint(),
 		HTTPClient: nodeClient(rootCAs, h), DisableStandaloneSSE: true, MaxRetries: -1}, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Node unter %s nicht erreichbar: %w", addr.Endpoint(), err)
 	}
-	return &mcpTarget{session: session, addr: hub + ":" + collection, hub: hub, collection: collection, account: account},
-		func() { _ = session.Close() }, nil
+	return session, func() { _ = session.Close() }, nil
 }
 
 // DirScopes fragt den Node über whoami nach den Verzeichnis-Scopes des
@@ -91,7 +104,7 @@ func (t *mcpTarget) DirScopes(ctx context.Context) ([]string, error) {
 	if h.Login != mcpnode.LoginOK {
 		msg := fmt.Sprintf("Account %s ist am Node für den Hub %s nicht angemeldet (login %s)", t.account, t.hub, h.Login)
 		if h.Sync.NeverSynced {
-			msg += "; noch nie abgeglichen: kephalaion node sync " + t.hub
+			msg += "; noch nie abgeglichen — zuerst am Rechner des Nodes: kephalaion node sync " + t.hub
 		}
 		return nil, errors.New(msg)
 	}
@@ -107,12 +120,18 @@ func (t *mcpTarget) DirScopes(ctx context.Context) ([]string, error) {
 	return dirs, nil
 }
 
-// call ruft ein Werkzeug und liest die strukturierte Antwort nach out. Ein
-// Fehler des Werkzeugs (isError) kommt als *dirsync.OpError — mit dem Code
-// aus der Struktur, wenn das Werkzeug einen liefert (create, write, delete),
-// sonst nur mit der Meldung; ein Fehler des Transports bleibt, wie er ist.
+// call ruft ein Werkzeug in der Sitzung des Ziels; siehe callTool.
 func (t *mcpTarget) call(ctx context.Context, tool string, args, out any) (text string, err error) {
-	res, err := t.session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	return callTool(ctx, t.session, tool, args, out)
+}
+
+// callTool ruft ein Werkzeug und liest die strukturierte Antwort nach out.
+// Ein Fehler des Werkzeugs (isError) kommt als *dirsync.OpError — mit dem
+// Code aus der Struktur, wenn das Werkzeug einen liefert (create, write,
+// delete, sync), sonst nur mit der Meldung; ein Fehler des Transports bleibt,
+// wie er ist.
+func callTool(ctx context.Context, session *mcp.ClientSession, tool string, args, out any) (text string, err error) {
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		return "", fmt.Errorf("Werkzeug %s: %w", tool, err)
 	}

@@ -1,17 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/kephalaion/kephalaion/internal/assistant"
 	"github.com/kephalaion/kephalaion/internal/config"
 	"github.com/kephalaion/kephalaion/internal/contract"
 	"github.com/kephalaion/kephalaion/internal/hub/replication"
 	hubstore "github.com/kephalaion/kephalaion/internal/hub/store"
 	"github.com/kephalaion/kephalaion/internal/ident"
+	"github.com/kephalaion/kephalaion/internal/node/mcpnode"
+	nodestore "github.com/kephalaion/kephalaion/internal/node/store"
 )
 
 // syncSetup richtet Hub und Node in einer config ein: Collections wissen und
@@ -157,6 +168,11 @@ func TestNodeSyncUsage(t *testing.T) {
 	isolate(t)
 	runT(t, "node", "--help").want(t, 0, "kephalaion node sync", "node doc list|get")
 	runT(t, "node", "sync", "--help").want(t, 0, "https", "--ca-file", "noch nicht unterstützt", "Exit-Code ist dann 1")
+	// Als Client des Nodes (Task 042): die Optionen, wann es über MCP geht,
+	// und was dort ohne Alias gilt.
+	runT(t, "node", "sync", "--help").want(t, 0, "--node url", "--account name", "--token-file pfad", "--token-stdin",
+		"reinen Client", "über MCP", "den einen Hub, für den unter <config-dir>/tokens/", "falscher Aufruf (Exit 2)",
+		"nennt die Aliase", "40 s", "am Rechner des Nodes")
 	runT(t, "node", "doc", "--help").want(t, 0, "node doc list", "SYSTEM:")
 	runT(t, "node", "doc").want(t, 2, "kephalaion node doc get")
 	runT(t, "node", "doc", "rm").want(t, 2, "Unbekanntes Kommando: node doc rm")
@@ -360,5 +376,265 @@ func TestLocalWriteOutcome(t *testing.T) {
 		Collection: "team-x", Name: "abgebrochen.md"})
 	if !errors.Is(err, contract.ErrOutcomeUnknown) {
 		t.Errorf("abgebrochen: %v", err)
+	}
+}
+
+// clientEnv ist commEnv mit laufendem serve und der config eines reinen
+// Clients (Task 042): ein Abschnitt node: mit dem listen von serve, dessen
+// Datenbank samt Verzeichnis hier fehlt — wie im Devcontainer mit der config
+// des Hosts. Die Token-Dateien liegen unter tokens/ neben der config des
+// Users.
+type clientEnv struct {
+	*commEnv
+	srv     *running
+	nodeURL string
+	// client ist die Option --config des reinen Clients.
+	client string
+	tokens string
+}
+
+func newClientEnv(t *testing.T) *clientEnv {
+	t.Helper()
+	e := &clientEnv{commEnv: newCommEnv(t)}
+	e.run(t, "node", "sync").want(t, 0)
+	// Keine Runden: Nur der angeforderte Abgleich gleicht ab.
+	e.run(t, "config", "set", "node", "sync_interval", "0").want(t, 0)
+	e.srv = startServe(t, portZero(t, e.cfg))
+	e.nodeURL = "http://" + e.srv.addrs[config.Node]
+	gone := filepath.Join(e.dir, "host", "var", "lib", "kephalaion")
+	path := filepath.Join(e.dir, "client.yaml")
+	if err := config.Save(path, config.Config{Node: &config.Section{DB: "sqlite://" + filepath.Join(gone, "node.db"),
+		Listen: e.srv.addrs[config.Node]}}); err != nil {
+		t.Fatal(err)
+	}
+	e.client = "--config=" + path
+	var err error
+	if e.tokens, err = assistant.TokensDir(); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// token legt die Token-Datei eines Accounts für einen Hub unter tokens/ an.
+func (e *clientEnv) token(t *testing.T, hub, account string) {
+	t.Helper()
+	dir := filepath.Join(e.tokens, hub)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, account+".token"), []byte(e.commEnv.tokens[account]+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// noToken prüft, dass eine Ausgabe kein Token nennt.
+func noToken(t *testing.T, r result) result {
+	t.Helper()
+	if strings.Contains(r.out+r.errOut, "keph_") {
+		t.Errorf("Token in der Ausgabe:\n%s%s", r.out, r.errOut)
+	}
+	return r
+}
+
+// node sync auf einem reinen Client (Task 042): Statt „Datenbankdatei fehlt“
+// fordert es den Abgleich beim Node an und endet mit Exit 0, wenn der
+// abgeglichen hat — mit Alias, und ohne Alias mit genau einem Hub unter
+// tokens/. Bei mehreren oder keinem Hub ist es ein falscher Aufruf.
+func TestNodeSyncPureClient(t *testing.T) {
+	slow(t, "serve mit Hub und Node, mehrere angeforderte Abgleiche über MCP")
+	e := newClientEnv(t)
+	e.token(t, "fern", "alice")
+
+	// Mit Alias: Was am Hub neu ist, steht danach in der Replica des Nodes.
+	e.runIn(t, "eins", "hub", "doc", "put", "team-x", "a.md").want(t, 0)
+	if e.docIs(t, "fern:team-x", "a.md", "eins") {
+		t.Fatal("a.md schon vor dem Abgleich da (sync_interval 0)")
+	}
+	r := noToken(t, runT(t, "node", "sync", "fern", e.client))
+	r.want(t, 0, "Hub fern: abgeglichen ", ", Revision ", "(über den Node "+e.nodeURL+")")
+	if r.errOut != "" || !e.docIs(t, "fern:team-x", "a.md", "eins") {
+		t.Errorf("nach dem Abgleich: a.md fehlt oder stderr %q", r.errOut)
+	}
+	if !logLine(e.srv.log.String(), "op=sync", "hub=fern", "account=alice") {
+		t.Errorf("Zeile der Anfrage:\n%s", e.srv.log.String())
+	}
+
+	// Ohne Alias, genau ein Hub unter tokens/: dieser.
+	e.runIn(t, "zwei", "hub", "doc", "put", "team-x", "a.md").want(t, 0)
+	noToken(t, runT(t, "node", "sync", e.client)).want(t, 0, "Hub fern: abgeglichen ")
+	if !e.docIs(t, "fern:team-x", "a.md", "zwei") {
+		t.Error("ohne Alias: a.md nicht abgeglichen")
+	}
+
+	// Ohne Token-Datei für den Hub, und --account ohne Token-Datei: Fehler
+	// der Anmeldung wie bei node dir, ohne Rückfall.
+	noToken(t, runT(t, "node", "sync", "fremd", e.client)).want(t, 1, "keine Token-Datei unter", filepath.Join("tokens", "fremd"))
+	noToken(t, runT(t, "node", "sync", "fern", "--account", "bob", e.client)).want(t, 1, "bob.token")
+	// Ein Fehler des Werkzeugs: Exit 1 mit Code und Meldung. Ein Alias, den
+	// der Node nicht kennt, ist unknown_hub — nie ein anderer Hub.
+	bobFile := e.tokenFile(t, "bob", e.commEnv.tokens["bob"])
+	r = noToken(t, runT(t, "node", "sync", "fremd", "--account", "bob", "--token-file", bobFile, e.client))
+	r.want(t, 1, "node sync: unknown_hub: Hub fremd: dieser Node hat keinen Hub-Eintrag mit diesem Alias")
+	if r.out != "" {
+		t.Errorf("Fehler des Werkzeugs mit Ausgabe: %q", r.out)
+	}
+	// Angemeldet mit einem Token, das am Hub nicht gilt: not_readable.
+	noToken(t, runT(t, "node", "sync", "fern", "--account", "niemand", "--token-file", bobFile, e.client)).want(t, 1,
+		"node sync: not_readable: Hub fern")
+	// --token-stdin.
+	noToken(t, runIn(t, e.commEnv.tokens["bob"]+"\n", "node", "sync", "fern", "--account", "bob", "--token-stdin",
+		e.client)).want(t, 0, "Hub fern: abgeglichen ")
+}
+
+// Ohne Alias gleicht node sync als Client genau einen Hub ab: Liegen unter
+// tokens/ mehrere oder keiner, ist es ein falscher Aufruf, der die Aliase
+// nennt — ohne den Node zu fragen. Falsche Optionen der Anmeldung ebenso.
+func TestNodeSyncPureClientUsage(t *testing.T) {
+	e := newClientEnv(t)
+	e.token(t, "fern", "alice")
+	e.token(t, "eigen", "alice")
+	bobFile := e.tokenFile(t, "bob", e.commEnv.tokens["bob"])
+	noToken(t, runT(t, "node", "sync", e.client)).want(t, 2, "genau einen Hub", "mehrere: eigen, fern",
+		"kephalaion node sync <alias>")
+	// Falsche Optionen der Anmeldung; --ca-file ohne --node ist ein Fehler der
+	// gemeinsamen Funktion, wie bei node dir.
+	runT(t, "node", "sync", "fern", "--token-file", bobFile, e.client).want(t, 2, "--account fehlt")
+	runT(t, "node", "sync", "fern", "--account", "bob", "--token-file", bobFile, "--token-stdin", e.client).want(t, 2,
+		"schließen sich aus")
+	runT(t, "node", "sync", "Fern", e.client).want(t, 2, "ungültiger Name")
+	runT(t, "node", "sync", "fern", "--ca-file", bobFile, e.client).want(t, 1, "--ca-file nur zusammen mit --node")
+	// Kein Hub unter tokens/.
+	if err := os.RemoveAll(e.tokens); err != nil {
+		t.Fatal(err)
+	}
+	noToken(t, runT(t, "node", "sync", e.client)).want(t, 2, "genau einen Hub", "liegt keiner")
+	if strings.Contains(e.srv.log.String(), "op=sync") {
+		t.Errorf("ein falscher Aufruf hat den Node gefragt:\n%s", e.srv.log.String())
+	}
+	// Mit Alias geht es: Exit 0 statt „Datenbankdatei fehlt“ (ausführlich in
+	// TestNodeSyncPureClient).
+	e.token(t, "fern", "alice")
+	noToken(t, runT(t, "node", "sync", "fern", e.client)).want(t, 0, "Hub fern: abgeglichen ", "(über den Node ")
+}
+
+// node sync mit --node geht immer über MCP: auf einem Client ohne eigenen
+// Node (kein Abschnitt node: in der config) und auf dem Rechner des Nodes
+// selbst. Ohne --node bleibt dort alles, wie es war.
+func TestNodeSyncNodeOption(t *testing.T) {
+	slow(t, "serve mit Hub und Node, mehrere angeforderte Abgleiche über MCP")
+	e := newClientEnv(t)
+	aliceFile := e.tokenFile(t, "alice", e.commEnv.tokens["alice"])
+	login := []string{"--node", e.nodeURL, "--account", "alice", "--token-file", aliceFile}
+
+	// Ein Client ohne eigenen Node: eine config ohne Abschnitt node:, und gar
+	// keine config.
+	hubOnly := filepath.Join(e.dir, "hub-only.yaml")
+	cfg, _, err := config.Load(e.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(hubOnly, config.Config{Hub: cfg.Hub}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"--config=" + hubOnly, "--config=" + filepath.Join(e.dir, "fehlt.yaml")} {
+		noToken(t, runT(t, append([]string{"node", "sync", "fern", c}, login...)...)).want(t, 0,
+			"Hub fern: abgeglichen ", "(über den Node "+e.nodeURL+")")
+	}
+	// Ohne --node und ohne Node in der config: der bisherige Fehler.
+	runT(t, "node", "sync", "fern", "--config="+hubOnly).want(t, 1, "der Node ist nicht eingerichtet")
+
+	// Auf dem Rechner des Nodes: mit --node über MCP — ein Hub, mit Stand.
+	e.runIn(t, "drei", "hub", "doc", "put", "team-x", "a.md").want(t, 0)
+	before := e.srv.log.String()
+	noToken(t, e.run(t, append([]string{"node", "sync", "eigen"}, login...)...)).want(t, 0,
+		"Hub eigen: abgeglichen ", "(über den Node "+e.nodeURL+")")
+	if !e.docIs(t, "eigen:team-x", "a.md", "drei") || e.docIs(t, "fern:team-x", "a.md", "drei") {
+		t.Error("mit --node: genau eigen sollte abgeglichen sein")
+	}
+	if !logLine(strings.TrimPrefix(e.srv.log.String(), before), "op=sync", "hub=eigen") {
+		t.Errorf("mit --node kein Aufruf des Werkzeugs:\n%s", e.srv.log.String())
+	}
+	// Ohne --node wie bisher: gegen node.db, alle Einträge, ohne den Node zu
+	// fragen.
+	before = e.srv.log.String()
+	e.run(t, "node", "sync").want(t, 0, "Hub eigen (hub_id ", "Hub fern (hub_id ", "team-x: abgeglichen")
+	if strings.Contains(strings.TrimPrefix(e.srv.log.String(), before), "op=sync") {
+		t.Errorf("ohne --node ein Aufruf des Werkzeugs:\n%s", e.srv.log.String())
+	}
+}
+
+// Auf dem Rechner des Nodes, ohne --node, sind die Optionen der Anmeldung ein
+// falscher Aufruf — gemeldet, bevor node.db geöffnet wird. Fehlt nur die
+// Datei der Datenbank, das Verzeichnis aber nicht, ist der Rechner kein
+// reiner Client: Es bleibt der bisherige Fehler.
+func TestNodeSyncLocalOptions(t *testing.T) {
+	e := newCommEnv(t)
+	aliceFile := e.tokenFile(t, "alice", e.tokens["alice"])
+	for want, args := range map[string][]string{
+		"--account gilt nur":               {"--account", "alice"},
+		"--token-file gilt nur":            {"--token-file", aliceFile},
+		"--token-stdin gilt nur":           {"--token-stdin"},
+		"--ca-file gilt nur":               {"--ca-file", aliceFile},
+		"--account, --token-file gilt nur": {"fern", "--account", "alice", "--token-file", aliceFile},
+	} {
+		r := e.run(t, append([]string{"node", "sync"}, args...)...)
+		r.want(t, 2, want+" als Client des Nodes")
+		if r.out != "" {
+			t.Errorf("%v: Ausgabe %q", args, r.out)
+		}
+	}
+	if st := syncStatus(t, nodeStore(t, e.cfg), "fern"); st != (nodestore.SyncStatus{}) {
+		t.Errorf("ein falscher Aufruf hat abgeglichen: %+v", st)
+	}
+
+	dir := filepath.Join(e.dir, "leer")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(e.dir, "broken.yaml")
+	if err := config.Save(broken, config.Config{Node: &config.Section{DB: "sqlite://" + filepath.Join(dir, "node.db"),
+		Listen: closedPort(t)}}); err != nil {
+		t.Fatal(err)
+	}
+	runT(t, "node", "sync", "fern", "--config="+broken).want(t, 1, "node sync: Datenbankdatei fehlt: "+
+		filepath.Join(dir, "node.db"))
+}
+
+// Ein Node, der das Werkzeug sync nicht kennt (älter als Task 042): node sync
+// erkennt es an der Werkzeugliste, ruft nichts auf und nennt das
+// Aktualisieren.
+func TestNodeSyncOldNode(t *testing.T) {
+	dir := isolate(t)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "kephalaion", Version: "0.4.3"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "whoami", Description: "alt"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, mcpnode.WhoamiOutput, error) {
+			return nil, mcpnode.WhoamiOutput{Version: "0.4.3", Hubs: []mcpnode.HubInfo{}, UnknownHubs: []string{}}, nil
+		})
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	var calls atomic.Int32
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != mcpnode.Path {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte(`"tools/call"`)) {
+			calls.Add(1)
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		h.ServeHTTP(w, r)
+	}))
+	defer old.Close()
+	tok, err := ident.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "anna.token")
+	writeFile(t, file, tok+"\n")
+	r := noToken(t, runT(t, "node", "sync", "fern", "--node", old.URL, "--account", "anna", "--token-file", file))
+	r.want(t, 1, "kennt das Werkzeug sync nicht", "den Node aktualisieren und serve neu starten")
+	if n := calls.Load(); n != 0 || r.out != "" {
+		t.Errorf("%d Aufrufe eines Werkzeugs, Ausgabe %q", n, r.out)
 	}
 }

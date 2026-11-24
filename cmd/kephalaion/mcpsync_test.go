@@ -19,6 +19,7 @@ import (
 // der Code der Tabelle, in der Meldung der feste Satz der Art. Die Adresse
 // des Hubs steht nur in der Zeile des Abgleichs im Log, nie in der Antwort.
 func TestMCPSyncThroughServe(t *testing.T) {
+	slow(t, "serve mit Hub und Node, mehrere angeforderte Abgleiche über MCP")
 	e := newCommEnv(t)
 	noRetry(t)
 	e.run(t, "node", "sync").want(t, 0)
