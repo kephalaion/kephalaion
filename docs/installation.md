@@ -653,7 +653,7 @@ damit auch als reiner Client (Devcontainer mit der config des Hosts) ein vollwer
 Ohne den Aufruf zeigen `read`, `list`, `changes` und `search` den Stand des letzten Abgleichs,
 den der Node regelmäßig selbst macht.
 
-**Mindestversion:** ab dem Release nach v0.4.3 (die Zahl trägt das Release hier ein). Ein
+**Mindestversion:** v0.5.0. Ein
 älterer Node kennt das Werkzeug nicht; das go-sdk beantwortet ein unbekanntes Werkzeug mit dem
 JSON-RPC-Fehler -32602, wie ungültige Argumente — die Antwort taugt also nicht dazu, einen alten
 Node zu erkennen. Clients entscheiden an der Version aus `whoami` (`version`) oder an der

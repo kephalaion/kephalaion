@@ -1,13 +1,13 @@
 # Fortschritt
 
 Stand: 2026-11-24 (Task 039 Export und Restore des Hubs: `hub export` und `hub restore`
-gebaut und dokumentiert, noch in keinem Release; Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
-Text als `instructions` mit, gebaut und dokumentiert, noch in keinem Release; Task 042 Abgleich
+gebaut und dokumentiert, in v0.5.0; Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
+Text als `instructions` mit, gebaut und dokumentiert, in v0.5.0; Task 042 Abgleich
 auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
-Client des Nodes gebaut und dokumentiert, noch in keinem Release — die Mindestversion für
-k-playbook trägt das Release ein;
+Client des Nodes gebaut und dokumentiert, in v0.5.0 — Mindestversion für k-playbook v0.5.0,
+Abnahme im Devcontainer offen;
 2026-11-14: Task 038 Sicherung des Hubs: `hub backup` und `hub reset-id` gebaut und
-dokumentiert, noch in keinem Release; Etappe 3 — Timer und Holen der Stände — ist offen, weil
+dokumentiert, in v0.4.3; Etappe 3 — Timer und Holen der Stände — ist offen, weil
 der Hub nicht mehr auf der Dev-VM läuft;
 2026-11-11: Task 037 `upgrade --auto` und Signale abgeschlossen, Release v0.4.2, an
 k-playbook gemeldet; Task 036 `upgrade --auto` Etappen 1–4 ausgeführt, Abnahme Teil B mit dem
@@ -462,7 +462,7 @@ ist Nacharbeit des Nutzers)
 ## In Arbeit
 
 - **Task 039 (`039-hub-export-restore`) — Hub-Export und -Restore unabhängig von der Datenbank**
-  (2026-11-24, Etappen 1–3 ausgeführt, noch in keinem Release):
+  (2026-11-24, Etappen 1–3 ausgeführt, in v0.5.0):
   - Format `internal/hub/archive` (Fassung 1): `tar.gz` mit `manifest.json` (Format,
     Schemafassung, Revision, `hub_id`, `serve_stopped`, Zeitpunkt, Binary, Zeilen je Teil), je
     Tabelle `<tabelle>.jsonl`, `files/<collection>/<name>` nur zum Lesen;
@@ -483,7 +483,7 @@ ist Nacharbeit des Nutzers)
     Lesetransaktion, Abbildung in `hub restore` bei neuer Schemafassung, „Abgeleitetes steht
     nicht im Export“ meint `config export`).
 - **Task 040 (`040-mcp-instructions`) — Anleitung für Clients bei `initialize`** (2026-11-24,
-  Etappen 1–3 ausgeführt, noch in keinem Release): Der Node gibt jedem Client einen festen Text
+  Etappen 1–3 ausgeführt, in v0.5.0): Der Node gibt jedem Client einen festen Text
   als `instructions` mit — Grundprinzip, Adresse `<hub>:<collection>`, `whoami` als Einstieg, je
   Fall (`login` `missing`, `invalid`, `never_synced`) die Abhilfe auf der Kommandozeile und der
   Verweis auf die Doku im Repo.
@@ -499,8 +499,8 @@ ist Nacharbeit des Nutzers)
   - Doku: `begriffe.md` (instructions), `konzept.md` („Werkzeuge“, „Anleitung für Clients“),
     `installation.md` („Bei den Assistenten anmelden“), README.
 - **Task 042 (`042-abgleich-auf-anforderung`) — Abgleich auf Anforderung: MCP-Werkzeug `sync` am
-  Node, `node sync` auch vom reinen Client aus** (2026-11-24, Etappen 1–5 ausgeführt, noch in
-  keinem Release): Anlass war die Befund-Vorprüfung von k-playbook, die im Devcontainer an
+  Node, `node sync` auch vom reinen Client aus** (2026-11-24, Etappen 1–5 ausgeführt, in
+  v0.5.0): Anlass war die Befund-Vorprüfung von k-playbook, die im Devcontainer an
   `node sync: Datenbankdatei fehlt` scheiterte.
   - Werkzeug `sync` (`internal/node/mcpnode/sync.go`): Feld `hub`; antwortet erst, wenn ein
     Abgleich des Eintrags geendet hat, der nach der Anfrage begonnen hat; Erfolg mit
@@ -633,12 +633,6 @@ ist Nacharbeit des Nutzers)
 
 ## Zu tun
 
-- **Task 042 — Mindestversion für das Werkzeug `sync` eintragen und melden** (mit dem nächsten
-  Release, nur auf Wunsch des Nutzers): `installation.md`, „Einen Abgleich anfordern“, nennt
-  bis dahin „ab dem Release nach v0.4.3“. Das Release trägt dort die Zahl ein, und k-playbook
-  bekommt sie gemeldet — zusammen mit den Namen der beiden neuen Codes (`sync_timeout`,
-  `never_synced`), der Wartefrist (40 s) und der Tabelle „Codes je Fall“; erst danach stellt
-  k-playbook seine Befund-Vorprüfung um.
 - **Spätere Rotation ohne eigenen Node** (Todo 18, Folgearbeit von Task 028): `setup` richtet
   nur ein; wer keinen eigenen Node hat, braucht für jedes spätere Rotieren den Admin
   (`installation.md`, „Ein Client ohne eigenen Node“).
