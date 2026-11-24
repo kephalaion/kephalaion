@@ -24,8 +24,9 @@ seine Replica ab (`node sync`) und zeigt sie an (`node doc`), über `transport l
 MCP-Server für Clients mit den Werkzeugen `whoami`, `list`, `read`, `changes` und `search` —
 gelesen und gesucht wird aus der Replica, ohne Netz — und `create`, `write`, `delete` und
 `rename` — geschrieben wird über den Hub, mit Rechten je Collection —, dazu `fetch_release` (der
-Hub holt das neueste Release einer Collection mit Quelle, etwa `k-playbook`) und `rebuild_docs`
-(der Hub baut den Index von `docs/` neu), und gleicht als Node im Hintergrund ab.
+Hub holt das neueste Release einer Collection mit Quelle, etwa `k-playbook`), `rebuild_docs`
+(der Hub baut den Index von `docs/` neu) und `sync` (ein Client fordert einen Abgleich an und
+wartet auf sein Ergebnis), und gleicht als Node im Hintergrund ab.
 Öffentliche Collections liest jeder Account des Hubs.
 Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
@@ -620,7 +621,7 @@ Dazu reicht der Node `unauthenticated` (der Hub nimmt den Node nicht an) und
 `unsupported_version` vom Hub durch. **Grenze:** Schreiben setzt voraus, dass die Replica die
 Collection und die Zeile des Accounts schon trägt — nach `hub account grant` erst nach dem
 nächsten Abgleich; hat der Node den Hub noch nie abgeglichen, nennt die Meldung
-`kephalaion node sync <hub>` als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
+`kephalaion node sync <hub>` am Rechner des Nodes als Ausweg. `hub doc put|rm` und `hub import` bleiben Vorgänge des
 Admins am Hub, ohne Node. In einer Collection mit Quelle (`k-playbook`) schreibt niemand: Jeder
 Schreibvorgang ist `forbidden`.
 
@@ -648,6 +649,17 @@ Account. Dazu die Codes `no_source` (keine Quelle), `source_missing` (kein Relea
 Archiv darin), `source_invalid` (Archiv nicht übernehmbar) und `source_unreachable` (Quelle
 nicht erreichbar); nach `outcome_unknown` darf es erneut angestoßen werden — der Hub antwortet
 dann `current`, wenn er schon geholt hat.
+
+**`sync`** (`hub`: der Alias des Hub-Eintrags, entbehrlich bei nur einem Hub) fordert einen
+Abgleich an und wartet auf sein Ergebnis — für Clients, denen es auf den Stand jetzt ankommt;
+sonst zeigen `read`, `list`, `changes` und `search` den Stand des letzten Abgleichs. Der Abgleich
+läuft im `serve`; die Antwort kommt erst, wenn einer geendet hat, der nach der Anfrage begonnen
+hat, höchstens nach 40 s. Erfolg: `hub` und `sync` mit `revision` und `last_success`, ohne
+`last_error`. Ein Fehler trägt `error.code`, darunter `sync_timeout` (Frist abgelaufen, der
+Abgleich läuft im Hintergrund weiter) und `never_synced` (noch keine Replica: zuerst
+`kephalaion node sync <hub>` am Rechner des Nodes). Aufrufen darf, wer am Hub gültig angemeldet
+ist. Alle Codes und die zugesicherten Eigenschaften eines Erfolgs:
+[`docs/installation.md`](docs/installation.md), „Einen Abgleich anfordern“.
 
 ### Weboberfläche
 
@@ -788,6 +800,23 @@ Collections, die der Hub nicht (mehr) erlaubt oder die der Node nicht mehr will
 gleicht von vorn ab. Die Replica ist abgeleitet: `node hub rm` löscht sie mit, ebenso `config import` für
 Aliase, die im Export fehlen. Die Regeln des Abgleichs stehen in
 [`docs/vertrag.md`](docs/vertrag.md).
+
+**Als Client des Nodes.** Auf einem reinen Client — die config hat einen Abschnitt `node:`, die
+Datenbank des Nodes fehlt hier samt ihrem Verzeichnis, etwa in einem Devcontainer mit der config
+des Hosts — und mit `--node <url>` auf jedem Rechner öffnet `node sync` keine Datenbank: Es
+fordert den Abgleich beim laufenden Node an (MCP-Werkzeug `sync`) und nennt den Stand danach.
+
+```text
+$ kephalaion node sync privat
+Hub privat: abgeglichen 2026-11-24T16:05:12Z, Revision 3 (über den Node http://127.0.0.1:7433)
+```
+
+Dort gleicht es genau einen Hub ab: den genannten, ohne Alias den einen Hub, für den unter
+`~/.config/kephalaion/tokens/` ein Verzeichnis liegt (bei mehreren oder keinem Exit 2 mit den
+Aliasen). Account und Token wie bei `node dir` (`--account`, `--token-file`, `--token-stdin`,
+sonst die Token-Datei unter `tokens/<hub>/`). Ein Fehler des Werkzeugs ist Exit 1 mit Code und
+Meldung; einen Hub-Eintrag, der noch nie abgeglichen wurde, gleicht nur `node sync` am Rechner
+des Nodes zum ersten Mal ab. Ohne `--node` auf dem Rechner des Nodes bleibt alles wie oben.
 
 `node sync` und der Abgleich von `serve` dürfen gleichzeitig laufen, auch neben `node hub
 rm|add` und `config import`: Jede Seite prüft in ihrer Transaktion, dass die Replica noch zu

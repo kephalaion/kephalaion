@@ -1373,7 +1373,7 @@ Generalschlüssel.
 **Grenze beim Schreiben (Task 014):** Weil der Node vorher gegen seine Replica prüft, setzt
 Schreiben voraus, dass sie die Collection und die `SYSTEM:A:`-Zeile des Accounts schon trägt —
 nach `grant` also erst nach dem nächsten Abgleich; hat der Node den Hub noch nie abgeglichen,
-geht nichts, und die Meldung nennt `kephalaion node sync <hub>` als Ausweg. Nicht angemeldet
+geht nichts, und die Meldung nennt `kephalaion node sync <hub>` am Rechner des Nodes als Ausweg. Nicht angemeldet
 oder nicht lesbar ist dieselbe Meldung „nicht lesbar“, ohne den Hub zu fragen. Ob geschrieben
 werden darf, entscheidet trotzdem allein der Hub, gegen `accounts` — so wirkt eine Sperre beim
 Schreiben sofort, auch wenn die Replica sie noch nicht kennt.
@@ -2122,9 +2122,11 @@ Rechners ist für Devcontainer nicht der Weg („Kommunikation“), eine Bridge 
 
 1. **Am Node außerhalb des Containers** — dem des Hosts, wie am 2026-09-25 entschieden. Im
    Container läuft kein Node; das Binary liegt dort nur als Kommandozeile für `node dir
-   push|pull`, einen MCP-Client des Nodes, der keine Datenbank schreibt. Alles, was eine
+   push|pull`, einen MCP-Client des Nodes, der keine Datenbank schreibt — und seit Task 042
+   für `node sync`, das dort den Abgleich beim Node anfordert, statt `node.db` zu öffnen
+   („Abgleich“, „Auf Anforderung“). Alles, was eine
    Datenbank öffnet oder selbst mit dem Hub spricht (`hub …`, `node hub|collection|account …`,
-   `node sync`, `node whoami`, `config import`), bleibt auf dem Host. config und `tokens/` des
+   der erste Abgleich eines Hub-Eintrags, `node whoami`, `config import`), bleibt auf dem Host. config und `tokens/` des
    Hosts sind im Container nur lesbar eingebunden: `~/.config/kephalaion`, bei einer globalen
    Installation dazu `/etc/kephalaion/config.yaml` — diese Zeile nur auf Rechnern mit globaler
    Installation, denn fehlt die Quelle eines Bind-Mounts, startet der Container nicht. Jeder

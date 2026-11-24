@@ -1,6 +1,9 @@
 # Fortschritt
 
-Stand: 2026-11-14 (Task 038 Sicherung des Hubs: `hub backup` und `hub reset-id` gebaut und
+Stand: 2026-11-24 (Task 042 Abgleich auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
+Client des Nodes gebaut und dokumentiert, noch in keinem Release — die Mindestversion für
+k-playbook trägt das Release ein;
+2026-11-14: Task 038 Sicherung des Hubs: `hub backup` und `hub reset-id` gebaut und
 dokumentiert, noch in keinem Release; Etappe 3 — Timer und Holen der Stände — ist offen, weil
 der Hub nicht mehr auf der Dev-VM läuft;
 2026-11-11: Task 037 `upgrade --auto` und Signale abgeschlossen, Release v0.4.2, an
@@ -455,6 +458,30 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 042 (`042-abgleich-auf-anforderung`) — Abgleich auf Anforderung: MCP-Werkzeug `sync` am
+  Node, `node sync` auch vom reinen Client aus** (2026-11-24, Etappen 1–5 ausgeführt, noch in
+  keinem Release): Anlass war die Befund-Vorprüfung von k-playbook, die im Devcontainer an
+  `node sync: Datenbankdatei fehlt` scheiterte.
+  - Werkzeug `sync` (`internal/node/mcpnode/sync.go`): Feld `hub`; antwortet erst, wenn ein
+    Abgleich des Eintrags geendet hat, der nach der Anfrage begonnen hat; Erfolg mit
+    `sync.revision`, `sync.last_success` des abgewarteten Abgleichs und ohne `sync.last_error`;
+    jeder Fehler mit `error.code`. Neu sind zwei Codes, `sync_timeout` (Wartefrist 40 s) und
+    `never_synced`; `unknown_hub` und `hub_refused` sind nun auch Codes eines Werkzeugs.
+    Angestoßen wird erst nach `login` `ok`, ohne Drosselung; über einen Proxy ohne gültige
+    Anmeldung bleibt die Antwort verdeckt;
+  - Abgleich im Hintergrund (`cmd/kephalaion/bgsync.go`): der wartende Anstoß `kickWait` neben
+    `kick` — der gestartete Abgleich oder, läuft schon einer, der Nachfolger, den sich alle
+    Wartenden teilen; entfernter Eintrag und Ende von `serve` wecken die Wartenden sofort. Der
+    Vertrag ist unberührt: kein Schreibvorgang, kein `request_id`;
+  - `kephalaion node sync` geht mit `--node` oder auf einem reinen Client über MCP (dieselbe
+    Erkennung wie `status`, `pureClient`); ohne Alias der eine Hub unter `tokens/`, sonst
+    Exit 2; ein Node ohne das Werkzeug wird an `tools/list` erkannt. Anmeldung und Verbindung
+    teilt es mit `node dir` (`nodelogin.go`, `connectNodeSession`, `callTool`);
+  - Doku: `begriffe.md` (on-demand sync, sync (tool), never_synced, sync_timeout), `konzept.md`
+    („Abgleich“, „Auf Anforderung“, mit der Tabelle der Codes je Fall), `installation.md`
+    („Einen Abgleich anfordern“ — die Vorlage, nach der k-playbook umstellt), README;
+  - offen: das Release und die Abnahme im Devcontainer („Zu tun“, „Zu testen“). Die Umstellung
+    selbst (`SyncHub` ruft das Werkzeug) geschieht im Projekt k-playbook.
 - **Task 038 (`038-hub-backup`) — Sicherung des Hubs: Snapshot der `hub.db` im laufenden
   Betrieb, Rotation, Timer auf der VM** (2026-11-14, Etappen 1–2 ausgeführt): `kephalaion hub
   backup [--dir] [--keep]` schreibt neben `serve` einen Snapshot (`VACUUM INTO` als einzelne
@@ -566,6 +593,12 @@ ist Nacharbeit des Nutzers)
 
 ## Zu tun
 
+- **Task 042 — Mindestversion für das Werkzeug `sync` eintragen und melden** (mit dem nächsten
+  Release, nur auf Wunsch des Nutzers): `installation.md`, „Einen Abgleich anfordern“, nennt
+  bis dahin „ab dem Release nach v0.4.3“. Das Release trägt dort die Zahl ein, und k-playbook
+  bekommt sie gemeldet — zusammen mit den Namen der beiden neuen Codes (`sync_timeout`,
+  `never_synced`), der Wartefrist (40 s) und der Tabelle „Codes je Fall“; erst danach stellt
+  k-playbook seine Befund-Vorprüfung um.
 - **Spätere Rotation ohne eigenen Node** (Todo 18, Folgearbeit von Task 028): `setup` richtet
   nur ein; wer keinen eigenen Node hat, braucht für jedes spätere Rotieren den Admin
   (`installation.md`, „Ein Client ohne eigenen Node“).
@@ -701,6 +734,17 @@ ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
+- **Task 042 — Abgleich auf Anforderung, Abnahme im Devcontainer** (nur der Nutzer; WSL und
+  Dev-VM, nach dem Release mit dem Werkzeug `sync` und dem Neustart von `serve` auf dem Host):
+  im Container `kephalaion status` (Node „läuft nicht hier“, `Antwort: ja` mit der neuen
+  Version) und `kephalaion node sync <alias>` — Exit 0 mit `Hub <alias>: abgeglichen …,
+  Revision … (über den Node …)` statt „Datenbankdatei fehlt“; ohne Alias bei genau einem Hub
+  unter `tokens/` ebenso, bei mehreren Exit 2 mit den Aliasen. Das Werkzeug über einen
+  MCP-Client: `sync` mit `hub` liefert `sync.revision` und `sync.last_success`, ohne
+  `sync.last_error`; mit einem Alias, den der Node nicht kennt, `unknown_hub`. Nach der
+  Umstellung in k-playbook: die Befund-Vorprüfung (`k_playbook_findings_check`) im Container
+  mit `ready=true`. Bisher nur durch Tests belegt (`cmd/kephalaion/synccmd_test.go`,
+  `mcpsync_test.go`, `bgsync_test.go`, `internal/node/mcpnode/sync_test.go`).
 - **Task 038 — Sicherung des Hubs, Abnahme auf dem Rechner des Hubs** (nur der Nutzer; nach
   Etappe 3 und dem ersten Release mit `hub backup`, eingespielt über Ansible, nichts von Hand):
   `systemctl list-timers kephalaion-backup.timer` nennt den nächsten Lauf; `sudo systemctl start

@@ -366,6 +366,16 @@ Ohne config bleibt `status` wie bisher („Keine Rolle eingerichtet“). Nicht z
 einem **Client ohne eigenen Node** („Node für Clients anderer Rechner“ unten): Der erreicht
 einen Node auf einem anderen Rechner über `https`, ein reiner Client den Node seines Hosts.
 
+**`node sync` auf einem reinen Client (Task 042).** Nach derselben Erkennung — der Abschnitt
+`node:` steht in der config, Datenbankdatei und Verzeichnis fehlen beide — öffnet `kephalaion
+node sync <alias>` dort keine Datenbank, sondern fordert den Abgleich beim Node des Hosts an
+(über MCP, Werkzeug `sync`) und endet mit Exit 0, wenn der abgeglichen hat; früher scheiterte es
+mit „Datenbankdatei fehlt“. Mit `--node <url>` nimmt es diesen Weg auf jedem Rechner. Account und
+Token kommen wie bei `node dir` aus `tokens/<hub>/` oder den Optionen `--account`,
+`--token-file`, `--token-stdin`. Ohne Alias gilt der eine Hub unter `tokens/`; bei mehreren oder
+keinem ist es ein falscher Aufruf (Exit 2), der die Aliase nennt. Fehlt nur die Datei, bleibt es
+der bisherige Fehler. Was der Node antwortet, steht unter „Einen Abgleich anfordern“ unten.
+
 Die User melden sich am Node wie pro User an: je Hub ein Header-Paar
 (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) an `http://127.0.0.1:7433/mcp`, siehe README,
 „serve und MCP“. Bei ihren KI-Assistenten tragen sie den Node selbst ein
@@ -627,6 +637,132 @@ endet mit Exit 2 („Unbekanntes Kommando“).
 **Orte des Binarys für Clients**, verbindlich, in dieser Reihenfolge: zuerst `PATH`, dann
 `~/.local/bin/kephalaion` (`install.sh`), dann `/usr/local/bin/kephalaion` (globale
 Installation). Ein MCP-Server, den ein Assistent aus einer GUI startet, erbt `PATH` nicht immer.
+
+### Einen Abgleich anfordern
+
+Ein Client, der eine frische Replica braucht — etwa k-playbook vor seiner Befund-Vorprüfung —,
+fordert den Abgleich beim Node an, statt `kephalaion node sync` als Prozess zu starten: mit dem
+MCP-Werkzeug **`sync`** (Task 042; `konzept.md`, „Abgleich“, „Auf Anforderung“). Der Abgleich
+läuft im Prozess von `serve`; der Client braucht weder `node.db` noch ihr Verzeichnis und ist
+damit auch als reiner Client (Devcontainer mit der config des Hosts) ein vollwertiger Aufrufer.
+Ohne den Aufruf zeigen `read`, `list`, `changes` und `search` den Stand des letzten Abgleichs,
+den der Node regelmäßig selbst macht.
+
+**Mindestversion:** ab dem Release nach v0.4.3 (die Zahl trägt das Release hier ein). Ein
+älterer Node kennt das Werkzeug nicht; das go-sdk beantwortet ein unbekanntes Werkzeug mit dem
+JSON-RPC-Fehler -32602, wie ungültige Argumente — die Antwort taugt also nicht dazu, einen alten
+Node zu erkennen. Clients entscheiden an der Version aus `whoami` (`version`) oder an der
+Werkzeugliste (`tools/list` nennt `sync`).
+
+**Aufruf.** `initialize`, `whoami` (die Version), dann `tools/call` mit dem Namen `sync`, mit dem
+Header-Paar des Hubs (`X-Keph-Account-<hub>`, `X-Keph-Token-<hub>`) und immer mit `hub`:
+
+```json
+{"name": "sync", "arguments": {"hub": "vm"}}
+```
+
+| Eingabe | Bedeutung |
+|---|---|
+| `hub` | der Alias des Hub-Eintrags am Node, wie `whoami` ihn nennt. Fehlt das Feld, gilt bei nur einem Hub dieser: der eine Hub, an dem der Aufrufer gültig angemeldet ist, sonst der einzige Eintrag des Nodes — die Regel für den fehlenden Hub-Teil einer Adresse. Ein Alias, den der Node nicht kennt, ist ein Fehler, nie ein Rückfall auf den einzigen Hub |
+
+Aufrufen darf, wer am Hub des Eintrags gültig angemeldet ist (`login` `ok` in `whoami`); ohne
+gültige Anmeldung löst der Aufruf nie einen Abgleich aus.
+
+**Was der Node tut.** Er antwortet erst, wenn ein Abgleich des Eintrags geendet hat, der nach
+dem Eingang der Anfrage begonnen hat. Läuft keiner, startet einer; läuft schon einer, gilt erst
+sein Nachfolger — der laufende kann die Änderung, um die es dem Aufrufer geht, verpasst haben.
+Mehrere Aufrufer, die während desselben Abgleichs kommen, teilen sich den einen Nachfolger;
+gedrosselt wird nicht. Das gilt auch bei `sync_interval` `0`.
+
+**Wartefrist: 40 s.** So lange wartet der Node höchstens, eine feste Zahl. Ein Client, der selbst
+nach einer Minute abbricht, hat damit Luft für `initialize` und `whoami`.
+
+**Erfolg** (ohne `isError`):
+
+```json
+{"hub": "vm", "sync": {"last_success": "2026-11-24T16:05:12Z", "revision": 5411}}
+```
+
+Ein Erfolg ist eindeutig, und drei Eigenschaften sind zugesichert:
+
+- `sync.revision` steht immer in der Antwort, mit einem Wert von 0 an. Sie ist `0` für einen
+  Hub-Eintrag ohne gewünschte Collection.
+- `sync.last_error` ist leer (das Feld fehlt).
+- `sync.last_success` ist der Zeitpunkt des abgewarteten Abgleichs (RFC 3339, UTC).
+
+Erfolg und `last_success` stammen aus dem abgewarteten Abgleich selbst, nicht aus dem Stand, den
+`whoami` zeigt: Dort kann beim Antworten schon ein späterer Abgleich stehen, auch ein
+gescheiterter. `revision` ist der Stand der Replica beim Antworten — das Minimum über die Stände
+ihrer Collections — und **nicht als monoton zugesichert**: Leert ein späterer Abgleich die Replica
+(andere `hub_id`, Replica weiter als der Hub), liegt der Wert vorübergehend unter dem des
+abgewarteten. Der Textteil des Ergebnisses ist eine Zeile für Menschen (`Hub vm: abgeglichen …,
+Revision …`).
+
+**Fehler** (`isError`): der Textteil ist die Meldung, die Struktur trägt `hub` und `error` mit
+`code` und `message` — wie bei den Werkzeugen, die schreiben:
+
+```json
+{"hub": "vm", "error": {"code": "sync_timeout", "message": "Hub vm: der Abgleich ist nach 40 s noch nicht beendet (Wartefrist). …"}}
+```
+
+Ein gescheiterter, nicht bestätigter oder nicht rechtzeitig beendeter Abgleich ist nie ein
+Erfolg. Die Meldung ist für sich lesbar und nennt weder Adresse noch Token; die eines
+gescheiterten Abgleichs ist der Alias mit einem festen Satz je Art (wie `last_error` in
+`whoami`). Ohne Code kommen nur zwei Fälle, wie bei den Werkzeugen, die schreiben: **ein Aufruf,
+den der Client abbricht** (ein Fehler der Anfrage; die Antwort liest niemand mehr, der Abgleich
+läuft im Hintergrund weiter) und Argumente, die schon das SDK gegen das Schema ablehnt.
+
+Neu sind zwei Codes, **`sync_timeout`** und **`never_synced`**; alle anderen gab es schon.
+
+| Code | Bedeutung | Abhilfe |
+|---|---|---|
+| `sync_timeout` | die Wartefrist (40 s) ist abgelaufen, bevor der abgewartete Abgleich geendet hat. **Nicht „gescheitert“:** Der Abgleich läuft im Hintergrund weiter. Der Code kann auch einen Hub bedeuten, der hängt — gegen einen solchen läuft ein Abgleich viel länger als die Frist; dort ist dieser Code die Regel, nicht `unreachable` | den Aufruf wiederholen; den Stand nennt `whoami` |
+| `never_synced` | der Hub-Eintrag hat noch keine Replica. Über einen Proxy sieht ein Client diesen Code nur, wenn er an einem anderen Hub des Nodes gültig angemeldet ist; sonst ist die Antwort verdeckt (`not_readable`) | `kephalaion node sync <alias>` **am Rechner des Nodes**, nicht beim Client |
+| `unreachable` | der Hub wurde nicht erreicht — auch, wenn statt seiner etwas davor antwortet (ein Proxy mit 502 vor einem gestoppten Hub, eine Antwort, die kein JSON ist) | Hub und Netz prüfen, wiederholen |
+| `unauthenticated` | der Hub nimmt den Node nicht an (gesperrt, Token des Nodes ungültig) | am Hub bzw. am Rechner des Nodes: `node hub check <alias>` |
+| `unsupported_version` | der Hub bedient die Fassung des Vertrags dieses Nodes nicht | Hub oder Node aktualisieren |
+| `hub_refused` | der Hub hat geantwortet und mit einem Fehler des Vertrags abgelehnt, oder seine Antwort passt nicht zur Anfrage | Log des Nodes, Verwalter |
+| `unknown_hub` | der Node hat keinen Hub-Eintrag mit dem Alias (nur, wenn die Antwort nicht verdeckt ist) | den Alias aus `whoami` nehmen |
+| `not_readable` | der Aufrufer ist am Hub nicht gültig angemeldet — und, verdeckt, jeder Alias, gleich ob es ihn gibt | Header-Paar und Token prüfen |
+| `invalid` | `hub` ist kein gültiger Alias, oder `hub` fehlt und die Regel ergibt keinen Hub; die Meldung nennt das Feld `hub` und, wenn die Antwort nicht verdeckt ist, die Aliase des Nodes | `hub` angeben |
+| `unsupported` | der Hub-Eintrag hat den Transport `ssh`, oder dieser Eingang hat keinen wartenden Anstoß | — |
+| `internal` | ein Fehler des Nodes: `node.db` oder Replica nicht lesbar oder nicht schreibbar; der Hub-Eintrag wurde während des Wartens entfernt oder neu angelegt; `serve` endet | wiederholen (beim Ende von `serve`: sobald der Node wieder läuft) |
+
+**Codes je Fall.** Die Zeilen bis zum Warten stehen in der Reihenfolge der Prüfung.
+
+| Fall | Code |
+|---|---|
+| Eingang ohne wartenden Anstoß | `unsupported` |
+| `node.db` nicht lesbar | `internal` |
+| `hub` ist kein gültiger Alias, oder `hub` fehlt und die Regel für den fehlenden Hub-Teil ergibt keinen Hub | `invalid` |
+| verdeckt (über einen Proxy, an keinem Hub gültig angemeldet), gleich ob es den Alias gibt | `not_readable` |
+| nicht verdeckt, kein Hub-Eintrag mit dem Alias | `unknown_hub` |
+| Replica des Eintrags nicht lesbar | `internal` |
+| Eintrag ohne Replica | `never_synced` |
+| Eintrag mit Replica, Aufrufer dort ohne `login` `ok` | `not_readable` |
+| Transport `ssh` | `unsupported` |
+| `serve` endet, vor oder während des Wartens | `internal` |
+| der Eintrag wird während des Wartens entfernt oder neu angelegt | `internal` |
+| Wartefrist abgelaufen | `sync_timeout` |
+| Abgleich gescheitert, Art `unreachable` oder `connect`, oder Art `hub` ohne Fehler des Vertrags (etwa ein HTTP-Status ohne Code des Vertrags oder eine Antwort, die kein JSON ist) | `unreachable` |
+| Abgleich gescheitert, Art `unauthenticated` | `unauthenticated` |
+| Abgleich gescheitert, Art `unsupported_version` | `unsupported_version` |
+| Abgleich gescheitert, Art `hub` mit einem Fehler des Vertrags, oder Art `protocol` | `hub_refused` |
+| Abgleich gescheitert, Art `replica` | `internal` |
+| `revision` nach dem Abgleich nicht lesbar | `internal` |
+
+Die Arten sind die des Stands in `hub_sync` (`begriffe.md`).
+
+**Für Clients, die nur „bereit“ oder „nicht bereit“ brauchen:** Jede Antwort mit `isError`, jede
+unlesbare Antwort und jeder Abbruch ist „nicht bereit“; die Codes steuern nur den Abhilfetext.
+Die Meldung lässt sich wörtlich an den Nutzer weiterreichen.
+
+**Kommandozeile.** `kephalaion node sync <alias>` nimmt denselben Weg, wenn es als Client des
+Nodes läuft — auf einem reinen Client oder mit `--node <url>` (oben, „`node sync` auf einem
+reinen Client“) —, und schickt `hub` immer mit. Erfolg ist Exit 0 mit einer Zeile (`Hub <alias>:
+abgeglichen …, Revision … (über den Node <adresse>)`), ein Fehler des Werkzeugs Exit 1 mit `node
+sync: <code>: <meldung>` auf stderr, ein falscher Aufruf Exit 2. Einen Node, der das Werkzeug
+nicht kennt, erkennt es an der Werkzeugliste und meldet, dass er zu aktualisieren ist.
 
 ## Hub für Nodes anderer Rechner: hinter einem Reverse-Proxy
 
