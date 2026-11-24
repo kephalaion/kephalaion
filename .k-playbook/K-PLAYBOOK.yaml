@@ -32,3 +32,18 @@ kephalaion:
   # zum Rechner und kommt von Kephalaion (kephalaion node client).
   hub: vm
   collection: kephalaion-dev
+
+maintenance:
+  # Wartungslauf `k-playbook maintain`: daily ist das Tagesprogramm ohne --only.
+  # backup sichert keph:/docs/ nach target (relativ zum Hauptverzeichnis, ein
+  # nur dafür reservierter Ordner darin). Gilt für alle Nutzer; bei
+  # mehreren Personen bleibt git.commit auf false, und nur die zuständige
+  # Person ruft `k-playbook maintain --commit` auf.
+  daily:
+    - docs-backup
+  backup:
+    enabled: false
+    source: docs
+    target: keph-backup/docs
+    git:
+      commit: false
