@@ -87,7 +87,9 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **pure client** (reiner Client, Task 037) — ein Rechner, der die config eines anderen liest
   und dessen Node erreicht, ohne selbst eine Rolle zu tragen: etwa ein **devcontainer** mit der
   eingebundenen config des Hosts, dessen `127.0.0.1:7433` über einen Weiterleiter beim Node des
-  Hosts ankommt. `status` meldet dort **läuft nicht hier**. Grenze: Ein ganz gelöschtes
+  Hosts ankommt. `status` meldet dort **läuft nicht hier**; `node sync` fordert den Abgleich
+  dort beim Node an, statt `node.db` zu öffnen (**on-demand sync**, Task 042) — nach derselben
+  Erkennung wie `status`. Grenze: Ein ganz gelöschtes
   Datenverzeichnis auf einem eingerichteten Rechner sieht genauso aus. Nicht zu verwechseln mit
   einem Client ohne eigenen Node, der einen Node auf einem anderen Rechner über `https` nutzt
   (`installation.md`, „Ein Client ohne eigenen Node“).
@@ -760,7 +762,8 @@ Ausführlich: [`konzept.md`](konzept.md).
   Fehler mit `isError`, der Meldung als Text und strukturiert als `error` mit `code` und
   `message`; Clients entscheiden nach dem Code, nicht nach der Meldung. `frontmatter_error` und
   `frontmatter_hints` in der Antwort von `create` und `write` (Task 036) sind keine Fehlercodes:
-  Sie stehen neben einem Erfolg, ohne `isError` — gespeichert ist.
+  Sie stehen neben einem Erfolg, ohne `isError` — gespeichert ist. Das Werkzeug `sync` meldet Fehler in
+  derselben Form; seine Codes stehen bei **sync (tool)**.
 - **fetch_release** — Werkzeug des Nodes: lässt den Hub das neueste Release in `defaults/` einer
   Collection mit Quelle holen (Adresse `<hub>:<collection>`), danach stößt der Node den Abgleich
   an. Liest keine URLs — der Name ist bewusst nicht `fetch`, das bei Assistenten üblich zum Lesen
@@ -806,6 +809,61 @@ Ausführlich: [`konzept.md`](konzept.md).
   Schreibvorgang über MCP ihn
   für seinen Hub **anstößt** (nach Erfolg und nach unklarem Ausgang, auch bei `sync_interval`
   `0`; läuft schon einer, folgt genau einer). Beide halten das Ergebnis in `hub_sync` fest.
+  Ein Client fordert einen Abgleich über das Werkzeug `sync` an und wartet auf das Ergebnis
+  (**on-demand sync**).
+- **on-demand sync** (Abgleich auf Anforderung, Task 042) — ein Client des Nodes fordert den
+  Abgleich eines Hub-Eintrags an und bekommt dessen Ergebnis zurück, ohne die Datenbank des
+  Nodes zu öffnen: über das Werkzeug **sync (tool)**. Der Abgleich läuft immer im Prozess von
+  `serve`, über den Abgleich im Hintergrund; das Werkzeug öffnet die Replica nur lesend. Die
+  Antwort kommt erst, wenn ein Abgleich des Eintrags geendet hat, der **nach der Anfrage
+  begonnen** hat (**started after the request**): Läuft beim Eingang keiner, startet einer, und
+  auf ihn wird gewartet; läuft schon einer, gilt erst sein Nachfolger — der laufende kann die
+  Änderung, um die es dem Aufrufer geht, verpasst haben. Mehrere Wartende, die während desselben
+  laufenden Abgleichs ankommen, teilen sich den einen Nachfolger; gedrosselt wird nicht. Wirkt
+  auch bei `sync_interval` `0`. Gewartet wird höchstens die **wait limit** (Wartefrist), eine
+  feste Zahl im Node: 40 s. Läuft sie ab oder bricht der Aufrufer ab, läuft der Abgleich im
+  Hintergrund weiter; ein Erfolg ist beides nie. Kein Schreibvorgang des Vertrags: kein
+  **request_id**, keine Zeile in **actions** — es ist der vorhandene Vorgang **sync**.
+- **sync (tool)** (Werkzeug `sync`, Task 042) — Werkzeug des Nodes für den **on-demand sync**.
+  Eingabe: `hub`, der Alias des Hub-Eintrags; ohne das Feld gilt bei nur einem Hub dieser (der
+  eine Hub, an dem der Aufrufer gültig angemeldet ist, sonst der einzige Eintrag des Nodes —
+  dieselbe Regel wie für den fehlenden Hub-Teil einer **address**). Aufrufen darf, wer am Hub
+  des Eintrags gültig angemeldet ist (`login` `ok`); angestoßen wird erst danach. Antwort: `hub`
+  und unter `sync` der Stand nach dem Abgleich wie in `whoami`. Ein Erfolg (ohne `isError`) ist
+  zugesichert eindeutig: `sync.revision` steht in der Antwort (Wert ab 0; `0` für einen
+  Hub-Eintrag ohne gewünschte Collection), `sync.last_error` ist leer, `sync.last_success` ist
+  der Zeitpunkt des abgewarteten Abgleichs. `revision` ist der Stand der Replica beim Antworten
+  und nicht als monoton zugesichert. Jeder Fehler trägt `error.code` und `error.message` wie bei
+  den **write error codes**, mit denselben zwei Ausnahmen (ein Aufruf, den der Aufrufer abbricht;
+  Argumente, die schon das SDK ablehnt). Die Codes: `invalid` (`hub` ist kein gültiger Alias,
+  oder `hub` fehlt und die Regel ergibt keinen Hub), `not_readable` (der Aufrufer ist am Hub
+  nicht gültig angemeldet; **hidden** auch für jeden Alias, gleich ob es ihn gibt),
+  `unknown_hub` (nicht **hidden**: kein Hub-Eintrag mit dem Alias — nie ein Rückfall auf den
+  einzigen Hub), **never_synced**, `unsupported` (Transport `ssh`, oder ein Eingang ohne
+  wartenden Anstoß), **sync_timeout**, `unreachable` (Hub nicht erreicht; auch eine Antwort
+  ohne Fehler des Vertrags, etwa von einem Proxy vor einem gestoppten Hub), `unauthenticated`
+  und `unsupported_version` (durchgereicht wie bei den Werkzeugen, die schreiben), `hub_refused`
+  (der Hub lehnt mit einem Fehler des Vertrags ab, oder seine Antwort passt nicht zur Anfrage)
+  und `internal`. `unknown_hub` und `hub_refused` waren bis Task 042 nur Codes der **account
+  routes** und sind nun auch Codes dieses Werkzeugs. `internal` deckt hier neben `node.db` und
+  einer Replica, die sich nicht lesen oder schreiben lässt, auch zwei Fälle des Wartens ab: Der
+  Hub-Eintrag wurde währenddessen entfernt oder unter demselben Alias neu angelegt, oder `serve`
+  endet. Die Meldung nennt jeweils die Abhilfe — beim ersten: den Aufruf wiederholen; beim
+  zweiten: wiederholen, sobald der Node wieder läuft. Die Meldung eines gescheiterten Abgleichs
+  ist der Alias mit dem festen Satz je Art (wie `last_error` in `whoami`), nie der Fehlertext
+  des Abgleichs: Der kann die Adresse des Hubs nennen. Kommando dazu: `kephalaion node sync` auf
+  einem **pure client** oder mit `--node`.
+- **never_synced** (Code, Task 042) — Fehlercode des Werkzeugs **sync (tool)**: Der Hub-Eintrag
+  hat noch keine Replica (wie `never_synced` im Stand des Abgleichs von `whoami`). Den ersten
+  Abgleich macht `kephalaion node sync <alias>` am Rechner des Nodes; die Meldung sagt, dass die
+  Abhilfe dort liegt, nicht beim Client. Geprüft vor der Anmeldung: Ohne Replica ist jede
+  Anmeldung `invalid`. **Hidden** ist die Antwort stattdessen `not_readable`; ein Client hinter
+  einem Proxy sieht den Code also nur, wenn er an einem anderen Hub des Nodes gültig angemeldet
+  ist.
+- **sync_timeout** (Code, Task 042) — Fehlercode des Werkzeugs **sync (tool)**: Die **wait
+  limit** (40 s) ist abgelaufen, bevor der abgewartete Abgleich geendet hat. Er heißt nicht, dass
+  der Abgleich gescheitert ist: Der läuft im Hintergrund weiter, und gegen einen Hub, der hängt,
+  ist dieser Code die Regel, nicht `unreachable`. Die Meldung nennt die Frist als Zahl.
 - **hub_sync** (Stand des Abgleichs) — Tabelle in `node.db`: je Hub-Eintrag letzter Erfolg und
   letzter Fehler mit Zeit und Art (`error_kind`: `connect`, `unreachable`,
   `unauthenticated`, `unsupported_version`, `hub`, `protocol`, `replica`); ein Erfolg leert

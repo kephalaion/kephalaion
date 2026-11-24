@@ -960,6 +960,113 @@ wenig eine Datei fremder Rolle; sie bleiben ein Fehler des Abgleichs. Beim Beend
 `serve` höchstens die Frist (10 s) auf den Abgleich; ein Hub, der den Abbruch nicht beachtet,
 hält es nicht auf. Ein danach noch laufender Abgleich hält nichts mehr in `hub_sync` fest.
 
+**Auf Anforderung — entschieden am 2026-11-24 (Task 042).** Ein Client des Nodes kann einen
+Abgleich anfordern und bekommt dessen Ergebnis zurück, ohne die Datenbank des Nodes zu öffnen:
+über das MCP-Werkzeug `sync`. Anlass war ein reiner Client (Devcontainer mit der config des
+Hosts, ohne `node.db`), auf dem `kephalaion node sync` mit „Datenbankdatei fehlt“ scheiterte,
+und k-playbook, das vor seiner Befund-Vorprüfung eine frische Replica braucht.
+
+- **Wer anstößt, wer abgleicht.** Angestoßen wird über das Werkzeug; der Abgleich läuft immer
+  im Prozess von `serve`, über den Abgleich im Hintergrund — dem Prozess, dem die Datenbank
+  gehört. Das Werkzeug ruft den Abgleich nicht selbst und öffnet die Replica nie zum Schreiben;
+  lesend öffnet es sie wie jedes Werkzeug, für die Prüfungen davor und für `revision` danach.
+  Aufrufen darf, wer am Hub des Eintrags gültig angemeldet ist (`login` `ok`), wie bei
+  `rebuild_docs`; ohne `login` `ok` löst das Werkzeug nie einen Abgleich aus.
+- **Wer wartet, und worauf.** Das Werkzeug antwortet erst, wenn ein Abgleich des Eintrags
+  geendet hat, der nach dem Eingang der Anfrage begonnen hat. Läuft keiner, startet einer, und
+  auf ihn wird gewartet. Läuft schon einer, gilt erst der nächste, der nach ihm startet: Der
+  laufende kann die Änderung, um die es dem Aufrufer geht, verpasst haben. Mehrere Wartende,
+  die während desselben laufenden Abgleichs ankommen, teilen sich den einen Nachfolger. Startet
+  der Nachfolger nicht — der Eintrag wurde inzwischen entfernt oder unter demselben Alias neu
+  angelegt, oder `serve` endet —, ist das für jeden Wartenden sofort ein Fehler (`internal`,
+  mit der Abhilfe in der Meldung), kein Warten bis zur Frist.
+- **Bei `sync_interval` `0`** wirkt das Werkzeug wie der Anstoß nach einem Schreibvorgang:
+  Abgeschaltet sind nur die Runden.
+- **Abbruch und Frist.** Gewartet wird höchstens 40 s, eine feste Zahl im Node (k-playbook
+  bricht nach einer Minute ab, und die umfasst dort `initialize`, `whoami` und `sync`). Läuft
+  die Frist ab, ist das ein Fehler mit eigenem Code (`sync_timeout`); bricht der Aufrufer ab,
+  ist es wie bei den Werkzeugen, die schreiben, ein Fehler der Anfrage ohne Code. In beiden
+  Fällen läuft der Abgleich im Hintergrund weiter, und ein Erfolg ist keiner von beiden.
+  `sync_timeout` heißt nicht „gescheitert“: Gegen einen Hub, der hängt, läuft ein Abgleich viel
+  länger als die Frist; dort ist dieser Code die Regel, nicht `unreachable`.
+- **Ohne Replica.** Ein Eintrag, der noch nie abgeglichen wurde (`never_synced`), bleibt Sache
+  von `kephalaion node sync` am Rechner des Nodes; das Werkzeug meldet ihn mit dem eigenen Code
+  `never_synced` und sagt, dass die Abhilfe dort liegt. Geprüft wird in der Reihenfolge der
+  Werkzeuge, die lesen: Eintrag, dann `never_synced`, erst danach die Anmeldung — ohne Replica
+  ist jede Anmeldung `invalid`, der Code wäre sonst nie erreichbar. Über einen Proxy ohne
+  gültige Anmeldung bleibt auch dieser Fall verdeckt.
+- **Eingabe.** Das Feld `hub`, der Alias des Hub-Eintrags; ohne das Feld gilt bei nur einem Hub
+  dieser — nach der Regel für den fehlenden Hub-Teil einer Adresse, ohne zweite Fassung. Ein
+  angegebener Alias wird nur als Name geprüft und nie als Adresse aufgelöst; einer, den der
+  Node nicht kennt, ist ein Fehler (`unknown_hub`, verdeckt `not_readable`), nie ein Rückfall
+  auf den einzigen Hub.
+- **Ausgabe.** Der Hub und unter `sync` der Stand nach dem Abgleich in der Form von `whoami`.
+  Ein Erfolg ist eindeutig, und das ist zugesichert: ohne `isError` steht `sync.revision` in
+  der Antwort (Wert ab 0), `sync.last_error` ist leer, und `sync.last_success` ist der
+  Zeitpunkt des abgewarteten Abgleichs. Erfolg, Fehler und `last_success` stammen aus dem
+  Ergebnis des abgewarteten Abgleichs selbst, nicht aus `hub_sync` — dort kann beim Antworten
+  schon ein anderer Abgleich stehen. Nur `revision` liest das Werkzeug danach aus der Replica;
+  sie ist der Stand beim Antworten und nicht als monoton zugesichert (ein späterer Abgleich
+  kann die Replica geleert haben). Lässt sie sich nicht lesen, ist das ein Fehler, kein Erfolg
+  ohne `revision`.
+- **Fehler.** Jeder trägt `error.code` und `error.message`, wie bei den Werkzeugen, die
+  schreiben. Neu sind nur zwei Codes, `sync_timeout` und `never_synced`; sonst gelten die
+  vorhandenen (Tabelle unten). `unknown_hub` und `hub_refused`, bisher nur Codes der Routen für
+  Accounts, sind damit auch Codes dieses Werkzeugs. Die Meldung eines gescheiterten Abgleichs
+  entsteht aus dem Alias und dem festen Satz je Art, nie aus dem Fehlertext des Abgleichs: Der
+  kann die Adresse des Hubs nennen.
+- **Kein Schreibvorgang des Vertrags.** Kein `request_id`, keine Zeile in `actions`;
+  `vertrag.md` und `internal/contract` bleiben unberührt. Es ist der vorhandene Vorgang `sync`.
+
+| Fall (bis zum Warten in der Reihenfolge der Prüfung) | Code |
+|---|---|
+| Eingang ohne wartenden Anstoß | `unsupported` |
+| `node.db` nicht lesbar | `internal` |
+| `hub` ist kein gültiger Alias, oder `hub` fehlt und die Regel für den fehlenden Hub-Teil ergibt keinen Hub | `invalid` |
+| verdeckt (über einen Proxy, an keinem Hub gültig angemeldet), gleich ob es den Alias gibt | `not_readable` |
+| nicht verdeckt, kein Hub-Eintrag mit dem Alias | `unknown_hub` |
+| Replica des Eintrags nicht lesbar | `internal` |
+| Eintrag ohne Replica | `never_synced` |
+| Eintrag mit Replica, Aufrufer dort ohne `login` `ok` | `not_readable` |
+| Transport `ssh` | `unsupported` |
+| `serve` endet, vor oder während des Wartens | `internal` |
+| der Eintrag wird während des Wartens entfernt oder neu angelegt | `internal` |
+| Wartefrist abgelaufen | `sync_timeout` |
+| Abgleich gescheitert, Art `unreachable` oder `connect`, oder Art `hub` ohne Fehler des Vertrags (etwa ein HTTP-Status ohne Code des Vertrags oder eine Antwort, die kein JSON ist) | `unreachable` |
+| Abgleich gescheitert, Art `unauthenticated` | `unauthenticated` |
+| Abgleich gescheitert, Art `unsupported_version` | `unsupported_version` |
+| Abgleich gescheitert, Art `hub` mit einem Fehler des Vertrags, oder Art `protocol` | `hub_refused` |
+| Abgleich gescheitert, Art `replica` | `internal` |
+| `revision` nach dem Abgleich nicht lesbar | `internal` |
+
+Beim Prüfen des Tasks geklärt, am 2026-11-24:
+
+- **Keine zusätzliche Drosselung.** Der Anstoß nach einem abgewiesenen Paar ist gedrosselt,
+  weil ihn ein Client ohne gültige Anmeldung über den Proxy auslöst. `sync` stößt erst nach
+  `login` `ok` an und steht damit beim Anstoß der Werkzeuge angemeldeter Aufrufer (die
+  Werkzeuge, die schreiben, `fetch_release`, `rebuild_docs`), der ungedrosselt ist. Je Eintrag
+  läuft höchstens ein Abgleich, mit genau einem Nachfolger, den sich alle Wartenden teilen:
+  Auch eine Schleife von Aufrufen erzeugt nur einen Abgleich nach dem anderen. Kein Aufruf
+  meldet Erfolg ohne einen Abgleich, der nach der Anfrage begonnen hat.
+- **`kephalaion node sync` als Client.** Auf einem reinen Client — die config hat einen
+  Abschnitt `node:`, Datenbankdatei und Verzeichnis fehlen; dieselbe Erkennung wie bei
+  `status`, samt dessen Ausnahme für die globale Installation — ruft das Kommando das Werkzeug
+  über MCP, statt `node.db` zu öffnen. Mit `--node` tut es das auf jedem Rechner, auch auf dem
+  des Nodes und auf einem Client ohne eigenen Node. Fehlt nur die Datei, bleibt es der bisherige
+  Fehler. Ohne Alias nimmt es auf diesem Weg den Hub, wenn unter `tokens/` genau einer liegt;
+  bei mehreren oder keinem ist es ein falscher Aufruf (Exit 2), und die Meldung nennt die
+  Aliase. Das Kommando schickt `hub` immer mit. Einen Node, der das Werkzeug noch nicht kennt,
+  erkennt es vor dem Aufruf an der Werkzeugliste (`tools/list`).
+- **Account und Token auf diesem Weg** wie bei `node dir`: `--token-file` oder `--token-stdin`
+  nur zusammen mit `--account`; sonst die Token-Datei unter `tokens/<hub>/` nach der
+  Reihenfolge der Wahl — `--account`, der Standard-Account, die einzige Token-Datei. Fehlt die
+  Wahl, nennt der Fehler die Kandidaten. Die Adresse des Nodes ist `--node`, sonst `listen` im
+  Abschnitt `node:` der config. Auf dem lokalen Weg (gegen `node.db`) sind diese Optionen ein
+  falscher Aufruf (Exit 2).
+
+Die Umstellung in k-playbook und die Mindestversion des Nodes stehen in
+[`installation.md`](installation.md), „Einen Abgleich anfordern“.
+
 **Nebenläufigkeit — entschieden am 2026-09-26.** `node sync`, `node hub rm|add` und `config
 import` laufen als eigene Prozesse neben `serve`. Statt einer Sperre über Prozesse ist das
 Schreiben des Abgleichs an die `entry_id` des Hub-Eintrags gebunden — eine ULID, beim Anlegen
@@ -2430,6 +2537,7 @@ darauf ab.
 | `list` | Inhalt eines Verzeichnisses | siehe unten. Gebaut in Task 009 |
 | `changes` | was sich seit einer Revision oder einem Zeitpunkt geändert hat | siehe unten; neu am 2026-09-26. Gebaut in Task 009 |
 | `whoami` | Version, Hubs, Anmeldung, eigener Account, lesbare Collections, Stand des Abgleichs | siehe unten; kein eigenes `status`. Gebaut wie unten (Task 008) |
+| `sync` | einen Abgleich des Hubs anfordern und auf sein Ergebnis warten | Feld `hub`; wer am Hub gültig angemeldet ist; der Abgleich läuft im `serve`, die Antwort nennt Erfolg mit Stand oder den Fehler mit Code; kein Schreibvorgang des Vertrags. Gebaut in Task 042, siehe „Abgleich“, „Auf Anforderung“ |
 
 **`list` — neu aufgenommen am 2026-09-25**, um etwa das Neueste zu finden:
 
