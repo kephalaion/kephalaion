@@ -1542,6 +1542,39 @@ test('Baum: Änderung aus changes lädt das Verzeichnis darüber neu, gebündelt
   }
 });
 
+test('Baum: das letzte Dokument eines Verzeichnisses gelöscht lädt das bestehende darüber neu', async () => {
+  try {
+    const node = await treeStart({ 'vm:omni': { rights: ['read', 'write'], docs: { ...OMNI.docs, 'docs/x/y/z.md': 'z' } } });
+    const docs = await nodeAt('vm:omni', 'docs');
+    await nodeAt('vm:omni', 'docs/sub/b.md');
+    // Selbst gelöscht: docs/sub verschwindet mit b.md (der Hub kennt keine leeren Verzeichnisse).
+    let events = treeEvents();
+    await fsProvider.delete(Uri.parse('keph://vm/omni/docs/sub/b.md'), { recursive: false });
+    await settle();
+    assert.deepStrictEqual(events, [docs], 'docs, nicht das verschwundene docs/sub');
+    assert.deepStrictEqual(await childNames(docs), ['x', 'a.md']);
+    // Von einem anderen gelöscht (changes), zwei Ebenen verschwinden: docs lädt neu.
+    await nodeAt('vm:omni', 'docs/x/y/z.md');
+    await fsProvider.pollChanges(); // Ausgangspunkt
+    events = treeEvents();
+    const z = node.store['vm:omni'].docs.get('docs/x/y/z.md');
+    node.store['vm:omni'].docs.delete('docs/x/y/z.md');
+    node.changes.push({ address: 'vm:omni', name: 'docs/x/y/z.md', id: z.id, revision: 90, deleted: true });
+    await fsProvider.pollChanges();
+    await settle();
+    assert.deepStrictEqual(events, [docs]);
+    assert.deepStrictEqual(await childNames(docs), ['a.md']);
+    // Umbenannt, das Verzeichnis bleibt: nur docs, nicht weiter hinauf.
+    events = treeEvents();
+    await fsProvider.rename(Uri.parse('keph://vm/omni/docs/a.md'), Uri.parse('keph://vm/omni/docs/c.md'), { overwrite: false });
+    await settle();
+    assert.deepStrictEqual(events, [docs]);
+    assert.deepStrictEqual(await childNames(docs), ['c.md']);
+  } finally {
+    reply = null;
+  }
+});
+
 test('Baum: das aktive keph://-Dokument wird gezeigt, ohne Fokus', async () => {
   try {
     await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN }, ['vm:omni']);
@@ -1780,6 +1813,56 @@ test('In den Projektordner kopieren: Dokument und Verzeichnis, nie überschreibe
     assert.strictEqual(fs.readFileSync(path.join(dir, 'docs', 'sub', 'b.md'), 'utf8'), '# B\n');
     assert.strictEqual(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), 'eigen', 'überschrieben');
     assert.match(shownErrors.pop(), /README\.md ist belegt/);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Kopieren: ein Name, den ein anderer nach der Prüfung anlegt, wird nicht überschrieben', async () => {
+  const src = fs.mkdtempSync(path.join(home, 'projekt-'));
+  fs.mkdirSync(path.join(src, 'ordner', 'tief'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'ordner', 'b.md'), 'mein b');
+  fs.writeFileSync(path.join(src, 'ordner', 'c.md'), 'mein c');
+  fs.writeFileSync(path.join(src, 'ordner', 'tief', 'd.md'), 'mein d');
+  const dir = fs.mkdtempSync(path.join(home, 'ziel-'));
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI });
+    const docs = node.store['vm:omni'].docs;
+    // In die Collection: b.md legt ein anderer an, bevor die Erweiterung nachsieht, d.md erst
+    // zwischen ihrem Nachsehen und dem create (der Hub antwortet name_taken).
+    reply = (params, headers) => {
+      const a = params.arguments || {};
+      if (params.name === 'read' && a.name === 'docs/ordner/b.md' && !docs.has(a.name)) {
+        docs.set(a.name, { id: 'fremd-b', revision: 80, content: 'fremd b' });
+      }
+      if (params.name === 'create' && a.name === 'docs/ordner/tief/d.md') {
+        docs.set(a.name, { id: 'fremd-d', revision: 81, content: 'fremd d' });
+      }
+      return node(params, headers);
+    };
+    let mark = calls.length;
+    await dnd().handleDrop(await nodeAt('vm:omni', 'docs'), uriDrop(Uri.file(path.join(src, 'ordner'))));
+    assert.deepStrictEqual(writes(mark).sort(), [['create', 'docs/ordner/c.md'], ['create', 'docs/ordner/tief/d.md']]);
+    assert.strictEqual(docs.get('docs/ordner/b.md').content, 'fremd b', 'überschrieben');
+    assert.strictEqual(docs.get('docs/ordner/tief/d.md').content, 'fremd d', 'überschrieben');
+    assert.strictEqual(docs.get('docs/ordner/c.md').content, 'mein c');
+    assert.match(shownErrors.pop(), /2 nicht kopiert \(1 kopiert\).*b\.md ist belegt; nicht überschrieben/);
+
+    // Ins Projekt: docs/a.md legt ein anderer auf der Platte an, während die Erweiterung liest.
+    reply = (params, headers) => {
+      const a = params.arguments || {};
+      if (params.name === 'read' && a.name === 'docs/a.md' && a.content !== false) {
+        fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'docs', 'a.md'), 'fremd a');
+      }
+      return node(params, headers);
+    };
+    mark = calls.length;
+    await withWindow({ showOpenDialog: async () => [Uri.file(dir)] },
+      async () => registered['kephalaion.tree.copyToProject'](await nodeAt('vm:omni', 'docs')));
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'docs', 'a.md'), 'utf8'), 'fremd a', 'überschrieben');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'docs', 'sub', 'b.md'), 'utf8'), '# B\n');
+    assert.match(shownErrors.pop(), /1 nicht kopiert \(\d+ kopiert\).*a\.md ist belegt; nicht überschrieben/);
   } finally {
     reply = null;
   }

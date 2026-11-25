@@ -186,7 +186,10 @@ seine `keph://`-URI als `resourceUri` (Datei-Icons und Dekorationen von VS Code)
 Ein Klick öffnet ein Dokument im normalen Editor (`vscode.open`); das aktive `keph://`-Dokument
 wird im Baum gezeigt (`reveal`, ohne den Fokus zu nehmen, nur bei sichtbarem Baum).
 Aktualisiert wird aus `onDidChangeFile`: angelegt, gelöscht oder umbenannt lädt das Verzeichnis
-darüber neu, gebündelt je Runde von `changes`; eine Änderung am Inhalt nicht; eine Hub-URI, ein
+darüber neu, gebündelt je Runde von `changes`. Nach einem Löschen (auch dem alten Namen eines
+Umbenennens) prüft der Baum mit `stat`, ob das Verzeichnis darüber noch besteht — mit dem letzten
+Dokument verschwindet es, der Hub kennt keine leeren Verzeichnisse —, und lädt dann das nächste
+bestehende darüber neu. Eine Änderung am Inhalt lädt nichts neu; eine Hub-URI, ein
 anderer Stand von `whoami` oder eine andere `kephalaion.collections` den ganzen Baum. Ohne
 Collection zeigt der Baum, je nach Anmeldung, „Collection im Baum zeigen“ oder den Weg zum
 Status (`viewsWelcome`).
@@ -222,6 +225,10 @@ gibt, legt nichts an.
 - **Aus dem Explorer oder vom Betriebssystem** (`text/uri-list` mit `file://` oder
   `vscode-remote://`): Dateien und Ordner werden kopiert, Ordner mit allem darunter, Dokumente
   mit `create`. Ein belegtes Ziel wird nie überschrieben — dann geht für diesen Eintrag nichts.
+  Auch ein Name darunter, den ein anderer erst während des Kopierens anlegt, bleibt, wie er ist,
+  und zählt als nicht kopiert: Geschrieben wird nicht mit `workspace.fs.writeFile` (das
+  überschreibt immer), sondern über `KephFs` ohne `overwrite` (am Hub `create`, belegt ist
+  `name_taken`) bzw. ins Projekt mit dem Flag `wx`.
   Eine Datei, die nicht geht (keine Textdatei, zu groß), hält die übrigen nicht auf; die
   Meldung nennt sie, das Log alle.
 - **Aus dem Baum** gehen die URIs als `text/uri-list`: in den Editor (öffnet das Dokument) und,

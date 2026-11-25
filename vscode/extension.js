@@ -1426,7 +1426,10 @@ class CollectionTree {
   // Ereignisse des Providers: Angelegt oder gelöscht lädt das Verzeichnis darüber neu; geändert
   // nur, wenn der Baum den Namen noch nicht kennt (ein Dokument, das ein anderer angelegt hat —
   // changes unterscheidet das nicht). Eine Hub-URI lädt alles neu. Gebündelt: ein Neuladen je
-  // Runde, und ein Verzeichnis nicht, wenn eines darüber ohnehin neu geladen wird.
+  // Runde, und ein Verzeichnis nicht, wenn eines darüber ohnehin neu geladen wird. Nach einem
+  // Löschen (auch dem alten Namen eines Verschiebens) prüft flush, ob das Verzeichnis darüber
+  // noch besteht: Der Hub kennt keine leeren Verzeichnisse, mit dem letzten Dokument verschwindet
+  // es — dann lädt das nächste bestehende darüber neu.
   filesChanged(events) {
     let all = false;
     const targets = new Map();
@@ -1439,9 +1442,12 @@ class CollectionTree {
       }
       if (e.type === vscode.FileChangeType.Changed && this.known(e.uri)) continue;
       if (!name) continue;
-      if (e.type === vscode.FileChangeType.Deleted) this.forget(e.uri);
+      const deleted = e.type === vscode.FileChangeType.Deleted;
+      if (deleted) this.forget(e.uri);
       const p = this.known(docUri(hub, col, parentOf(name)));
-      if (p) targets.set(p.uri.toString(), p);
+      if (!p) continue;
+      const k = p.uri.toString();
+      targets.set(k, { n: p, check: deleted || Boolean(targets.get(k) && targets.get(k).check) });
     }
     if (all) {
       this.reshape(true);
@@ -1452,7 +1458,10 @@ class CollectionTree {
       this.pending = new Map();
       setTimeout(() => this.flush(), 0);
     }
-    for (const [k, n] of targets) this.pending.set(k, n);
+    for (const [k, t] of targets) {
+      const had = this.pending.get(k);
+      this.pending.set(k, { n: t.n, check: t.check || Boolean(had && had.check) });
+    }
   }
 
   // Ein gelöschter Name und alles darunter: Der Baum kennt ihn nicht mehr, damit ein späteres
@@ -1462,14 +1471,36 @@ class CollectionTree {
     for (const k of [...this.nodes.keys()]) if (k === key || k.startsWith(`${key}/`)) this.nodes.delete(k);
   }
 
-  flush() {
+  async flush() {
     const pending = this.pending;
     this.pending = undefined;
     if (!pending || !pending.size) return;
-    const list = [...pending.values()];
+    const found = new Map();
+    for (const t of pending.values()) {
+      const n = t.check ? await this.existing(t.n) : t.n;
+      found.set(n.uri.toString(), n);
+    }
+    const list = [...found.values()];
     const under = (n, a) => n !== a && n.hub === a.hub && n.collection === a.collection && (!a.name || n.name.startsWith(`${a.name}/`));
     const top = list.filter((n) => !list.some((a) => under(n, a)));
     this._changed.fire(top.length === 1 ? top[0] : top);
+  }
+
+  // Das Verzeichnis n oder, wenn es nicht mehr besteht, das nächste bestehende darüber bis zur
+  // Collection; ein verschwundenes kennt der Baum danach nicht mehr. Nur FileNotFound heißt
+  // „besteht nicht“ — ein anderer Fehler lädt n selbst neu, getChildren meldet ihn.
+  async existing(n) {
+    while (n.kind === 'directory') {
+      try {
+        await this.kfs.stat(n.uri);
+        return n;
+      } catch (e) {
+        if (!e || e.code !== 'FileNotFound') return n;
+      }
+      this.forget(n.uri);
+      n = this.getParent(n);
+    }
+    return n;
   }
 
   getTreeItem(n) {
@@ -1552,11 +1583,34 @@ async function uriExists(uri) {
   }
 }
 
-// Kopiert src nach dst über workspace.fs, ein Verzeichnis mit allem darunter — von einem
-// Provider zum anderen (Projekt → Collection, Collection → Projekt). Ein belegtes dst wird nie
-// überschrieben: Dann geht nichts. Ein Dokument, das nicht geht (keine Textdatei, zu groß), hält
-// die übrigen nicht auf. Liefert { copied, failed: [Meldung] }.
-async function copyTree(src, dst) {
+// Legt uri mit content neu an und überschreibt nie — auch nicht, wenn zwischen der Prüfung in
+// copyTree und hier ein anderer denselben Namen anlegt. workspace.fs.writeFile kennt kein „nur
+// anlegen“ (es überschreibt immer), daher: keph:// über den Provider ohne overwrite (ein belegter
+// Name ist dort FileExists, am Hub name_taken), file:// mit dem Flag wx (O_EXCL). Für jedes
+// andere Schema bleibt nur die Prüfung unmittelbar davor.
+async function writeNew(kfs, uri, content) {
+  try {
+    if (uri.scheme === SCHEME) {
+      await kfs.writeFile(uri, content, { create: true, overwrite: false });
+    } else if (uri.scheme === 'file') {
+      await fs.promises.writeFile(uri.fsPath, content, { flag: 'wx' });
+    } else {
+      if (await uriExists(uri)) throw vscode.FileSystemError.FileExists(uri);
+      await vscode.workspace.fs.writeFile(uri, content);
+    }
+  } catch (e) {
+    if (e && (e.code === 'FileExists' || e.code === 'EEXIST')) throw new Error(`${uri.toString()} ist belegt; nicht überschrieben`);
+    throw e;
+  }
+}
+
+// Kopiert src nach dst, ein Verzeichnis mit allem darunter — von einem Provider zum anderen
+// (Projekt → Collection, Collection → Projekt); gelesen über workspace.fs, geschrieben mit
+// writeNew. Ein belegtes dst wird nie überschrieben: Dann geht nichts; ein Name darunter, den
+// inzwischen ein anderer angelegt hat, bleibt, wie er ist, und zählt als nicht kopiert. Ein
+// Dokument, das nicht geht (keine Textdatei, zu groß), hält die übrigen nicht auf. Liefert
+// { copied, failed: [Meldung] }.
+async function copyTree(kfs, src, dst) {
   if (await uriExists(dst)) throw new Error(`Kephalaion: ${dst.toString()} ist belegt; nichts kopiert, nichts überschrieben`);
   const out = { copied: 0, failed: [] };
   const walk = async (s, d) => {
@@ -1570,7 +1624,7 @@ async function copyTree(src, dst) {
         }
         return;
       }
-      await vscode.workspace.fs.writeFile(d, await vscode.workspace.fs.readFile(s));
+      await writeNew(kfs, d, await vscode.workspace.fs.readFile(s));
       out.copied++;
     } catch (e) {
       out.failed.push(`${s.toString()}: ${e.message}`);
@@ -1638,7 +1692,7 @@ class TreeDragAndDrop {
       const dst = docUri(plan.hub, plan.collection, it.name);
       try {
         if (it.op === 'move') await vscode.workspace.fs.rename(it.source, dst, { overwrite: false });
-        else copies.push(await copyTree(it.source, dst));
+        else copies.push(await copyTree(this.tree.kfs, it.source, dst));
       } catch (e) {
         showTreeError(this.log, `ablegen ${it.source.toString()} → ${dst.toString()}`, e);
       }
@@ -1976,7 +2030,7 @@ function treeCommands(tree, view, log) {
       for (const x of list) {
         const dst = vscode.Uri.joinPath(picked[0], x.name ? x.name.split('/').pop() : x.collection);
         try {
-          results.push(await copyTree(x.uri, dst));
+          results.push(await copyTree(tree.kfs, x.uri, dst));
         } catch (e) {
           showTreeError(log, `in den Projektordner ${where(x)} → ${dst.toString()}`, e);
         }
