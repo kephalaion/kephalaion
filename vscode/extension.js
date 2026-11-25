@@ -1516,6 +1516,124 @@ class CollectionTree {
   }
 }
 
+// Ein Fehler eines Befehls im Baum als Meldung, mit dem Text des Providers bzw. des Nodes.
+function showTreeError(log, what, e) {
+  const msg = e && e.message ? e.message : String(e);
+  log(`Baum: ${what}: ${msg}`);
+  vscode.window.showErrorMessage(msg.startsWith('Kephalaion') ? msg : `Kephalaion: ${msg}`);
+}
+
+// Gibt es die URI? Nur FileNotFound heißt nein; jeder andere Fehler geht weiter.
+async function uriExists(uri) {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch (e) {
+    if (e && e.code === 'FileNotFound') return false;
+    throw e;
+  }
+}
+
+// Die Befehle zum Bearbeiten im Baum (Etappe 3). Alles über vscode.workspace.fs auf
+// keph://-URIs, also über KephFs; ein Befehl aus dem Kontextmenü bekommt das Element und die
+// Auswahl, einer aus der Titelleiste oder per Taste keines — dann gilt die Auswahl des Baums.
+function treeCommands(tree, view, log) {
+  const address = (n) => `${n.hub}:${n.collection}`;
+  const where = (n) => (n.name ? `${address(n)} ${n.name}` : address(n));
+  // Die gewählten Elemente: die Auswahl aus dem Kontextmenü, sonst das Element, sonst die
+  // Auswahl des Baums.
+  const chosen = (n, all) => {
+    if (Array.isArray(all) && all.length) return all;
+    if (n) return [n];
+    return [...(view.selection || [])];
+  };
+  // Wo eine neue Datei oder ein neuer Ordner hinkommt: das Element, bei einem Dokument sein
+  // Verzeichnis; ohne Element die einzige schreibbare Collection oder eine Wahl.
+  const targetDir = async (n) => {
+    n = n || (view.selection || [])[0];
+    if (n) return n.kind === 'document' ? tree.getParent(n) : n;
+    const w = tree.shown().filter((c) => c.readable && c.writable);
+    if (!w.length) {
+      vscode.window.showWarningMessage('Kephalaion: keine schreibbare Collection im Baum.');
+      return undefined;
+    }
+    const c = w.length === 1 ? w[0]
+      : (await vscode.window.showQuickPick(w.map((x) => ({ label: x.address, c: x })), { placeHolder: 'In welche Collection?' }) || {}).c;
+    return c ? tree.node(c.hub, c.collection, '', 'collection') : undefined;
+  };
+  const askName = (prompt, value, selection) => vscode.window.showInputBox({
+    prompt, value, valueSelection: selection, validateInput: (v) => rules.treeNameError(v),
+  });
+
+  const newEntry = (folder) => async (n) => {
+    const dir = await targetDir(n);
+    if (!dir) return;
+    const name = await askName(`${folder ? 'Neuer Ordner' : 'Neue Datei'} in ${where(dir)} — Name, auch mit Unterverzeichnis (a/b.md)`);
+    if (!name) return;
+    const full = dir.name ? `${dir.name}/${name}` : name;
+    const uri = docUri(dir.hub, dir.collection, full);
+    try {
+      if (await uriExists(uri)) throw new Error(`Kephalaion: ${address(dir)} ${full} gibt es schon; nichts angelegt`);
+      if (folder) {
+        await vscode.workspace.fs.createDirectory(uri);
+      } else {
+        await vscode.workspace.fs.writeFile(uri, new Uint8Array());
+        await vscode.commands.executeCommand('vscode.open', uri);
+      }
+    } catch (e) {
+      showTreeError(log, `${folder ? 'neuer Ordner' : 'neue Datei'} ${address(dir)} ${full}`, e);
+    }
+  };
+
+  const rename = async (n) => {
+    n = n || (view.selection || [])[0];
+    if (!n || n.kind === 'collection') return;
+    const start = n.name.lastIndexOf('/') + 1;
+    const dot = n.kind === 'document' ? n.name.lastIndexOf('.') : -1;
+    const to = await askName(`Umbenennen in ${address(n)} — neuer Name, auch in ein anderes Verzeichnis (a/b.md)`, n.name,
+      [start, dot > start ? dot : n.name.length]);
+    if (!to || to === n.name) return;
+    try {
+      await vscode.workspace.fs.rename(n.uri, docUri(n.hub, n.collection, to), { overwrite: false });
+    } catch (e) {
+      showTreeError(log, `umbenennen ${where(n)} → ${to}`, e);
+    }
+  };
+
+  const remove = async (n, all) => {
+    const list = chosen(n, all).filter((x) => x.kind !== 'collection');
+    if (!list.length) return;
+    const dirs = list.filter((x) => x.kind === 'directory').length;
+    const what = list.length === 1 ? `„${where(list[0])}“` : `${list.length} Einträge`;
+    const detail = dirs ? 'Ein Verzeichnis wird mit allen Dokumenten darunter gelöscht. ' : '';
+    const ok = await vscode.window.showWarningMessage(`${what} löschen?`,
+      { modal: true, detail: `${detail}Das geht über den Hub und lässt sich hier nicht rückgängig machen.` }, 'Löschen');
+    if (ok !== 'Löschen') return;
+    for (const x of list) {
+      try {
+        await vscode.workspace.fs.delete(x.uri, { recursive: x.kind === 'directory', useTrash: false });
+      } catch (e) {
+        showTreeError(log, `löschen ${where(x)}`, e);
+      }
+    }
+  };
+
+  return {
+    'kephalaion.tree.newFile': newEntry(false),
+    'kephalaion.tree.newFolder': newEntry(true),
+    'kephalaion.tree.rename': rename,
+    'kephalaion.tree.delete': remove,
+    'kephalaion.tree.refresh': () => tree.reshape(true),
+    'kephalaion.tree.openToSide': (n, all) => {
+      for (const x of chosen(n, all).filter((y) => y.kind === 'document')) {
+        vscode.commands.executeCommand('vscode.open', x.uri, vscode.ViewColumn.Beside);
+      }
+    },
+    'kephalaion.tree.copyUri': (n, all) => vscode.env.clipboard.writeText(chosen(n, all).map((x) => x.uri.toString()).join('\n')),
+    'kephalaion.tree.copyRelativePath': (n, all) => vscode.env.clipboard.writeText(chosen(n, all).map((x) => x.name).join('\n')),
+  };
+}
+
 // --- Aktivierung ---
 
 let ext;
@@ -1583,6 +1701,9 @@ function activate(context) {
     });
   };
 
+  for (const [id, fn] of Object.entries(treeCommands(tree, view, log))) {
+    context.subscriptions.push(vscode.commands.registerCommand(id, fn));
+  }
   context.subscriptions.push(
     view,
     tree._changed,

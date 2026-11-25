@@ -18,7 +18,45 @@
       { "command": "kephalaion.chooseAccount", "title": "Kephalaion: Account wählen" },
       { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
       { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
-      { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" }
+      { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" },
+      { "command": "kephalaion.tree.newFile", "title": "Neue Datei…", "category": "Kephalaion", "icon": "$(new-file)" },
+      { "command": "kephalaion.tree.newFolder", "title": "Neuer Ordner…", "category": "Kephalaion", "icon": "$(new-folder)" },
+      { "command": "kephalaion.tree.rename", "title": "Umbenennen…", "category": "Kephalaion" },
+      { "command": "kephalaion.tree.delete", "title": "Löschen", "category": "Kephalaion" },
+      { "command": "kephalaion.tree.refresh", "title": "Aktualisieren", "category": "Kephalaion", "icon": "$(refresh)" },
+      { "command": "kephalaion.tree.openToSide", "title": "Zur Seite öffnen", "category": "Kephalaion" },
+      { "command": "kephalaion.tree.copyUri", "title": "URI kopieren", "category": "Kephalaion" },
+      { "command": "kephalaion.tree.copyRelativePath", "title": "Relativen Pfad kopieren", "category": "Kephalaion" }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "kephalaion.tree.newFile", "when": "false" },
+        { "command": "kephalaion.tree.newFolder", "when": "false" },
+        { "command": "kephalaion.tree.rename", "when": "false" },
+        { "command": "kephalaion.tree.delete", "when": "false" },
+        { "command": "kephalaion.tree.refresh", "when": "false" },
+        { "command": "kephalaion.tree.openToSide", "when": "false" },
+        { "command": "kephalaion.tree.copyUri", "when": "false" },
+        { "command": "kephalaion.tree.copyRelativePath", "when": "false" }
+      ],
+      "view/title": [
+        { "command": "kephalaion.tree.newFile", "when": "view == kephalaion.collections", "group": "navigation@1" },
+        { "command": "kephalaion.tree.newFolder", "when": "view == kephalaion.collections", "group": "navigation@2" },
+        { "command": "kephalaion.tree.refresh", "when": "view == kephalaion.collections", "group": "navigation@9" }
+      ],
+      "view/item/context": [
+        { "command": "kephalaion.tree.openToSide", "when": "view == kephalaion.collections && viewItem =~ /^document-/", "group": "navigation@1" },
+        { "command": "kephalaion.tree.newFile", "when": "view == kephalaion.collections && viewItem =~ /^(collection|directory)-writable$/", "group": "2_new@1" },
+        { "command": "kephalaion.tree.newFolder", "when": "view == kephalaion.collections && viewItem =~ /^(collection|directory)-writable$/", "group": "2_new@2" },
+        { "command": "kephalaion.tree.copyUri", "when": "view == kephalaion.collections && viewItem =~ /^(collection|directory|document)-(writable|readonly)$/", "group": "6_copypath@1" },
+        { "command": "kephalaion.tree.copyRelativePath", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-/", "group": "6_copypath@2" },
+        { "command": "kephalaion.tree.rename", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-writable$/", "group": "7_modification@1" },
+        { "command": "kephalaion.tree.delete", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-writable$/", "group": "7_modification@2" }
+      ]
+    },
+    "keybindings": [
+      { "command": "kephalaion.tree.rename", "key": "f2", "when": "focusedView == kephalaion.collections && !inputFocus" },
+      { "command": "kephalaion.tree.delete", "key": "delete", "mac": "cmd+backspace", "when": "focusedView == kephalaion.collections && !inputFocus" }
     ],
     "views": {
       "explorer": [

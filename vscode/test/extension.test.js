@@ -63,6 +63,7 @@ const shownInfos = [];
 const executed = [];
 const settingUpdates = [];
 const editorListeners = [];
+const clipboard = [];
 
 class Disposable {
   constructor(fn) {
@@ -214,6 +215,7 @@ const vscode = {
     showErrorMessage: (m) => shownErrors.push(m),
     showInformationMessage: (m) => shownInfos.push(m),
     showQuickPick: async () => undefined,
+    showInputBox: async () => undefined,
     createTreeView: (id, options) => {
       const visibility = [];
       treeView = {
@@ -247,7 +249,8 @@ const vscode = {
       return new Disposable();
     },
   },
-  env: { logLevel: 2, onDidChangeLogLevel: noop },
+  env: { logLevel: 2, onDidChangeLogLevel: noop, clipboard: { writeText: async (t) => { clipboard.push(t); } } },
+  ViewColumn: { Beside: -2 },
   LogLevel: { Trace: 1 },
   EventEmitter: class {
     constructor() {
@@ -1312,10 +1315,12 @@ function memNode(collections, { pageSize = 1000 } = {}) {
         col.docs.set(a.name, { id: `id${++rev}`, revision: rev, content: a.content });
         return ok(docOut(a.name, col.docs.get(a.name)));
       case 'write':
+        if (!writable) return fail('forbidden', 'ohne Recht write');
         if (!doc) return fail('not_found', `${a.name} fehlt`);
         Object.assign(doc, { revision: ++rev, content: a.content });
         return ok(docOut(a.name, doc));
       case 'rename': {
+        if (!writable) return fail('forbidden', 'ohne Recht write');
         if (col.docs.has(a.new_name) || isDir(col, a.new_name)) return fail('name_taken', `${a.new_name} ist belegt`);
         if (doc) {
           col.docs.delete(a.name);
@@ -1333,6 +1338,7 @@ function memNode(collections, { pageSize = 1000 } = {}) {
         return ok({ kind: 'directory', address: a.collection, name: a.new_name, revision: rev, count: moved.length });
       }
       case 'delete': {
+        if (!writable) return fail('forbidden', 'ohne Recht write');
         if (doc) {
           col.docs.delete(a.name);
           return ok({ ...docOut(a.name, doc), revision: ++rev });
@@ -1494,5 +1500,122 @@ test('Baum: das aktive keph://-Dokument wird gezeigt, ohne Fokus', async () => {
   } finally {
     reply = null;
     settings.collections = undefined;
+  }
+});
+
+// Ersetzt eine Funktion von vscode.window für fn und stellt sie danach wieder her.
+async function withWindow(over, fn) {
+  const saved = {};
+  for (const k of Object.keys(over)) {
+    saved[k] = vscode.window[k];
+    vscode.window[k] = over[k];
+  }
+  try {
+    return await fn();
+  } finally {
+    Object.assign(vscode.window, saved);
+  }
+}
+
+// Die schreibenden Aufrufe an den Node seit mark, als [Werkzeug, Name, neuer Name].
+const writes = (mark) => calls.slice(mark).filter((c) => ['create', 'write', 'rename', 'delete'].includes(c.params.name))
+  .map((c) => [c.params.name, c.params.arguments.name, c.params.arguments.new_name].filter((x) => x !== undefined));
+
+test('Baum bearbeiten: neue Datei und neuer Ordner über den Provider, die Datei wird geöffnet', async () => {
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI });
+    const docs = await nodeAt('vm:omni', 'docs');
+    const a = await nodeAt('vm:omni', 'docs/a.md');
+    let mark = calls.length;
+    await withWindow({ showInputBox: async (o) => (o.validateInput('../x') ? 'neu.md' : 'falsch') }, async () => {
+      await registered['kephalaion.tree.newFile'](a); // auf einem Dokument: in dessen Verzeichnis
+    });
+    assert.deepStrictEqual(writes(mark), [['create', 'docs/neu.md']]);
+    assert.strictEqual(node.store['vm:omni'].docs.get('docs/neu.md').content, '');
+    const opened = executed.find((c) => c[0] === 'vscode.open');
+    assert.strictEqual(opened[1].toString(), 'keph://vm/omni/docs/neu.md');
+    // Belegt: nichts angelegt, Meldung.
+    mark = calls.length;
+    await withWindow({ showInputBox: async () => 'a.md' }, () => registered['kephalaion.tree.newFile'](docs));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.match(shownErrors.pop(), /docs\/a\.md gibt es schon; nichts angelegt/);
+    // Neuer Ordner: nur in diesem Fenster gemerkt, der Baum zeigt ihn.
+    await withWindow({ showInputBox: async () => 'leer' }, () => registered['kephalaion.tree.newFolder'](docs));
+    assert.deepStrictEqual(writes(mark), []);
+    await settle();
+    assert.deepStrictEqual(await childNames(docs), ['leer', 'sub', 'a.md', 'neu.md']);
+    // Abgebrochen: nichts.
+    await registered['kephalaion.tree.newFile'](docs);
+    assert.deepStrictEqual(writes(mark), []);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Baum bearbeiten: neue Datei aus der Titelleiste in der einzigen schreibbaren Collection', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN });
+    const mark = calls.length;
+    await withWindow({ showInputBox: async () => 'oben.md' }, () => registered['kephalaion.tree.newFile']());
+    assert.deepStrictEqual(writes(mark), [['create', 'oben.md']]);
+    assert.strictEqual(calls.find((c) => c.params.name === 'create').params.arguments.collection, 'vm:omni');
+  } finally {
+    reply = null;
+  }
+});
+
+test('Baum bearbeiten: umbenennen mit vorbelegtem Namen, löschen nur nach Bestätigung', async () => {
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI });
+    const a = await nodeAt('vm:omni', 'docs/a.md');
+    let asked;
+    let mark = calls.length;
+    await withWindow({ showInputBox: async (o) => { asked = o; return 'docs/z.md'; } }, () => registered['kephalaion.tree.rename'](a));
+    assert.strictEqual(asked.value, 'docs/a.md');
+    assert.deepStrictEqual(asked.valueSelection, [5, 6]);
+    assert.deepStrictEqual(writes(mark), [['rename', 'docs/a.md', 'docs/z.md']]);
+    // Auf einen belegten Namen: abgelehnt mit der Meldung des Providers, nichts geschrieben.
+    const z = await nodeAt('vm:omni', 'docs/z.md');
+    mark = calls.length;
+    await withWindow({ showInputBox: async () => 'README.md' }, () => registered['kephalaion.tree.rename'](z));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.strictEqual(shownErrors.length, 1);
+
+    // Löschen: abgelehnte Bestätigung schreibt nichts.
+    const sub = await nodeAt('vm:omni', 'docs/sub');
+    let question;
+    mark = calls.length;
+    await withWindow({ showWarningMessage: async (m, o, ...b) => { question = { m, o, b }; return undefined; } },
+      () => registered['kephalaion.tree.delete'](sub, [sub, z]));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.strictEqual(question.o.modal, true);
+    assert.match(question.m, /2 Einträge löschen\?/);
+    assert.deepStrictEqual(question.b, ['Löschen']);
+    // Bestätigt: das Verzeichnis recursive, das Dokument einzeln.
+    await withWindow({ showWarningMessage: async () => 'Löschen' }, () => registered['kephalaion.tree.delete'](sub, [sub, z]));
+    assert.deepStrictEqual(writes(mark), [['delete', 'docs/sub'], ['delete', 'docs/z.md']]);
+    const del = calls.filter((c) => c.params.name === 'delete').map((c) => c.params.arguments.recursive);
+    assert.deepStrictEqual(del, [true, false]);
+    assert.deepStrictEqual([...node.store['vm:omni'].docs.keys()], ['README.md']);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Baum bearbeiten: Fehler des Providers als Meldung, zur Seite öffnen, kopieren', async () => {
+  try {
+    await treeStart({ 'vm:wissen': WISSEN });
+    const x = await nodeAt('vm:wissen', 'x.md');
+    assert.strictEqual(tp().getTreeItem(x).contextValue, 'document-readonly');
+    await withWindow({ showWarningMessage: async () => 'Löschen' }, () => registered['kephalaion.tree.delete'](x));
+    assert.match(shownErrors.pop(), /^Kephalaion: /);
+    registered['kephalaion.tree.openToSide'](x);
+    assert.deepStrictEqual(executed.filter((c) => c[0] === 'vscode.open').map((c) => [c[1].toString(), c[2]]),
+      [['keph://vm/wissen/x.md', -2]]);
+    await registered['kephalaion.tree.copyUri'](x);
+    await registered['kephalaion.tree.copyRelativePath'](x);
+    assert.deepStrictEqual(clipboard.splice(0), ['keph://vm/wissen/x.md', 'x.md']);
+  } finally {
+    reply = null;
   }
 });

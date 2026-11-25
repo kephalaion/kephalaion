@@ -590,7 +590,22 @@ function headingLine(text, heading) {
   return -1;
 }
 
+// Ein Name in einer Collection, wie ihn „Neue Datei“, „Neuer Ordner“ und „Umbenennen“ im Baum
+// annehmen: relativ, mit / zwischen Verzeichnissen, ohne leere Teile, . oder ..; die übrigen
+// Regeln prüft der Hub. Liefert die Meldung für das Eingabefeld, undefined, wenn er passt.
+function treeNameError(value) {
+  const v = String(value || '');
+  if (!v.trim()) return 'Name fehlt';
+  if (v !== v.trim()) return 'ohne Leerzeichen am Anfang oder Ende';
+  if (v.includes('\\')) return 'Verzeichnisse mit / trennen, nicht mit \\';
+  const parts = v.split('/');
+  if (parts.some((p) => p === '')) return 'ohne / am Anfang oder Ende und ohne leere Teile';
+  if (parts.some((p) => p === '.' || p === '..')) return 'ohne . und .. als Teil';
+  return undefined;
+}
+
 module.exports = {
+  treeNameError,
   parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, whoamiOutcome,
   droppedHubs, PROXY_HINT, userConfigDir, locateConfig, configSourceText, parseNodeListen, DEFAULT_NODE_LISTEN,
   resolveAccount, parseDefaultAccount, choiceText,

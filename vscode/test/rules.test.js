@@ -487,3 +487,9 @@ test('headingLine: ATX-Überschrift, nicht im Code-Block, sonst -1', () => {
   assert.strictEqual(headingLine(text, ''), -1);
   assert.strictEqual(headingLine('a\r\n## B\r\n', 'B'), 1);
 });
+
+test('treeNameError: relative Namen mit /, sonst eine Meldung', () => {
+  const { treeNameError } = require('../rules');
+  for (const ok of ['a.md', 'docs/a.md', 'ordner', 'a b/c.md']) assert.strictEqual(treeNameError(ok), undefined, ok);
+  for (const bad of ['', '  ', ' a.md', '/a.md', 'a/', 'a//b', 'a/../b', './a', 'a\\b']) assert.ok(treeNameError(bad), bad);
+});
