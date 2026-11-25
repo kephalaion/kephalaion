@@ -1,6 +1,9 @@
 # Fortschritt
 
-Stand: 2026-11-24 (Task 039 Export und Restore des Hubs: `hub export` und `hub restore`
+Stand: 2026-11-25 (Task 043 VS Code: Collections als Baumansicht „Kephalaion“ im Explorer,
+Schalter `kephalaion.workspaceFolders`, „Dokument öffnen“ und „Suchen“ — gebaut und
+dokumentiert, die Prüfung im echten VS Code ist Nacharbeit des Nutzers;
+2026-11-24: Task 039 Export und Restore des Hubs: `hub export` und `hub restore`
 gebaut und dokumentiert, in v0.5.0; Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
 Text als `instructions` mit, gebaut und dokumentiert, in v0.5.0; Task 042 Abgleich
 auf Anforderung: MCP-Werkzeug `sync` und `node sync` als
@@ -461,6 +464,26 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 043 (`043-vscode-collection-baum`) — VS Code: Collections als Baumansicht statt
+  Workspace-Ordner** (2026-11-25, Etappen 1–7 ausgeführt; `docs/vscode.md`, „Baumansicht“):
+  - Regeln ohne `vscode` in `vscode/rules.js` (`shownCollections`, `folderRemovalPlan`,
+    `mergeCollections`, `dropTarget`, `headingLine`, `treeNameError`) mit Tests;
+  - Baum „Kephalaion“ im Explorer über `KephFs` (Wurzel nach `kephalaion.collections` und
+    `whoami`, Neuladen aus `onDidChangeFile`, `reveal`), Bearbeiten über `workspace.fs`,
+    Ziehen und Ablegen (verschieben in der Collection, Kopie aus dem Projekt, nie
+    überschreiben), „In den Projektordner kopieren…“;
+  - „Kephalaion: Dokument öffnen“ (`list` mit `recursive`) und „Kephalaion: Suchen“
+    (`search`, nur `docs/`) — Abkehr von „keinen eigenen Suchbefehl“ (2026-09-26), vom Nutzer
+    am 2026-11-25 bestätigt;
+  - „Collection im Baum zeigen“ / „… aus dem Baum nehmen“ schreiben `kephalaion.collections`;
+    Schalter `kephalaion.workspaceFolders` (Standard `true`), `false` nimmt die
+    `keph://`-Ordner Bereich für Bereich heraus und merkt sie, `true` hängt sie wieder ein;
+  - geprüft nur mit dem Ersatz für `vscode` (`vscode/test/extension.test.js`); Handgriffe für
+    das echte VS Code unter „Zu testen“;
+  - **Folgeschritt** (Todo 31): Standard von `kephalaion.workspaceFolders` auf `false`, später das
+    Einhängen entfernen; unabhängig davon setzt das OMNI-Setup `kephalaion.collections` in der
+    `.code-workspace`-Datei statt der Zeile `keph://vm/omni`.
+
 - **Task 039 (`039-hub-export-restore`) — Hub-Export und -Restore unabhängig von der Datenbank**
   (2026-11-24, Etappen 1–3 ausgeführt, in v0.5.0):
   - Format `internal/hub/archive` (Fassung 1): `tar.gz` mit `manifest.json` (Format,
@@ -767,6 +790,15 @@ ist Nacharbeit des Nutzers)
   - Index für `CollectionCountDocs`/`AccountRows` prüfen, jetzt wo es Dokumente gibt.
 
 ## Zu testen
+
+- **Task 043 — Baumansicht im echten VS Code** (nur der Nutzer; nach einem Build mit der
+  Erweiterung, `make vscode-install`): die Handgriffe in `docs/vscode.md`, „Baumansicht im
+  echten VS Code noch zu prüfen“ — Blättern, Öffnen, Speichern mit Konflikt, Markdown-Vorschau
+  mit relativem Link, neue Datei/Ordner, umbenennen, löschen, Ziehen Explorer → Baum,
+  Baum → Editor, Baum → Explorer (Ergebnis notieren), „In den Projektordner kopieren…“, beide
+  Befehle, Schalter auf `false` mit `keph://`-Ordner an Index 1 und an Index 0, danach Terminal
+  ohne Ordnerauswahl und ob ty wieder läuft (sofort, nach Neuladen des Fensters oder erst nach
+  Neustart; Ergebnis notieren), zurück auf `true`.
 
 - **Task 039 — Export und Restore, Probe an einem echten Hub** (nur der Nutzer; nach dem Release
   mit `hub export`, eingespielt über Ansible): neben dem laufenden Dienst `sudo -u kephalaion

@@ -1,7 +1,7 @@
 {
   "name": "kephalaion",
   "displayName": "Kephalaion",
-  "description": "Collections von Kephalaion als Ordner in VS Code",
+  "description": "Collections von Kephalaion als Baum im Explorer und als Ordner in VS Code",
   "version": "0.0.0",
   "publisher": "kascada",
   "license": "SEE LICENSE IN ../LICENSE",

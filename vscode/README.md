@@ -1,7 +1,8 @@
 # Kephalaion für VS Code
 
-Zeigt Collections von Kephalaion als Ordner (`keph://<hub>/<collection>/…`) und den Stand des
-Nodes in der Statusleiste. Idee und Weg: [`../docs/vscode.md`](../docs/vscode.md).
+Zeigt Collections von Kephalaion als Baum „Kephalaion“ im Explorer und wahlweise als Ordner des
+Workspace (`keph://<hub>/<collection>/…`), dazu den Stand des Nodes in der Statusleiste. Idee
+und Weg: [`../docs/vscode.md`](../docs/vscode.md).
 
 Stand (0.0.6): lesen und schreiben; der Node als MCP-Server für Copilot. Braucht VS Code 1.101
 oder neuer.
@@ -13,10 +14,32 @@ oder neuer.
   verschieben — auch ganze Ordner, per Drag & Drop. Schreibbar ist eine Collection mit dem
   Recht `write`; ein fremdes Dokument ohne `supersede` scheitert erst beim Speichern.
   Ein Konflikt (inzwischen geändert) wird abgelehnt, nichts wird still überschrieben.
+- **Baum „Kephalaion“** im Explorer (seit Task 043): die Collections als `<hub>:<collection>`,
+  darunter Verzeichnisse und Dokumente; Klick öffnet. Kontextmenü und Titelleiste: neue Datei,
+  neuer Ordner, umbenennen (F2), löschen (Entf, mit Bestätigung), aktualisieren, zur Seite
+  öffnen, URI bzw. relativen Pfad kopieren, „In den Projektordner kopieren…“. Ziehen und
+  Ablegen: im Baum innerhalb einer Collection verschieben, Dateien und Ordner aus dem Projekt
+  in den Baum kopieren (nie überschreiben), Dokumente in den Editor ziehen.
+- **Welche Collections:** Einstellung `kephalaion.collections` (Liste von `<hub>:<collection>`),
+  ungesetzt alle lesbaren. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“
+  schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist — **eine
+  eingecheckte `.code-workspace` oder `.vscode/settings.json` ändert sich dadurch.**
+- **Ohne Workspace-Ordner:** `kephalaion.workspaceFolders: false` nimmt alle `keph://`-Ordner
+  aus dem Workspace (in einem gespeicherten Workspace schreibt VS Code dabei die
+  `.code-workspace`-Datei um), zeigt ihre Collections im Baum und merkt sich die Ordner; zurück
+  auf `true` kommen genau diese wieder. Ein Workspace nur aus Collections bleibt. So fragt
+  „Neues Terminal“ nicht mehr nach dem Ordner, und Sprachserver, die an einem `keph://`-Ordner
+  scheitern (etwa ty), sehen keinen mehr. Standard ist vorerst `true`, wie bisher.
+- **Dokument öffnen und Suchen:** „Kephalaion: Dokument öffnen“ (alle Dokumente der Collections
+  im Baum) und „Kephalaion: Suchen“ (das Werkzeug `search` des Nodes) — Strg+P und
+  Strg+Umschalt+F finden in Collections nichts.
 - **Grenzen:** nur Text (UTF-8, ohne NUL) bis 1 MiB je Dokument; umbenennen und verschieben
   nur innerhalb einer Collection, ohne ein belegtes Ziel zu überschreiben; ein leerer Ordner
   besteht nur in diesem Fenster, bis darin etwas liegt. Ist der Hub nicht erreichbar, wird
-  nicht gespeichert — die Meldung sagt es.
+  nicht gespeichert — die Meldung sagt es. „Kephalaion: Suchen“ sucht nur unter `docs/` einer
+  Collection, in einfachen englischen Wörtern. Im Baum kein Kopieren und Einfügen über die
+  Zwischenablage (dafür Ziehen und Ablegen und „In den Projektordner kopieren…“) und kein
+  Kopieren zwischen Collections (nur eine Meldung).
 - **Node:** Adresse aus `listen` im Abschnitt `node:` der config
   (`~/.config/kephalaion/config.yaml`, abweichend `KEPHALAION_CONFIG`, `XDG_CONFIG_HOME`);
   überschreibbar mit der Einstellung `kephalaion.nodeUrl`.
@@ -52,4 +75,5 @@ make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie 
 Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce` kommt per `npx`).
 
 Danach „Developer: Reload Window“. Die Statusleiste zeigt `Keph <hub>`; ein Klick öffnet das
-Menü (Status, neu verbinden, Account wählen, Collection einbinden, Log).
+Menü (Status, neu verbinden, Account wählen, Collection einbinden, Collection im Baum zeigen
+bzw. herausnehmen, Dokument öffnen, Suchen, Log).
