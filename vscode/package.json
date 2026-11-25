@@ -20,6 +20,23 @@
       { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" }
     ],
+    "views": {
+      "explorer": [
+        { "id": "kephalaion.collections", "name": "Kephalaion" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "kephalaion.collections",
+        "when": "!kephalaion.signedIn",
+        "contents": "Keine gültige Anmeldung am Node — die Statusleiste nennt den Grund.\n[Status anzeigen](command:kephalaion.showStatus)\n[Neu verbinden](command:kephalaion.refresh)"
+      },
+      {
+        "view": "kephalaion.collections",
+        "when": "kephalaion.signedIn",
+        "contents": "Keine Collection im Baum.\n[Status anzeigen](command:kephalaion.showStatus)"
+      }
+    ],
     "mcpServerDefinitionProviders": [
       { "id": "kephalaion.node", "label": "Kephalaion" }
     ],
@@ -44,6 +61,11 @@
           "additionalProperties": { "type": "string" },
           "scope": "machine-overridable",
           "markdownDescription": "Account je Hub als Überschreibung, etwa `{\"home\": \"kamran-desktop\"}` — sie geht vor dem Standard-Account des Hubs (`kephalaion node account default`, gilt für alle Clients dieses Rechners) und der einzigen Token-Datei unter `~/.config/kephalaion/tokens/<hub>/`. Nennt sie einen Account ohne Token-Datei, bleibt der Hub ohne Account (kein Rückfall). Gesetzt über „Kephalaion: Account wählen“; gilt für diesen Rechner und wird nicht synchronisiert."
+        },
+        "kephalaion.collections": {
+          "type": "array",
+          "items": { "type": "string" },
+          "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Ungesetzt: alle lesbaren Collections der genutzten Hubs. Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis."
         },
         "kephalaion.mcpServer.enabled": {
           "type": "boolean",

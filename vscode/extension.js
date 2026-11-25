@@ -1316,6 +1316,206 @@ class KephFs {
   }
 }
 
+// --- Der collection tree: Collections als Baum im Explorer (Task 043; docs/vscode.md, „Baumansicht“) ---
+// Liest und schreibt nur über KephFs, mit denselben keph://-URIs wie ein Workspace-Ordner.
+
+const VIEW_ID = 'kephalaion.collections';
+
+// Der Wert von kephalaion.collections, oder undefined, wenn er auf keiner Ebene gesetzt ist
+// (Festlegung 3): Die Vorgabe zählt nicht, darum inspect statt get.
+function collectionsSetting() {
+  const i = vscode.workspace.getConfiguration('kephalaion').inspect('collections');
+  if (!i) return undefined;
+  for (const k of ['workspaceFolderValue', 'workspaceValue', 'globalValue']) if (i[k] !== undefined) return i[k];
+  return undefined;
+}
+
+// Die lesbaren Collections der genutzten Hubs aus dem letzten whoami.
+function readableCollections(status) {
+  return status.hubs().flatMap((h) => status.collections(h.hub).map((c) => ({
+    address: c.address, hub: h.hub, collection: c.collection, rights: c.rights || [],
+  })));
+}
+
+// Gibt es eine gültige Anmeldung an einem Hub? Für viewsWelcome.
+function signedIn(status) {
+  return Boolean(status.who && !status.who.hidden && status.hubs().some((h) => h.login === 'ok'));
+}
+
+// Ein Element des Baums: kind collection, directory oder document; dazu hub, collection, name
+// (Pfad in der Collection, leer für die Collection) und uri. Je URI gibt es genau ein Objekt:
+// VS Code erkennt ein Element für refresh und reveal an seiner Identität.
+class CollectionTree {
+  constructor(kfs, status, log) {
+    this.kfs = kfs;
+    this.status = status;
+    this.log = log;
+    this.nodes = new Map();
+    this.shape = '';
+    this.pending = undefined;
+    this._changed = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._changed.event;
+    kfs.onDidChangeFile((events) => this.filesChanged(events));
+    status.onChanged(() => this.reshape(false));
+  }
+
+  // Die gezeigten Collections nach Einstellung und whoami (rules.shownCollections).
+  shown() {
+    return rules.shownCollections(collectionsSetting(), readableCollections(this.status));
+  }
+
+  // Der Eintrag einer gezeigten Collection, undefined, wenn sie nicht gezeigt ist.
+  info(hub, collection) {
+    return this.shown().find((c) => c.hub === hub && c.collection === collection);
+  }
+
+  node(hub, collection, name, kind) {
+    const uri = docUri(hub, collection, name);
+    const key = uri.toString();
+    let n = this.nodes.get(key);
+    if (!n) {
+      n = { uri, hub, collection, name, kind };
+      this.nodes.set(key, n);
+    }
+    n.kind = kind;
+    return n;
+  }
+
+  // Das Element einer keph://-URI, wenn der Baum es kennt.
+  known(uri) {
+    return this.nodes.get(uri.toString());
+  }
+
+  // Das Element einer keph://-URI für reveal und die Befehle: die Collection, sonst ein Dokument
+  // oder Verzeichnis nach kind.
+  nodeFor(uri, kind) {
+    const { hub, col, name } = this.kfs.split(uri);
+    if (!col) return undefined;
+    return this.node(hub, col, name, name ? kind : 'collection');
+  }
+
+  // Alles neu: nach anderer Anmeldung, anderer Einstellung, einer Hub-URI. force auch ohne
+  // geänderte Form (Befehl „Aktualisieren“).
+  reshape(force) {
+    const shape = JSON.stringify([signedIn(this.status), this.shown()]);
+    vscode.commands.executeCommand('setContext', 'kephalaion.signedIn', signedIn(this.status));
+    if (!force && shape === this.shape) return;
+    this.shape = shape;
+    this.pending = undefined;
+    this._changed.fire(undefined);
+  }
+
+  // Ereignisse des Providers: Angelegt oder gelöscht lädt das Verzeichnis darüber neu; geändert
+  // nur, wenn der Baum den Namen noch nicht kennt (ein Dokument, das ein anderer angelegt hat —
+  // changes unterscheidet das nicht). Eine Hub-URI lädt alles neu. Gebündelt: ein Neuladen je
+  // Runde, und ein Verzeichnis nicht, wenn eines darüber ohnehin neu geladen wird.
+  filesChanged(events) {
+    let all = false;
+    const targets = new Map();
+    for (const e of events || []) {
+      if (!e.uri || e.uri.scheme !== SCHEME) continue;
+      const { hub, col, name } = this.kfs.split(e.uri);
+      if (!col) {
+        all = true;
+        continue;
+      }
+      if (e.type === vscode.FileChangeType.Changed && this.known(e.uri)) continue;
+      if (!name) continue;
+      if (e.type === vscode.FileChangeType.Deleted) this.forget(e.uri);
+      const p = this.known(docUri(hub, col, parentOf(name)));
+      if (p) targets.set(p.uri.toString(), p);
+    }
+    if (all) {
+      this.reshape(true);
+      return;
+    }
+    if (!targets.size) return;
+    if (!this.pending) {
+      this.pending = new Map();
+      setTimeout(() => this.flush(), 0);
+    }
+    for (const [k, n] of targets) this.pending.set(k, n);
+  }
+
+  // Ein gelöschter Name und alles darunter: Der Baum kennt ihn nicht mehr, damit ein späteres
+  // Anlegen unter demselben Namen (geändert gemeldet) das Verzeichnis neu lädt.
+  forget(uri) {
+    const key = uri.toString();
+    for (const k of [...this.nodes.keys()]) if (k === key || k.startsWith(`${key}/`)) this.nodes.delete(k);
+  }
+
+  flush() {
+    const pending = this.pending;
+    this.pending = undefined;
+    if (!pending || !pending.size) return;
+    const list = [...pending.values()];
+    const under = (n, a) => n !== a && n.hub === a.hub && n.collection === a.collection && (!a.name || n.name.startsWith(`${a.name}/`));
+    const top = list.filter((n) => !list.some((a) => under(n, a)));
+    this._changed.fire(top.length === 1 ? top[0] : top);
+  }
+
+  getTreeItem(n) {
+    const c = this.info(n.hub, n.collection);
+    const writable = Boolean(c && c.writable);
+    let item;
+    if (n.kind === 'collection') {
+      const readable = Boolean(c && c.readable);
+      item = new vscode.TreeItem(c ? c.address : `${n.hub}:${n.collection}`,
+        readable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon(readable ? 'database' : 'warning');
+      if (!readable) {
+        item.description = 'nicht lesbar';
+        item.tooltip = `${item.label}: whoami meldet diese Collection nicht als lesbar — Anmeldung, Recht oder Schreibweise `
+          + 'in kephalaion.collections prüfen';
+        item.contextValue = 'collection-unreadable';
+      } else {
+        if (!writable) item.description = 'nur lesen';
+        item.contextValue = `collection-${writable ? 'writable' : 'readonly'}`;
+      }
+    } else {
+      item = new vscode.TreeItem(n.uri, n.kind === 'directory'
+        ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      item.contextValue = `${n.kind}-${writable ? 'writable' : 'readonly'}`;
+      if (n.kind === 'document') item.command = { command: 'vscode.open', title: 'Öffnen', arguments: [n.uri] };
+    }
+    item.id = n.uri.toString();
+    item.resourceUri = n.uri;
+    return item;
+  }
+
+  async getChildren(n) {
+    if (!n) {
+      const shown = this.shown();
+      this.shape = JSON.stringify([signedIn(this.status), shown]);
+      return shown.map((c) => this.node(c.hub, c.collection, '', 'collection'));
+    }
+    if (n.kind === 'document') return [];
+    if (n.kind === 'collection') {
+      const c = this.info(n.hub, n.collection);
+      if (!c || !c.readable) return [];
+    }
+    let entries;
+    try {
+      entries = await this.kfs.readDirectory(n.uri);
+    } catch (e) {
+      this.log(`Baum: ${n.hub}:${n.collection} ${n.name || '/'} nicht lesbar: ${e.message}`);
+      vscode.window.showErrorMessage(e.message.startsWith('Kephalaion') ? e.message : `Kephalaion: ${e.message}`);
+      return [];
+    }
+    const dirs = entries.filter(([, t]) => t === vscode.FileType.Directory).map(([x]) => x).sort();
+    const docs = entries.filter(([, t]) => t !== vscode.FileType.Directory).map(([x]) => x).sort();
+    const pre = n.name ? `${n.name}/` : '';
+    return [...dirs.map((d) => this.node(n.hub, n.collection, pre + d, 'directory')),
+      ...docs.map((d) => this.node(n.hub, n.collection, pre + d, 'document'))];
+  }
+
+  getParent(n) {
+    if (!n || n.kind === 'collection') return undefined;
+    const p = parentOf(n.name);
+    return this.node(n.hub, n.collection, p, p ? 'directory' : 'collection');
+  }
+}
+
 // --- Aktivierung ---
 
 let ext;
@@ -1365,6 +1565,33 @@ function activate(context) {
   const node = new Node(log, () => status && status.render());
   status = new Status(node, log);
   const kfs = new KephFs(node, status, log);
+  const tree = new CollectionTree(kfs, status, log);
+  const view = vscode.window.createTreeView(VIEW_ID, {
+    treeDataProvider: tree,
+    showCollapseAll: true,
+    canSelectMany: true,
+  });
+  // Das aktive keph://-Dokument im Baum zeigen, ohne den Fokus zu nehmen — nur, wenn der Baum
+  // sichtbar ist und die Collection zeigt.
+  const revealActive = () => {
+    const ed = vscode.window.activeTextEditor;
+    if (!view.visible || !ed || !ed.document || !ed.document.uri || ed.document.uri.scheme !== SCHEME) return;
+    const n = tree.nodeFor(ed.document.uri, 'document');
+    if (!n || !tree.info(n.hub, n.collection)) return;
+    Promise.resolve(view.reveal(n, { select: true, focus: false, expand: false })).catch((e) => {
+      log(`Baum: ${ed.document.uri.toString()} nicht gezeigt: ${e.message}`);
+    });
+  };
+
+  context.subscriptions.push(
+    view,
+    tree._changed,
+    vscode.window.onDidChangeActiveTextEditor(revealActive),
+    view.onDidChangeVisibility(revealActive),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('kephalaion.collections')) tree.reshape(true);
+    }),
+  );
 
   context.subscriptions.push(
     out,

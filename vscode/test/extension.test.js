@@ -50,7 +50,19 @@ const terminalUpdates = [];
 const terminalValues = new Map();
 const terminals = [];
 let terminalWriteError;
-let workspaceChanged;
+// Die Zuhörer der Ereignisse von workspace; workspaceChanged löst das Ordnerereignis aus und
+// wartet auf alle Zuhörer, configChanged das Ereignis einer geänderten Einstellung.
+const folderListeners = [];
+const configListeners = [];
+const workspaceChanged = (e = { added: [], removed: [] }) => Promise.all(folderListeners.map((fn) => fn(e)));
+const configChanged = (...keys) => Promise.all(configListeners.map((fn) => fn({ affectsConfiguration: (k) => keys.includes(k) })));
+// Die Spuren des Baums (Task 043): die View, Meldungen, Befehle, geschriebene Einstellungen.
+let treeView;
+const shownErrors = [];
+const shownInfos = [];
+const executed = [];
+const settingUpdates = [];
+const editorListeners = [];
 
 class Disposable {
   constructor(fn) {
@@ -63,6 +75,94 @@ class Disposable {
 }
 
 const noop = () => new Disposable();
+
+// Ein Zuhörer in list, abmeldbar.
+function listen(list, fn) {
+  list.push(fn);
+  return new Disposable(() => {
+    const i = list.indexOf(fn);
+    if (i >= 0) list.splice(i, 1);
+  });
+}
+
+// Uri wie in VS Code, soweit die Erweiterung sie braucht: Teile, toString, with, joinPath.
+class Uri {
+  constructor({ scheme = 'file', authority = '', path: p = '', query = '', fragment = '' }) {
+    Object.assign(this, { scheme, authority, path: p, query, fragment });
+  }
+
+  static from(o) {
+    return new Uri(o);
+  }
+
+  static parse(s) {
+    const m = /^([a-zA-Z][\w+.-]*):\/\/([^/]*)(.*)$/.exec(s);
+    const u = m ? new Uri({ scheme: m[1], authority: m[2], path: m[3] || '/' }) : new Uri({ path: s });
+    u.s = s;
+    return u;
+  }
+
+  static file(p) {
+    return new Uri({ scheme: 'file', path: p });
+  }
+
+  static joinPath(u, ...parts) {
+    return u.with({ path: path.posix.join(u.path, ...parts) });
+  }
+
+  get fsPath() {
+    return this.path;
+  }
+
+  with(change) {
+    return new Uri({ ...this, ...change });
+  }
+
+  toString() {
+    return `${this.scheme}://${this.authority}${this.path}`;
+  }
+}
+
+// workspace.fs wie in VS Code: keph:// an den gemeldeten Provider, file:// auf die Platte.
+const onDisk = (u) => u.scheme === 'file';
+const diskFs = {
+  stat: async (u) => {
+    let st;
+    try {
+      st = fs.statSync(u.path);
+    } catch {
+      throw FileSystemError.FileNotFound(u.toString());
+    }
+    return { type: st.isDirectory() ? 2 : 1, ctime: 0, mtime: st.mtimeMs, size: st.size };
+  },
+  readDirectory: async (u) => fs.readdirSync(u.path, { withFileTypes: true }).map((d) => [d.name, d.isDirectory() ? 2 : 1]),
+  readFile: async (u) => new Uint8Array(fs.readFileSync(u.path)),
+  writeFile: async (u, c) => {
+    fs.mkdirSync(path.dirname(u.path), { recursive: true });
+    fs.writeFileSync(u.path, c);
+  },
+  createDirectory: async (u) => fs.mkdirSync(u.path, { recursive: true }),
+};
+const workspaceFs = {
+  stat: (u) => (onDisk(u) ? diskFs.stat(u) : fsProvider.stat(u)),
+  readDirectory: (u) => (onDisk(u) ? diskFs.readDirectory(u) : fsProvider.readDirectory(u)),
+  readFile: (u) => (onDisk(u) ? diskFs.readFile(u) : fsProvider.readFile(u)),
+  writeFile: (u, c) => (onDisk(u) ? diskFs.writeFile(u, c) : fsProvider.writeFile(u, c, { create: true, overwrite: true })),
+  createDirectory: (u) => (onDisk(u) ? diskFs.createDirectory(u) : fsProvider.createDirectory(u)),
+  delete: (u, o) => fsProvider.delete(u, { recursive: Boolean(o && o.recursive) }),
+  rename: (a, b, o) => fsProvider.rename(a, b, { overwrite: Boolean(o && o.overwrite) }),
+};
+
+// Einstellungen der Erweiterung: get aus settings, inspect als globaler Wert, update schreibt
+// settings und merkt sich Schlüssel, Wert und Ebene.
+const kephConfig = {
+  get: (k, d) => (k in settings && settings[k] !== undefined ? settings[k] : d),
+  inspect: (k) => ({ key: `kephalaion.${k}`, globalValue: settings[k] }),
+  update: async (k, v, target) => {
+    settingUpdates.push({ key: k, value: v, target });
+    settings[k] = v;
+  },
+};
 
 // FileSystemError wie in VS Code: ein Fehler mit code.
 class FileSystemError extends Error {
@@ -84,18 +184,20 @@ const vscode = {
         terminalUpdates.push({ key, value, target });
         terminalValues.set(undefined, { workspaceValue: value });
       },
-    } : { get: (k, d) => (k in settings ? settings[k] : d), update: async () => {} },
-    onDidChangeWorkspaceFolders: (fn) => {
-      workspaceChanged = fn;
-      return new Disposable(() => { workspaceChanged = undefined; });
-    },
+    } : kephConfig,
+    onDidChangeWorkspaceFolders: (fn) => listen(folderListeners, fn),
     registerFileSystemProvider: (scheme, p) => {
       fsProvider = p;
       return new Disposable();
     },
-    onDidChangeConfiguration: noop,
+    onDidChangeConfiguration: (fn) => listen(configListeners, fn),
     workspaceFolders: [],
     updateWorkspaceFolders: () => {},
+    fs: workspaceFs,
+    openTextDocument: async (u) => {
+      const text = new TextDecoder().decode(await workspaceFs.readFile(u));
+      return { uri: u, getText: () => text };
+    },
   },
   window: {
     createOutputChannel: () => ({ appendLine: (l) => logs.push(l), show: () => {}, dispose: () => {} }),
@@ -109,14 +211,35 @@ const vscode = {
       return terminal;
     },
     showWarningMessage: () => {},
+    showErrorMessage: (m) => shownErrors.push(m),
+    showInformationMessage: (m) => shownInfos.push(m),
     showQuickPick: async () => undefined,
+    createTreeView: (id, options) => {
+      const visibility = [];
+      treeView = {
+        id,
+        options,
+        provider: options.treeDataProvider,
+        visible: true,
+        revealed: [],
+        selection: [],
+        reveal: async (el, o) => treeView.revealed.push({ el, o }),
+        onDidChangeVisibility: (fn) => listen(visibility, fn),
+        dispose: () => {},
+      };
+      return treeView;
+    },
+    activeTextEditor: undefined,
+    onDidChangeActiveTextEditor: (fn) => listen(editorListeners, fn),
   },
   commands: {
     registerCommand: (id, fn) => {
       registered[id] = fn;
       return new Disposable();
     },
-    executeCommand: () => {},
+    executeCommand: async (...args) => {
+      executed.push(args);
+    },
   },
   lm: {
     registerMcpServerDefinitionProvider: (id, p) => {
@@ -128,12 +251,30 @@ const vscode = {
   LogLevel: { Trace: 1 },
   EventEmitter: class {
     constructor() {
-      this.event = noop;
+      this.listeners = [];
+      this.event = (fn) => listen(this.listeners, fn);
     }
 
-    fire() {}
+    fire(v) {
+      for (const fn of [...this.listeners]) fn(v);
+    }
 
-    dispose() {}
+    dispose() {
+      this.listeners = [];
+    }
+  },
+  TreeItem: class {
+    constructor(labelOrUri, collapsibleState) {
+      if (typeof labelOrUri === 'string') this.label = labelOrUri;
+      else this.resourceUri = labelOrUri;
+      this.collapsibleState = collapsibleState;
+    }
+  },
+  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+  ThemeIcon: class {
+    constructor(id) {
+      this.id = id;
+    }
   },
   Disposable,
   ThemeColor: class {},
@@ -153,7 +294,7 @@ const vscode = {
   FileSystemError,
   QuickPickItemKind: { Separator: -1 },
   ConfigurationTarget: { Global: 1, Workspace: 2 },
-  Uri: { parse: (s) => ({ toString: () => s, s }), from: (o) => o },
+  Uri,
   McpHttpServerDefinition: class {
     constructor(label, uri, headers, version) {
       Object.assign(this, { label, uri, headers, version });
@@ -189,8 +330,8 @@ function validNode(params, headers) {
 const calls = [];
 let reply = null;
 globalThis.fetch = async (url, opts) => {
-  calls.push({ url, headers: opts.headers, redirect: opts.redirect });
   const { params } = JSON.parse(opts.body);
+  calls.push({ url, headers: opts.headers, redirect: opts.redirect, params });
   const r = reply && reply(params, opts.headers);
   if (r instanceof Response) return r;
   const result = r || validNode(params, opts.headers);
@@ -220,6 +361,11 @@ const settle = () => new Promise((r) => setTimeout(r, 50));
 test.afterEach(() => {
   stop();
   vscode.workspace.workspaceFolders = [];
+  vscode.window.activeTextEditor = undefined;
+  shownErrors.length = 0;
+  shownInfos.length = 0;
+  executed.length = 0;
+  settingUpdates.length = 0;
   terminalValues.clear();
   terminalUpdates.length = 0;
   terminals.length = 0;
@@ -1101,4 +1247,252 @@ test('MCP-Server: Standard geändert — neu gemeldet', async () => {
   provider.check();
   assert.strictEqual(changed(), 3, logs.join('\n'));
   assert.ok(!logs.join('\n').includes(TOKEN_A) && !logs.join('\n').includes(TOKEN_B), 'Token im Log');
+});
+
+// --- Der collection tree (Task 043; docs/vscode.md, „Baumansicht“) ---
+
+// Ein Node im Speicher: Collections mit Rechten und Dokumenten ({ 'vm:omni': { rights, docs:
+// { name: text } } }), dazu list (auch recursive, in Seiten zu pageSize), read, create, write,
+// rename, delete, changes (aus node.changes) und search (aus node.searchResults).
+function memNode(collections, { pageSize = 1000 } = {}) {
+  let rev = 10;
+  const store = {};
+  for (const [address, c] of Object.entries(collections)) {
+    store[address] = { rights: c.rights, docs: new Map() };
+    for (const [n, t] of Object.entries(c.docs || {})) store[address].docs.set(n, { id: `id${++rev}`, revision: rev, content: t });
+  }
+  const ok = (sc) => ({ content: [{ type: 'text', text: '' }], structuredContent: sc });
+  const fail = (code, text) => ({ isError: true, content: [{ type: 'text', text }], structuredContent: { error: { code, message: text } } });
+  const under = (n, dir) => !dir || n.startsWith(`${dir}/`);
+  const isDir = (col, n) => [...col.docs.keys()].some((d) => d.startsWith(`${n}/`));
+  const fn = (params) => {
+    const a = params.arguments || {};
+    const col = store[a.collection];
+    const doc = col && col.docs.get(a.name);
+    const writable = Boolean(col && col.rights.includes('write'));
+    const docOut = (name, d) => ({ kind: 'document', address: a.collection, name, id: d.id, revision: d.revision, size: d.content.length, writable });
+    switch (params.name) {
+      case 'whoami': {
+        const hubs = {};
+        for (const [address, c] of Object.entries(store)) {
+          const [hub, collection] = address.split(':');
+          hubs[hub] = hubs[hub] || { hub, login: 'ok', node: 'n', account: 'kamran', user: 'u', sync: { revision: 1 }, collections: [] };
+          hubs[hub].collections.push({ address, collection, rights: c.rights });
+        }
+        return ok({ version: 'dev', hubs: Object.values(hubs), unknown_hubs: [] });
+      }
+      case 'changes':
+        return ok({ cursor: `c${rev}`, changes: fn.changes.splice(0), more: false });
+      case 'list': {
+        if (!col) return fail('not_readable', `${a.collection} nicht lesbar`);
+        const dir = a.path || '';
+        let entries;
+        const docs = [...col.docs.keys()].filter((n) => under(n, dir)).sort();
+        if (a.recursive) {
+          entries = docs.map((n) => ({ kind: 'document', name: n, id: col.docs.get(n).id, revision: col.docs.get(n).revision }));
+        } else {
+          const pre = dir ? `${dir}/` : '';
+          const dirs = [...new Set(docs.map((n) => n.slice(pre.length)).filter((r) => r.includes('/')).map((r) => r.split('/')[0]))];
+          entries = [...dirs.map((d) => ({ kind: 'directory', name: pre + d })),
+            ...docs.filter((n) => !n.slice(pre.length).includes('/'))
+              .map((n) => ({ kind: 'document', name: n, id: col.docs.get(n).id, revision: col.docs.get(n).revision }))];
+        }
+        const start = a.cursor ? Number(a.cursor) : 0;
+        const more = start + pageSize < entries.length;
+        return ok({ entries: entries.slice(start, start + pageSize), more, cursor: more ? String(start + pageSize) : undefined });
+      }
+      case 'read':
+        if (!col) return fail('not_readable', `${a.collection} nicht lesbar`);
+        if (doc) return ok({ ...docOut(a.name, doc), ...(a.content === false ? {} : { content: doc.content }) });
+        if (!a.name || isDir(col, a.name)) return ok({ kind: 'directory', address: a.collection, name: a.name, writable });
+        return ok({ kind: 'none', address: a.collection, name: a.name, writable });
+      case 'create':
+        if (!writable) return fail('forbidden', 'ohne Recht write');
+        if (doc || isDir(col, a.name)) return fail('name_taken', `${a.name} ist belegt`);
+        col.docs.set(a.name, { id: `id${++rev}`, revision: rev, content: a.content });
+        return ok(docOut(a.name, col.docs.get(a.name)));
+      case 'write':
+        if (!doc) return fail('not_found', `${a.name} fehlt`);
+        Object.assign(doc, { revision: ++rev, content: a.content });
+        return ok(docOut(a.name, doc));
+      case 'rename': {
+        if (col.docs.has(a.new_name) || isDir(col, a.new_name)) return fail('name_taken', `${a.new_name} ist belegt`);
+        if (doc) {
+          col.docs.delete(a.name);
+          doc.revision = ++rev;
+          col.docs.set(a.new_name, doc);
+          return ok(docOut(a.new_name, doc));
+        }
+        const moved = [...col.docs.keys()].filter((n) => n.startsWith(`${a.name}/`));
+        ++rev;
+        for (const n of moved) {
+          const d = col.docs.get(n);
+          col.docs.delete(n);
+          col.docs.set(a.new_name + n.slice(a.name.length), d);
+        }
+        return ok({ kind: 'directory', address: a.collection, name: a.new_name, revision: rev, count: moved.length });
+      }
+      case 'delete': {
+        if (doc) {
+          col.docs.delete(a.name);
+          return ok({ ...docOut(a.name, doc), revision: ++rev });
+        }
+        if (!a.recursive) return fail('invalid', `${a.name} ist ein Verzeichnis`);
+        const gone = [...col.docs.keys()].filter((n) => n.startsWith(`${a.name}/`));
+        for (const n of gone) col.docs.delete(n);
+        return ok({ kind: 'directory', address: a.collection, name: a.name, revision: ++rev, count: gone.length });
+      }
+      case 'search':
+        return ok({ results: fn.searchResults });
+      default:
+        return null;
+    }
+  };
+  fn.store = store;
+  fn.changes = [];
+  fn.searchResults = [];
+  return fn;
+}
+
+const OMNI = { rights: ['read', 'write'], docs: { 'README.md': '# Omni\n', 'docs/a.md': '# A\n', 'docs/sub/b.md': '# B\n' } };
+const WISSEN = { rights: ['read'], docs: { 'x.md': 'x' } };
+
+// Die Erweiterung mit einem Node im Speicher; settings.collections wie übergeben (undefined:
+// ungesetzt).
+async function treeStart(collections, collectionsSetting) {
+  resetTokens();
+  putToken('vm', 'kamran', TOKEN_A);
+  putToken('home', 'kamran', TOKEN_B);
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {}, collections: collectionsSetting });
+  const node = memNode(collections);
+  reply = node;
+  start();
+  await settle();
+  return node;
+}
+
+const tp = () => treeView.provider;
+const label = (n) => {
+  const it = tp().getTreeItem(n);
+  return it.label || it.resourceUri.path.split('/').pop();
+};
+// Die Elemente unter n, als Liste ihrer Namen.
+const childNames = async (n) => (await tp().getChildren(n)).map(label);
+// Ein Element des Baums nach seinem Pfad unter der Collection address.
+async function nodeAt(address, name = '') {
+  const roots = await tp().getChildren();
+  let n = roots.find((r) => tp().getTreeItem(r).label === address);
+  for (const part of name.split('/').filter(Boolean)) n = (await tp().getChildren(n)).find((c) => label(c) === part);
+  return n;
+}
+// Was onDidChangeTreeData meldet, als Liste (undefined: alles).
+function treeEvents() {
+  const seen = [];
+  tp().onDidChangeTreeData((e) => seen.push(e));
+  return seen;
+}
+
+test('Baum: Wurzel ungesetzt alle lesbaren, gesetzt genau diese mit Hinweis', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'home:notizen': { rights: ['read', 'write'] } });
+    assert.strictEqual(treeView.id, 'kephalaion.collections');
+    const roots = await tp().getChildren();
+    assert.deepStrictEqual(roots.map((r) => tp().getTreeItem(r).label), ['vm:omni', 'vm:wissen', 'home:notizen']);
+    const items = roots.map((r) => tp().getTreeItem(r));
+    assert.deepStrictEqual(items.map((i) => [i.description, i.contextValue, i.collapsibleState]),
+      [[undefined, 'collection-writable', 1], ['nur lesen', 'collection-readonly', 1], [undefined, 'collection-writable', 1]]);
+    assert.strictEqual(items[0].id, 'keph://vm/omni');
+    assert.strictEqual(items[0].resourceUri.toString(), 'keph://vm/omni');
+    assert.ok(executed.some((c) => c[0] === 'setContext' && c[1] === 'kephalaion.signedIn' && c[2] === true));
+
+    // Gesetzt: genau diese, in dieser Reihenfolge; die nicht lesbare mit Hinweis, ohne Kinder.
+    const events = treeEvents();
+    settings.collections = ['vm:wissen', 'vm:fremd'];
+    await configChanged('kephalaion.collections');
+    assert.deepStrictEqual(events, [undefined], 'die Einstellung lädt den ganzen Baum neu');
+    const set = await tp().getChildren();
+    assert.deepStrictEqual(set.map((r) => tp().getTreeItem(r).label), ['vm:wissen', 'vm:fremd']);
+    const fremd = tp().getTreeItem(set[1]);
+    assert.deepStrictEqual([fremd.description, fremd.contextValue, fremd.collapsibleState], ['nicht lesbar', 'collection-unreadable', 0]);
+    assert.deepStrictEqual(await tp().getChildren(set[1]), []);
+    settings.collections = [];
+    assert.deepStrictEqual(await tp().getChildren(), [], 'leer gesetzt: kein Knoten (viewsWelcome)');
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Baum: Kinder aus list, Verzeichnisse zuerst; ein Klick öffnet das Dokument', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI });
+    const omni = await nodeAt('vm:omni');
+    assert.deepStrictEqual(await childNames(omni), ['docs', 'README.md']);
+    const docs = await nodeAt('vm:omni', 'docs');
+    assert.deepStrictEqual(await childNames(docs), ['sub', 'a.md']);
+    const listed = calls.filter((c) => c.params.name === 'list').map((c) => c.params.arguments);
+    assert.deepStrictEqual(listed.slice(-1), [{ collection: 'vm:omni', path: 'docs', limit: 1000 }]);
+    const a = await nodeAt('vm:omni', 'docs/a.md');
+    const item = tp().getTreeItem(a);
+    assert.strictEqual(item.id, 'keph://vm/omni/docs/a.md');
+    assert.strictEqual(item.contextValue, 'document-writable');
+    assert.strictEqual(item.collapsibleState, 0);
+    assert.strictEqual(item.command.command, 'vscode.open');
+    assert.strictEqual(item.command.arguments[0].toString(), 'keph://vm/omni/docs/a.md');
+    assert.strictEqual(tp().getTreeItem(docs).contextValue, 'directory-writable');
+    // Dasselbe Element je URI, und getParent führt zurück bis zur Collection.
+    assert.strictEqual(await nodeAt('vm:omni', 'docs/a.md'), a);
+    assert.strictEqual(tp().getParent(a), docs);
+    assert.strictEqual(tp().getParent(docs), omni);
+    assert.strictEqual(tp().getParent(omni), undefined);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Baum: Änderung aus changes lädt das Verzeichnis darüber neu, gebündelt', async () => {
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI });
+    const docs = await nodeAt('vm:omni', 'docs');
+    await nodeAt('vm:omni', 'docs/sub');
+    await fsProvider.pollChanges(); // Ausgangspunkt
+    const events = treeEvents();
+    // Ein anderer legt zwei Dokumente an und ändert eines, das der Baum kennt.
+    node.store['vm:omni'].docs.set('docs/neu.md', { id: 'idn', revision: 50, content: '' });
+    node.changes.push({ address: 'vm:omni', name: 'docs/neu.md', id: 'idn', revision: 50 },
+      { address: 'vm:omni', name: 'docs/sub/c.md', id: 'idc', revision: 51 },
+      { address: 'vm:omni', name: 'docs/a.md', id: 'ida', revision: 52 });
+    await fsProvider.pollChanges();
+    await settle();
+    assert.deepStrictEqual(events, [docs], 'genau einmal, nur docs (sub liegt darunter)');
+    assert.deepStrictEqual(await childNames(docs), ['sub', 'a.md', 'neu.md']);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Baum: das aktive keph://-Dokument wird gezeigt, ohne Fokus', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN }, ['vm:omni']);
+    const uri = Uri.parse('keph://vm/omni/docs/sub/b.md');
+    vscode.window.activeTextEditor = { document: { uri } };
+    for (const fn of editorListeners) fn(vscode.window.activeTextEditor);
+    assert.strictEqual(treeView.revealed.length, 1);
+    const { el, o } = treeView.revealed[0];
+    assert.strictEqual(el.uri.toString(), 'keph://vm/omni/docs/sub/b.md');
+    assert.deepStrictEqual(o, { select: true, focus: false, expand: false });
+    assert.strictEqual(tp().getParent(tp().getParent(el)).name, 'docs');
+    // Nicht gezeigt: nicht sichtbar, fremde Collection, anderes Schema.
+    treeView.visible = false;
+    for (const fn of editorListeners) fn(vscode.window.activeTextEditor);
+    treeView.visible = true;
+    vscode.window.activeTextEditor = { document: { uri: Uri.parse('keph://vm/wissen/x.md') } };
+    for (const fn of editorListeners) fn(vscode.window.activeTextEditor);
+    vscode.window.activeTextEditor = { document: { uri: Uri.parse('file:///p/x.md') } };
+    for (const fn of editorListeners) fn(vscode.window.activeTextEditor);
+    assert.strictEqual(treeView.revealed.length, 1);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
 });
