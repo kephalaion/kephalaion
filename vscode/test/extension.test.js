@@ -65,6 +65,29 @@ const settingUpdates = [];
 const editorListeners = [];
 const clipboard = [];
 const shownDocuments = [];
+// Der Speicher des Workspace (context.workspaceState), über einen Neustart der Erweiterung hinweg.
+const workspaceStore = new Map();
+// updateWorkspaceFolders wie VS Code: ändert die Liste, das Ereignis kommt danach; ein Aufruf
+// vor dem Ereignis des vorigen wird abgelehnt (und gezählt).
+const folderUpdates = [];
+let folderEventPending = false;
+let folderOverlaps = 0;
+function updateWorkspaceFolders(start, deleteCount, ...add) {
+  if (folderEventPending) {
+    folderOverlaps++;
+    return false;
+  }
+  folderUpdates.push([start, deleteCount, ...add.map((a) => `${a.uri.toString()} ${a.name}`)]);
+  const list = vscode.workspace.workspaceFolders;
+  list.splice(start, deleteCount, ...add.map((a) => ({ uri: a.uri, name: a.name })));
+  list.forEach((f, i) => { f.index = i; });
+  folderEventPending = true;
+  setTimeout(() => {
+    folderEventPending = false;
+    workspaceChanged();
+  }, 5);
+  return true;
+}
 
 class Disposable {
   constructor(fn) {
@@ -194,7 +217,7 @@ const vscode = {
     },
     onDidChangeConfiguration: (fn) => listen(configListeners, fn),
     workspaceFolders: [],
-    updateWorkspaceFolders: () => {},
+    updateWorkspaceFolders,
     fs: workspaceFs,
     openTextDocument: async (u) => {
       const text = new TextDecoder().decode(await workspaceFs.readFile(u));
@@ -380,7 +403,14 @@ const ext = require('../extension');
 function start() {
   calls.length = 0;
   fs.rmSync(path.dirname(pauseFile), { recursive: true, force: true });
-  const context = { subscriptions: [], extension: { packageJSON: { version: 'test' } } };
+  const context = {
+    subscriptions: [],
+    extension: { packageJSON: { version: 'test' } },
+    workspaceState: {
+      get: (k) => workspaceStore.get(k),
+      update: async (k, v) => (v === undefined ? workspaceStore.delete(k) : workspaceStore.set(k, v)),
+    },
+  };
   ext.activate(context);
   disposables.push(...context.subscriptions);
 }
@@ -401,6 +431,9 @@ test.afterEach(() => {
   shownInfos.length = 0;
   executed.length = 0;
   settingUpdates.length = 0;
+  workspaceStore.clear();
+  folderUpdates.length = 0;
+  folderOverlaps = 0;
   terminalValues.clear();
   terminalUpdates.length = 0;
   terminals.length = 0;
@@ -1818,5 +1851,155 @@ test('Suchen: search des Nodes, nur gezeigte Collections, Treffer öffnet an der
   } finally {
     reply = null;
     settings.collections = undefined;
+  }
+});
+
+// --- Auswahl der Collections und der Schalter kephalaion.workspaceFolders (Etappe 6) ---
+
+const kfolder = (p, name = `Keph ${p}`) => ({ name, uri: Uri.parse(`keph://vm${p}`) });
+const pfolder = (name) => ({ name, uri: Uri.file(`/home/k/${name}`) });
+const folderUris = () => vscode.workspace.workspaceFolders.map((f) => f.uri.toString());
+// Wartet, bis die Warteschlange der Erweiterung leer ist (Ereignisse kommen nach 5 ms).
+const quiet = () => new Promise((r) => setTimeout(r, 120));
+
+test('Auswahl: zeigen und herausnehmen schreiben kephalaion.collections auf Workspace-Ebene, ungesetzt von den gezeigten aus', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [pfolder('projekt')];
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'home:notizen': { rights: ['read'] } });
+    // Ungesetzt zeigt der Baum alle: „zeigen“ hat nichts anzubieten.
+    await registered['kephalaion.showInTree']();
+    assert.match(shownInfos.pop(), /schon im Baum/);
+    assert.deepStrictEqual(settingUpdates, []);
+    // Herausnehmen aus dem Kontextmenü: das erste Mal die gezeigten minus diese.
+    await registered['kephalaion.hideFromTree'](await nodeAt('vm:wissen'));
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['vm:omni', 'home:notizen'], target: 2 });
+    // Zeigen: nur die nicht gezeigten, ans Ende.
+    let offered;
+    await withWindow({ showQuickPick: async (items) => { offered = items; return items[0]; } },
+      () => registered['kephalaion.showInTree']());
+    assert.deepStrictEqual(offered.map((i) => i.label), ['vm:wissen']);
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['vm:omni', 'home:notizen', 'vm:wissen'], target: 2 });
+    assert.ok(executed.some((c) => c[0] === 'kephalaion.collections.focus'));
+    // Ohne offenen Workspace: in die Einstellungen des Benutzers.
+    vscode.workspace.workspaceFolders = [];
+    await registered['kephalaion.hideFromTree'](await nodeAt('vm:omni'));
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['home:notizen', 'vm:wissen'], target: 1 });
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Schalter mit true (Vorgabe): keine Ordner angefasst, keine Einstellung geschrieben', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [pfolder('projekt'), kfolder('/omni')];
+    settings.workspaceFolders = undefined;
+    await treeStart({ 'vm:omni': OMNI });
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, []);
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections'), []);
+    assert.strictEqual(workspaceStore.size, 0);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Schalter false: nur keph://-Ordner heraus, Bereich für Bereich von hinten; true hängt genau diese wieder ein', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [pfolder('projekt'), kfolder('/omni'), kfolder('/wissen/docs'), pfolder('zwei'),
+      kfolder('/omni/sub'), pfolder('drei')];
+    settings.workspaceFolders = false;
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'vm:aus': { rights: ['read'] } }, ['vm:aus']);
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, [[4, 1], [1, 2]]);
+    assert.strictEqual(folderOverlaps, 0, 'ein Aufruf vor dem Ereignis des vorigen');
+    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt', 'file:///home/k/zwei', 'file:///home/k/drei']);
+    // Gesetzte Einstellung: die Collections der Ordner kommen dazu (Unterpfad abgeschnitten).
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections').map((u) => u.value),
+      [['vm:aus', 'vm:omni', 'vm:wissen']]);
+    assert.ok(logs.some((l) => l.includes('keph://vm/wissen/docs zeigt nur einen Teil — im Baum als ganze Collection vm:wissen')));
+    assert.deepStrictEqual(workspaceStore.get('kephalaion.removedFolders').map((r) => r.uri),
+      ['keph://vm/omni', 'keph://vm/wissen/docs', 'keph://vm/omni/sub']);
+
+    // Von außen kommt ein keph://-Ordner dazu: wieder heraus, und gemerkt.
+    vscode.workspace.workspaceFolders.push(kfolder('/neu'));
+    folderUpdates.length = 0;
+    await workspaceChanged();
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, [[3, 1]]);
+    assert.strictEqual(workspaceStore.get('kephalaion.removedFolders').length, 4);
+
+    // Zurück auf true: die gemerkten am Ende, in einem Aufruf; ein fremder Ordner bleibt außen vor.
+    folderUpdates.length = 0;
+    settings.workspaceFolders = true;
+    await configChanged('kephalaion.workspaceFolders');
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, [[3, 0, 'keph://vm/omni Keph /omni', 'keph://vm/wissen/docs Keph /wissen/docs',
+      'keph://vm/omni/sub Keph /omni/sub', 'keph://vm/neu Keph /neu']]);
+    assert.strictEqual(workspaceStore.has('kephalaion.removedFolders'), false);
+    // Noch einmal true: nichts mehr zu tun.
+    folderUpdates.length = 0;
+    await configChanged('kephalaion.workspaceFolders');
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, []);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+    settings.workspaceFolders = undefined;
+  }
+});
+
+test('Schalter false: Index 0, Neustart mitten im Herausnehmen, reiner Collection-Workspace bleibt', async () => {
+  try {
+    // Index 0: Die Erweiterung merkt sich die Ordner vorher — ein Neustart danach macht weiter.
+    vscode.workspace.workspaceFolders = [kfolder('/omni'), pfolder('projekt'), kfolder('/wissen')];
+    settings.workspaceFolders = false;
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN });
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, [[2, 1], [0, 1]]);
+    assert.ok(logs.some((l) => l.includes('Index 0: VS Code startet den Extension Host neu')));
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections'), [], 'ungesetzt bleibt ungesetzt');
+    // Neustart, als wäre der Ordner an Index 0 noch da (VS Code startete vor dem Ereignis neu):
+    // der Plan entsteht neu aus dem Ist-Zustand.
+    stop();
+    vscode.workspace.workspaceFolders.unshift(kfolder('/omni'));
+    folderUpdates.length = 0;
+    start();
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, [[0, 1]]);
+    assert.deepStrictEqual(workspaceStore.get('kephalaion.removedFolders').map((r) => r.uri), ['keph://vm/wissen', 'keph://vm/omni']);
+
+    // Nur Collections: nichts heraus, einmal ein Hinweis.
+    stop();
+    vscode.workspace.workspaceFolders = [kfolder('/omni'), kfolder('/wissen')];
+    folderUpdates.length = 0;
+    shownInfos.length = 0;
+    start();
+    await quiet();
+    await workspaceChanged();
+    await quiet();
+    assert.deepStrictEqual(folderUpdates, []);
+    assert.strictEqual(shownInfos.filter((m) => m.includes('nur aus Collections')).length, 1);
+    assert.ok(logs.some((l) => l.includes('besteht nur aus keph://-Ordnern — nichts herausgenommen')));
+  } finally {
+    reply = null;
+    settings.workspaceFolders = undefined;
+  }
+});
+
+test('Collection einbinden mit false: im Baum zeigen statt einen Ordner einzuhängen', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [pfolder('projekt')];
+    settings.workspaceFolders = false;
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN }, ['vm:omni']);
+    await withWindow({ showQuickPick: async (items) => items.find((i) => i.label === 'vm:wissen') },
+      () => registered['kephalaion.addCollection']());
+    assert.deepStrictEqual(folderUpdates, []);
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['vm:omni', 'vm:wissen'], target: 2 });
+    assert.ok(executed.some((c) => c[0] === 'kephalaion.collections.focus'));
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+    settings.workspaceFolders = undefined;
   }
 });

@@ -19,6 +19,8 @@
       { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
       { "command": "kephalaion.openDocument", "title": "Kephalaion: Dokument öffnen", "icon": "$(go-to-file)" },
       { "command": "kephalaion.search", "title": "Kephalaion: Suchen", "icon": "$(search)" },
+      { "command": "kephalaion.showInTree", "title": "Kephalaion: Collection im Baum zeigen", "icon": "$(add)" },
+      { "command": "kephalaion.hideFromTree", "title": "Kephalaion: Collection aus dem Baum nehmen" },
       { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" },
       { "command": "kephalaion.tree.newFile", "title": "Neue Datei…", "category": "Kephalaion", "icon": "$(new-file)" },
@@ -48,7 +50,9 @@
         { "command": "kephalaion.tree.newFolder", "when": "view == kephalaion.collections", "group": "navigation@2" },
         { "command": "kephalaion.openDocument", "when": "view == kephalaion.collections", "group": "navigation@3" },
         { "command": "kephalaion.search", "when": "view == kephalaion.collections", "group": "navigation@4" },
-        { "command": "kephalaion.tree.refresh", "when": "view == kephalaion.collections", "group": "navigation@9" }
+        { "command": "kephalaion.tree.refresh", "when": "view == kephalaion.collections", "group": "navigation@9" },
+        { "command": "kephalaion.showInTree", "when": "view == kephalaion.collections", "group": "1_collections@1" },
+        { "command": "kephalaion.hideFromTree", "when": "view == kephalaion.collections", "group": "1_collections@2" }
       ],
       "view/item/context": [
         { "command": "kephalaion.tree.openToSide", "when": "view == kephalaion.collections && viewItem =~ /^document-/", "group": "navigation@1" },
@@ -58,7 +62,8 @@
         { "command": "kephalaion.tree.copyRelativePath", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-/", "group": "6_copypath@2" },
         { "command": "kephalaion.tree.copyToProject", "when": "view == kephalaion.collections && viewItem =~ /^(collection|directory|document)-(writable|readonly)$/", "group": "6_copypath@3" },
         { "command": "kephalaion.tree.rename", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-writable$/", "group": "7_modification@1" },
-        { "command": "kephalaion.tree.delete", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-writable$/", "group": "7_modification@2" }
+        { "command": "kephalaion.tree.delete", "when": "view == kephalaion.collections && viewItem =~ /^(directory|document)-writable$/", "group": "7_modification@2" },
+        { "command": "kephalaion.hideFromTree", "when": "view == kephalaion.collections && viewItem =~ /^collection-/", "group": "8_collections@1" }
       ]
     },
     "keybindings": [
@@ -79,7 +84,7 @@
       {
         "view": "kephalaion.collections",
         "when": "kephalaion.signedIn",
-        "contents": "Keine Collection im Baum.\n[Status anzeigen](command:kephalaion.showStatus)"
+        "contents": "Keine Collection im Baum.\n[Collection im Baum zeigen](command:kephalaion.showInTree)\n[Status anzeigen](command:kephalaion.showStatus)"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -110,7 +115,14 @@
         "kephalaion.collections": {
           "type": "array",
           "items": { "type": "string" },
-          "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Ungesetzt: alle lesbaren Collections der genutzten Hubs. Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis."
+          "scope": "window",
+          "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Ungesetzt: alle lesbaren Collections der genutzten Hubs. Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“ schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist (`.code-workspace` bzw. `.vscode/settings.json`)."
+        },
+        "kephalaion.workspaceFolders": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "markdownDescription": "`true`: Collections lassen sich wie bisher als `keph://`-Ordner in den Workspace einbinden; der Baum „Kephalaion“ ist zusätzlich da. `false`: Die Erweiterung nimmt alle `keph://`-Ordner aus dem Workspace (in einem gespeicherten Workspace ändert VS Code dabei die `.code-workspace`-Datei), zeigt ihre Collections im Baum und merkt sich die Ordner; zurück auf `true` hängt sie genau diese wieder ein. Besteht der Workspace nur aus `keph://`-Ordnern, bleibt er."
         },
         "kephalaion.mcpServer.enabled": {
           "type": "boolean",
