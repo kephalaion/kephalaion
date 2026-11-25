@@ -1534,6 +1534,101 @@ async function uriExists(uri) {
   }
 }
 
+// Kopiert src nach dst über workspace.fs, ein Verzeichnis mit allem darunter — von einem
+// Provider zum anderen (Projekt → Collection, Collection → Projekt). Ein belegtes dst wird nie
+// überschrieben: Dann geht nichts. Ein Dokument, das nicht geht (keine Textdatei, zu groß), hält
+// die übrigen nicht auf. Liefert { copied, failed: [Meldung] }.
+async function copyTree(src, dst) {
+  if (await uriExists(dst)) throw new Error(`Kephalaion: ${dst.toString()} ist belegt; nichts kopiert, nichts überschrieben`);
+  const out = { copied: 0, failed: [] };
+  const walk = async (s, d) => {
+    let st;
+    try {
+      st = await vscode.workspace.fs.stat(s);
+      if (st.type & vscode.FileType.Directory) {
+        await vscode.workspace.fs.createDirectory(d);
+        for (const [name] of await vscode.workspace.fs.readDirectory(s)) {
+          await walk(vscode.Uri.joinPath(s, name), vscode.Uri.joinPath(d, name));
+        }
+        return;
+      }
+      await vscode.workspace.fs.writeFile(d, await vscode.workspace.fs.readFile(s));
+      out.copied++;
+    } catch (e) {
+      out.failed.push(`${s.toString()}: ${e.message}`);
+    }
+  };
+  await walk(src, dst);
+  return out;
+}
+
+// Das Ergebnis von copyTree als Log und, wenn etwas nicht ging, als Meldung.
+function reportCopy(log, what, results) {
+  const copied = results.reduce((n, r) => n + r.copied, 0);
+  const failed = results.flatMap((r) => r.failed);
+  log(`Baum: ${what}: ${copied} kopiert${failed.length ? `, ${failed.length} nicht` : ''}`);
+  for (const f of failed) log(`Baum: ${what}: nicht kopiert ${f}`);
+  if (failed.length) {
+    vscode.window.showErrorMessage(`Kephalaion: ${failed.length} nicht kopiert (${copied} kopiert) — ${failed[0]}`
+      + `${failed.length > 1 ? ' … (alle im Log)' : ''}`);
+  }
+}
+
+// Der Mime-Typ, unter dem VS Code die gezogenen Elemente dieses Baums mitgibt.
+const TREE_MIME = `application/vnd.code.tree.${VIEW_ID}`;
+
+// Ziehen und Ablegen im Baum (Etappe 4): Aus dem Baum gehen die URIs als text/uri-list (in den
+// Editor, und in den Explorer, falls er sie annimmt). Abgelegt wird nach rules.dropTarget:
+// Elemente des Baums innerhalb einer Collection verschieben, Dateien und Ordner aus dem Projekt
+// oder vom Betriebssystem kopieren; nie überschreiben, nie zwischen Collections.
+class TreeDragAndDrop {
+  constructor(tree, log) {
+    this.tree = tree;
+    this.log = log;
+    this.dragMimeTypes = ['text/uri-list'];
+    this.dropMimeTypes = [TREE_MIME, 'text/uri-list'];
+  }
+
+  handleDrag(source, dataTransfer) {
+    dataTransfer.set('text/uri-list', new vscode.DataTransferItem(source.map((n) => n.uri.toString()).join('\r\n')));
+  }
+
+  async handleDrop(target, dataTransfer) {
+    let sources;
+    const own = dataTransfer.get(TREE_MIME);
+    if (own && Array.isArray(own.value)) {
+      sources = own.value.map((n) => n.uri);
+    } else {
+      const list = dataTransfer.get('text/uri-list');
+      if (!list) return;
+      sources = (await list.asString()).split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+        .map((l) => vscode.Uri.parse(l));
+    }
+    if (!sources.length) return;
+    const info = target && this.tree.info(target.hub, target.collection);
+    let plan = rules.dropTarget(target ? { authority: target.uri.authority, path: target.uri.path, kind: target.kind } : undefined,
+      sources);
+    if (!plan.error && (!info || !info.readable)) plan = { error: `${target.hub}:${target.collection} ist nicht lesbar` };
+    if (!plan.error && !info.writable) plan = { error: `${info.address} nur lesen (ohne Recht write)` };
+    if (plan.error) {
+      this.log(`Baum: ablegen abgelehnt: ${plan.error}`);
+      vscode.window.showErrorMessage(`Kephalaion: ${plan.error}; nichts geändert`);
+      return;
+    }
+    const copies = [];
+    for (const it of plan.items) {
+      const dst = docUri(plan.hub, plan.collection, it.name);
+      try {
+        if (it.op === 'move') await vscode.workspace.fs.rename(it.source, dst, { overwrite: false });
+        else copies.push(await copyTree(it.source, dst));
+      } catch (e) {
+        showTreeError(this.log, `ablegen ${it.source.toString()} → ${dst.toString()}`, e);
+      }
+    }
+    if (copies.length) reportCopy(this.log, `in ${plan.hub}:${plan.collection} kopiert`, copies);
+  }
+}
+
 // Die Befehle zum Bearbeiten im Baum (Etappe 3). Alles über vscode.workspace.fs auf
 // keph://-URIs, also über KephFs; ein Befehl aus dem Kontextmenü bekommt das Element und die
 // Auswahl, einer aus der Titelleiste oder per Taste keines — dann gilt die Auswahl des Baums.
@@ -1631,6 +1726,28 @@ function treeCommands(tree, view, log) {
     },
     'kephalaion.tree.copyUri': (n, all) => vscode.env.clipboard.writeText(chosen(n, all).map((x) => x.uri.toString()).join('\n')),
     'kephalaion.tree.copyRelativePath': (n, all) => vscode.env.clipboard.writeText(chosen(n, all).map((x) => x.name).join('\n')),
+    // Vom Baum ins Projekt, auch wenn der Explorer ein Ablegen aus dem Baum nicht annimmt: Ziel
+    // ist ein Ordner nach Wahl, vorgeschlagen der Projektordner; nie überschreiben.
+    'kephalaion.tree.copyToProject': async (n, all) => {
+      const list = chosen(n, all);
+      if (!list.length) return;
+      const project = (vscode.workspace.workspaceFolders || []).find((f) => f.uri.scheme === 'file' || f.uri.scheme === 'vscode-remote');
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: false, canSelectFolders: true, canSelectMany: false, defaultUri: project && project.uri,
+        openLabel: 'Hierher kopieren', title: `${list.length === 1 ? where(list[0]) : `${list.length} Einträge`} in den Projektordner kopieren`,
+      });
+      if (!picked || !picked.length) return;
+      const results = [];
+      for (const x of list) {
+        const dst = vscode.Uri.joinPath(picked[0], x.name ? x.name.split('/').pop() : x.collection);
+        try {
+          results.push(await copyTree(x.uri, dst));
+        } catch (e) {
+          showTreeError(log, `in den Projektordner ${where(x)} → ${dst.toString()}`, e);
+        }
+      }
+      if (results.length) reportCopy(log, `nach ${picked[0].toString()} kopiert`, results);
+    },
   };
 }
 
@@ -1688,6 +1805,7 @@ function activate(context) {
     treeDataProvider: tree,
     showCollapseAll: true,
     canSelectMany: true,
+    dragAndDropController: new TreeDragAndDrop(tree, log),
   });
   // Das aktive keph://-Dokument im Baum zeigen, ohne den Fokus zu nehmen — nur, wenn der Baum
   // sichtbar ist und die Collection zeigt.

@@ -216,6 +216,7 @@ const vscode = {
     showInformationMessage: (m) => shownInfos.push(m),
     showQuickPick: async () => undefined,
     showInputBox: async () => undefined,
+    showOpenDialog: async () => undefined,
     createTreeView: (id, options) => {
       const visibility = [];
       treeView = {
@@ -251,6 +252,28 @@ const vscode = {
   },
   env: { logLevel: 2, onDidChangeLogLevel: noop, clipboard: { writeText: async (t) => { clipboard.push(t); } } },
   ViewColumn: { Beside: -2 },
+  DataTransferItem: class {
+    constructor(value) {
+      this.value = value;
+    }
+
+    async asString() {
+      return typeof this.value === 'string' ? this.value : JSON.stringify(this.value);
+    }
+  },
+  DataTransfer: class {
+    constructor() {
+      this.items = new Map();
+    }
+
+    get(mime) {
+      return this.items.get(mime);
+    }
+
+    set(mime, item) {
+      this.items.set(mime, item);
+    }
+  },
   LogLevel: { Trace: 1 },
   EventEmitter: class {
     constructor() {
@@ -1615,6 +1638,106 @@ test('Baum bearbeiten: Fehler des Providers als Meldung, zur Seite öffnen, kopi
     await registered['kephalaion.tree.copyUri'](x);
     await registered['kephalaion.tree.copyRelativePath'](x);
     assert.deepStrictEqual(clipboard.splice(0), ['keph://vm/wissen/x.md', 'x.md']);
+  } finally {
+    reply = null;
+  }
+});
+
+// Ein DataTransfer, wie VS Code ihn beim Ablegen übergibt: aus dem eigenen Baum die Elemente,
+// aus dem Explorer oder vom Betriebssystem text/uri-list.
+function ownDrop(...els) {
+  const dt = new vscode.DataTransfer();
+  dt.set('application/vnd.code.tree.kephalaion.collections', new vscode.DataTransferItem(els));
+  return dt;
+}
+function uriDrop(...uris) {
+  const dt = new vscode.DataTransfer();
+  dt.set('text/uri-list', new vscode.DataTransferItem(uris.map((u) => u.toString()).join('\r\n')));
+  return dt;
+}
+const dnd = () => treeView.options.dragAndDropController;
+
+test('Ziehen: aus dem Baum als text/uri-list, Mime-Typen', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI });
+    assert.deepStrictEqual(dnd().dragMimeTypes, ['text/uri-list']);
+    assert.deepStrictEqual(dnd().dropMimeTypes, ['application/vnd.code.tree.kephalaion.collections', 'text/uri-list']);
+    const dt = new vscode.DataTransfer();
+    dnd().handleDrag([await nodeAt('vm:omni', 'docs/a.md'), await nodeAt('vm:omni', 'README.md')], dt);
+    assert.strictEqual(await dt.get('text/uri-list').asString(), 'keph://vm/omni/docs/a.md\r\nkeph://vm/omni/README.md');
+  } finally {
+    reply = null;
+  }
+});
+
+test('Ablegen: verschieben in der Collection, abgelehnt zwischen Collections', async () => {
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI, 'vm:wissen': { rights: ['read', 'write'], docs: { 'x.md': 'x' } } });
+    const a = await nodeAt('vm:omni', 'docs/a.md');
+    const sub = await nodeAt('vm:omni', 'docs/sub');
+    let mark = calls.length;
+    await dnd().handleDrop(await nodeAt('vm:omni', 'README.md'), ownDrop(a, sub)); // auf ein Dokument: in sein Verzeichnis
+    assert.deepStrictEqual(writes(mark), [['rename', 'docs/a.md', 'a.md'], ['rename', 'docs/sub', 'sub']]);
+    assert.deepStrictEqual([...node.store['vm:omni'].docs.keys()].sort(), ['README.md', 'a.md', 'sub/b.md']);
+    // Zwischen Collections: nichts, Meldung — auch kein Kopieren.
+    mark = calls.length;
+    await dnd().handleDrop(await nodeAt('vm:omni'), ownDrop(await nodeAt('vm:wissen', 'x.md')));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.match(shownErrors.pop(), /nur innerhalb einer Collection.*kein Kopieren zwischen Collections.*nichts geändert/);
+  } finally {
+    reply = null;
+  }
+});
+
+test('Ablegen: Kopie aus file:// mit Ordner, belegtes Ziel abgelehnt, nur lesen abgelehnt', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'projekt-'));
+  fs.writeFileSync(path.join(dir, 'notiz.md'), '# Notiz\n');
+  fs.mkdirSync(path.join(dir, 'ordner', 'tief'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ordner', 'b.md'), 'b');
+  fs.writeFileSync(path.join(dir, 'ordner', 'tief', 'c.md'), 'c');
+  fs.writeFileSync(path.join(dir, 'ordner', 'bild.bin'), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(dir, 'a.md'), 'überschreibt nicht');
+  try {
+    const node = await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN });
+    const docs = await nodeAt('vm:omni', 'docs');
+    let mark = calls.length;
+    await dnd().handleDrop(docs, uriDrop(Uri.file(path.join(dir, 'notiz.md')), Uri.file(path.join(dir, 'ordner'))));
+    assert.deepStrictEqual(writes(mark).sort(), [['create', 'docs/notiz.md'], ['create', 'docs/ordner/b.md'],
+      ['create', 'docs/ordner/tief/c.md']]);
+    assert.strictEqual(node.store['vm:omni'].docs.get('docs/notiz.md').content, '# Notiz\n');
+    // Die Binärdatei geht nicht, hält die anderen nicht auf; die Meldung sagt es.
+    assert.match(shownErrors.pop(), /1 nicht kopiert \(3 kopiert\).*bild\.bin.*keine Textdatei/);
+    // Belegt: nichts überschrieben.
+    mark = calls.length;
+    await dnd().handleDrop(docs, uriDrop(Uri.file(path.join(dir, 'a.md'))));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.match(shownErrors.pop(), /keph:\/\/vm\/omni\/docs\/a\.md ist belegt; nichts kopiert, nichts überschrieben/);
+    assert.strictEqual(node.store['vm:omni'].docs.get('docs/a.md').content, '# A\n');
+    // Eine Collection ohne write: nichts.
+    await dnd().handleDrop(await nodeAt('vm:wissen'), uriDrop(Uri.file(path.join(dir, 'notiz.md'))));
+    assert.deepStrictEqual(writes(mark), []);
+    assert.match(shownErrors.pop(), /vm:wissen nur lesen/);
+  } finally {
+    reply = null;
+  }
+});
+
+test('In den Projektordner kopieren: Dokument und Verzeichnis, nie überschreiben', async () => {
+  const dir = fs.mkdtempSync(path.join(home, 'ziel-'));
+  fs.writeFileSync(path.join(dir, 'README.md'), 'eigen');
+  try {
+    await treeStart({ 'vm:omni': OMNI });
+    vscode.workspace.workspaceFolders = [{ name: 'p', index: 0, uri: Uri.file(dir) }];
+    let asked;
+    await withWindow({ showOpenDialog: async (o) => { asked = o; return [Uri.file(dir)]; } },
+      async () => registered['kephalaion.tree.copyToProject'](undefined,
+        [await nodeAt('vm:omni', 'docs'), await nodeAt('vm:omni', 'README.md')]));
+    assert.strictEqual(asked.defaultUri.path, dir);
+    assert.strictEqual(asked.canSelectFolders, true);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'docs', 'a.md'), 'utf8'), '# A\n');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'docs', 'sub', 'b.md'), 'utf8'), '# B\n');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), 'eigen', 'überschrieben');
+    assert.match(shownErrors.pop(), /README\.md ist belegt/);
   } finally {
     reply = null;
   }
