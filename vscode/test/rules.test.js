@@ -378,3 +378,112 @@ test('listen aus dem Abschnitt node: Standard, Port allein, kein Abschnitt', () 
   assert.deepStrictEqual(parseNodeListen(''), { reason: 'node_not_set_up' });
   assert.deepStrictEqual(parseNodeListen('node:\n'), { reason: 'node_not_set_up' });
 });
+
+// --- Der collection tree (Task 043) ---
+
+const {
+  splitAddress, shownCollections, folderRemovalPlan, mergeCollections, dropTarget, headingLine,
+} = require('../rules');
+
+const READABLE = [
+  { address: 'vm:omni', hub: 'vm', collection: 'omni', rights: ['read', 'write'] },
+  { address: 'vm:wissen', hub: 'vm', collection: 'wissen', rights: ['read'] },
+  { address: 'home:notizen', hub: 'home', collection: 'notizen', rights: ['read', 'write'] },
+];
+
+test('splitAddress: hub und collection, sonst undefined', () => {
+  assert.deepStrictEqual(splitAddress('vm:omni'), { hub: 'vm', collection: 'omni' });
+  for (const bad of ['', 'vm', 'vm:', ':omni', 'vm:omni/docs', undefined]) assert.strictEqual(splitAddress(bad), undefined, bad);
+});
+
+test('shownCollections: ungesetzt alle lesbaren, mit Schreibrecht', () => {
+  assert.deepStrictEqual(shownCollections(undefined, READABLE).map((c) => [c.address, c.readable, c.writable]),
+    [['vm:omni', true, true], ['vm:wissen', true, false], ['home:notizen', true, true]]);
+  assert.deepStrictEqual(shownCollections(undefined, []), []);
+});
+
+test('shownCollections: gesetzt genau diese, in dieser Reihenfolge, nicht lesbare mit Kennzeichen', () => {
+  const r = shownCollections(['home:notizen', 'vm:fremd', 'vm:omni', 'home:notizen', ' ', 'kaputt'], READABLE);
+  assert.deepStrictEqual(r, [
+    { address: 'home:notizen', hub: 'home', collection: 'notizen', readable: true, writable: true },
+    { address: 'vm:fremd', hub: 'vm', collection: 'fremd', readable: false, writable: false },
+    { address: 'vm:omni', hub: 'vm', collection: 'omni', readable: true, writable: true },
+    { address: 'kaputt', hub: '', collection: '', readable: false, writable: false },
+  ]);
+  assert.deepStrictEqual(shownCollections([], READABLE), [], 'leer gesetzt: keine');
+});
+
+const wf = (index, scheme, p, authority = scheme === 'keph' ? 'vm' : '') => ({
+  index, scheme, authority, path: p, name: `F${index}`, uri: `${scheme}://${authority}${p}`,
+});
+
+test('folderRemovalPlan: Bereiche der keph://-Ordner von hinten nach vorn', () => {
+  const plan = folderRemovalPlan([
+    wf(0, 'file', '/projekt'), wf(1, 'keph', '/omni'), wf(2, 'keph', '/wissen/docs'), wf(3, 'file', '/zwei'),
+    wf(4, 'keph', '/omni/sub'), wf(5, 'vscode-remote', '/drei'),
+  ]);
+  assert.deepStrictEqual(plan.ranges, [{ start: 4, count: 1 }, { start: 1, count: 2 }]);
+  assert.deepStrictEqual(plan.collections, ['vm:omni', 'vm:wissen']);
+  assert.deepStrictEqual(plan.subpaths.map((s) => s.uri), ['keph://vm/wissen/docs', 'keph://vm/omni/sub']);
+  assert.deepStrictEqual(plan.removed.map((r) => r.uri), ['keph://vm/omni', 'keph://vm/wissen/docs', 'keph://vm/omni/sub']);
+  assert.strictEqual(plan.touchesFirst, false);
+  assert.strictEqual(plan.onlyKeph, false);
+});
+
+test('folderRemovalPlan: Index 0, ohne keph://, nur keph://', () => {
+  const first = folderRemovalPlan([wf(1, 'file', '/p'), wf(0, 'keph', '/omni')]);
+  assert.deepStrictEqual(first.ranges, [{ start: 0, count: 1 }]);
+  assert.strictEqual(first.touchesFirst, true);
+  const none = folderRemovalPlan([wf(0, 'file', '/p')]);
+  assert.deepStrictEqual([none.ranges, none.onlyKeph, none.removed], [[], false, []]);
+  const only = folderRemovalPlan([wf(0, 'keph', '/omni'), wf(1, 'keph', '/wissen')]);
+  assert.deepStrictEqual([only.ranges, only.onlyKeph, only.removed, only.collections], [[], true, [], []]);
+  assert.deepStrictEqual(folderRemovalPlan([]).ranges, []);
+});
+
+test('mergeCollections: ungesetzt von den gezeigten aus, gesetzt vom Wert', () => {
+  assert.deepStrictEqual(mergeCollections(undefined, ['vm:neu'], [], ['vm:omni', 'vm:wissen']), ['vm:omni', 'vm:wissen', 'vm:neu']);
+  assert.deepStrictEqual(mergeCollections(undefined, [], ['vm:omni'], ['vm:omni', 'vm:wissen']), ['vm:wissen']);
+  assert.deepStrictEqual(mergeCollections(['vm:wissen'], ['vm:omni', 'vm:wissen'], [], ['egal:x']), ['vm:wissen', 'vm:omni']);
+  assert.deepStrictEqual(mergeCollections([], ['vm:omni'], [], ['vm:wissen']), ['vm:omni']);
+  assert.deepStrictEqual(mergeCollections(['vm:omni'], [], ['vm:omni'], []), []);
+});
+
+const ku = (p, authority = 'vm') => ({ scheme: 'keph', authority, path: p });
+
+test('dropTarget: Ziel ist das Verzeichnis, bei einem Dokument sein Verzeichnis', () => {
+  const r = dropTarget({ authority: 'vm', path: '/omni/docs', kind: 'directory' }, [ku('/omni/a.md'), ku('/omni/docs/b.md')]);
+  assert.strictEqual(r.error, undefined);
+  assert.deepStrictEqual([r.hub, r.collection, r.dir], ['vm', 'omni', 'docs']);
+  assert.deepStrictEqual(r.items.map((i) => [i.name, i.op]), [['docs/a.md', 'move']], 'schon am Ziel: still heraus');
+  const d = dropTarget({ authority: 'vm', path: '/omni/docs/x.md', kind: 'document' }, [ku('/omni/a.md')]);
+  assert.deepStrictEqual(d.items.map((i) => i.name), ['docs/a.md']);
+  const c = dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' }, [ku('/omni/docs/a.md')]);
+  assert.deepStrictEqual([c.dir, c.items.map((i) => i.name)], ['', ['a.md']]);
+});
+
+test('dropTarget: Kopie aus dem Projekt, Ablehnungen', () => {
+  const r = dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' },
+    [{ scheme: 'file', path: '/home/k/projekt/notiz.md' }, { scheme: 'vscode-remote', authority: 'wsl+u', path: '/p/ordner' }]);
+  assert.deepStrictEqual(r.items.map((i) => [i.name, i.op]), [['notiz.md', 'copy'], ['ordner', 'copy']]);
+  assert.match(dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' }, [ku('/wissen/a.md')]).error,
+    /nur innerhalb einer Collection.*kein Kopieren zwischen Collections/);
+  assert.match(dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' }, [ku('/omni/a.md', 'home')]).error,
+    /nur innerhalb einer Collection/);
+  assert.match(dropTarget({ authority: 'vm', path: '/omni/docs/sub', kind: 'directory' }, [ku('/omni/docs')]).error,
+    /in sich selbst/);
+  assert.match(dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' }, [ku('/omni')]).error, /Collection/);
+  assert.match(dropTarget({ authority: 'vm', path: '/omni', kind: 'collection' }, [{ scheme: 'untitled', path: '/U' }]).error,
+    /untitled/);
+  assert.ok(dropTarget(undefined, [ku('/omni/a.md')]).error);
+});
+
+test('headingLine: ATX-Überschrift, nicht im Code-Block, sonst -1', () => {
+  const text = '---\ntitle: x\n---\n# Titel\n\n```\n## Setup\n```\n## Setup ##\ntext\n### Weiter';
+  assert.strictEqual(headingLine(text, 'Setup'), 8);
+  assert.strictEqual(headingLine(text, 'Titel'), 3);
+  assert.strictEqual(headingLine(text, 'Weiter'), 10);
+  assert.strictEqual(headingLine(text, 'Fehlt'), -1);
+  assert.strictEqual(headingLine(text, ''), -1);
+  assert.strictEqual(headingLine('a\r\n## B\r\n', 'B'), 1);
+});

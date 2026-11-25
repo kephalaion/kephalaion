@@ -422,8 +422,177 @@ function droppedHubs(dropped, readable) {
   return out.sort();
 }
 
+// --- Der collection tree (Task 043; docs/begriffe.md, „collection tree“) ---
+
+// Eine Adresse <hub>:<collection> in ihre Teile; undefined, wenn eine Seite fehlt oder die
+// Collection einen Pfad trägt.
+function splitAddress(address) {
+  const s = String(address || '');
+  const i = s.indexOf(':');
+  if (i <= 0 || i === s.length - 1) return undefined;
+  const hub = s.slice(0, i);
+  const collection = s.slice(i + 1);
+  if (collection.includes('/') || collection.includes(':')) return undefined;
+  return { hub, collection };
+}
+
+// Die gezeigten Collections (Festlegung 3): setting ist der Wert von kephalaion.collections oder
+// undefined, wenn sie auf keiner Ebene gesetzt ist; readable sind die lesbaren Collections aus
+// whoami ({ address, hub, collection, rights }), in der Reihenfolge der Hubs. Ungesetzt: alle
+// lesbaren. Gesetzt (auch leer): genau diese, in dieser Reihenfolge, jede Adresse einmal; eine,
+// die whoami nicht als lesbar meldet, mit readable: false statt still zu fehlen. Liefert
+// [{ address, hub, collection, readable, writable }].
+function shownCollections(setting, readable) {
+  const byAddress = new Map();
+  for (const c of readable || []) byAddress.set(c.address, c);
+  const entry = (c) => ({ address: c.address, hub: c.hub, collection: c.collection, readable: true,
+    writable: (c.rights || []).includes('write') });
+  if (setting === undefined || setting === null) return (readable || []).map(entry);
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(setting) ? setting : []) {
+    const address = String(raw).trim();
+    if (!address || seen.has(address)) continue;
+    seen.add(address);
+    const c = byAddress.get(address);
+    if (c) {
+      out.push(entry(c));
+      continue;
+    }
+    const p = splitAddress(address) || { hub: '', collection: '' };
+    out.push({ address, hub: p.hub, collection: p.collection, readable: false, writable: false });
+  }
+  return out;
+}
+
+// Der Plan, die keph://-Ordner aus dem Workspace zu nehmen (Festlegung 5 und 6). folders sind
+// die Workspace-Ordner ({ scheme, authority, path, uri, name, index }; uri als Text). Ein Aufruf
+// von updateWorkspaceFolders ändert nur einen zusammenhängenden Bereich, also die Bereiche der
+// keph://-Ordner von hinten nach vorn (ranges: [{ start, count }]); so bleiben die Indizes der
+// vorderen gültig. Besteht der Workspace nur aus keph://-Ordnern, bleibt alles (onlyKeph, ranges
+// leer). collections sind die Adressen <hub>:<collection> der Ordner, ein Unterpfad abgeschnitten
+// (subpaths nennt solche Ordner), removed die Ordner selbst (uri, name) in ihrer Reihenfolge,
+// touchesFirst, ob Index 0 betroffen ist (dann startet VS Code den Extension Host neu).
+function folderRemovalPlan(folders) {
+  const list = [...(folders || [])].sort((a, b) => a.index - b.index);
+  const keph = list.filter((f) => f.scheme === 'keph');
+  const plan = { ranges: [], collections: [], removed: [], subpaths: [], touchesFirst: false, onlyKeph: false };
+  if (!keph.length) return plan;
+  if (keph.length === list.length) {
+    plan.onlyKeph = true;
+    return plan;
+  }
+  for (const f of keph) {
+    const parts = String(f.path || '').split('/').filter(Boolean);
+    plan.removed.push({ uri: f.uri, name: f.name });
+    if (parts.length && f.authority) {
+      const address = `${f.authority}:${parts[0]}`;
+      if (!plan.collections.includes(address)) plan.collections.push(address);
+      if (parts.length > 1) plan.subpaths.push({ uri: f.uri, address });
+    }
+  }
+  let run;
+  for (const f of list) {
+    if (f.scheme !== 'keph') {
+      run = undefined;
+      continue;
+    }
+    if (run && f.index === run.start + run.count) {
+      run.count++;
+    } else {
+      run = { start: f.index, count: 1 };
+      plan.ranges.push(run);
+    }
+  }
+  plan.ranges.reverse();
+  plan.touchesFirst = plan.ranges.some((r) => r.start === 0);
+  return plan;
+}
+
+// Der neue Wert von kephalaion.collections nach „Collection im Baum zeigen“ bzw. „… aus dem Baum
+// nehmen“ (Festlegung 4): setting ist der geltende Wert oder undefined (ungesetzt), shownNow die
+// Adressen, die der Baum gerade zeigt. Ungesetzt beginnt die Liste mit den gezeigten, damit sich
+// das Bild nicht sprunghaft ändert; add kommt ans Ende, wenn es fehlt, remove fällt heraus.
+function mergeCollections(setting, add, remove, shownNow) {
+  const base = setting === undefined || setting === null ? (shownNow || []) : (Array.isArray(setting) ? setting : []);
+  const drop = new Set(remove || []);
+  const out = [];
+  for (const a of [...base, ...(add || [])]) {
+    const s = String(a).trim();
+    if (s && !drop.has(s) && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+// Wohin ein Ablegen im Baum geht (Festlegung 8). target ist das Element, auf das abgelegt wird
+// ({ authority, path, kind: collection|directory|document }), oder undefined (leere Fläche);
+// sources sind URIs ({ scheme, authority, path }). Ziel ist das Element selbst, bei einem
+// Dokument sein Verzeichnis. keph://-Quellen werden verschoben, nur innerhalb derselben
+// Collection, nie in sich selbst; file:// und vscode-remote:// werden kopiert. Liefert
+// { hub, collection, dir, items: [{ source, name, op: move|copy }] }; eine Quelle, die schon an
+// ihrem Ziel liegt, fällt still heraus. Sonst { error } — dann geht nichts.
+function dropTarget(target, sources) {
+  if (!target) return { error: 'Ablegen nur auf einer Collection, einem Verzeichnis oder einem Dokument im Baum' };
+  const parts = String(target.path || '').split('/').filter(Boolean);
+  if (!target.authority || !parts.length) return { error: 'Ablegen nur innerhalb einer Collection' };
+  const hub = target.authority;
+  const collection = parts[0];
+  let rest = parts.slice(1);
+  if (target.kind === 'document') rest = rest.slice(0, -1);
+  const dir = rest.join('/');
+  const items = [];
+  for (const s of sources || []) {
+    const sp = String(s.path || '').split('/').filter(Boolean);
+    const base = sp[sp.length - 1];
+    if (!base) return { error: 'Quelle ohne Namen' };
+    const name = dir ? `${dir}/${base}` : base;
+    if (s.scheme === 'keph') {
+      if (s.authority !== hub || sp[0] !== collection) {
+        return { error: `Verschieben nur innerhalb einer Collection, nicht von ${s.authority}:${sp[0] || ''} nach `
+          + `${hub}:${collection} — auch kein Kopieren zwischen Collections` };
+      }
+      const from = sp.slice(1).join('/');
+      if (!from) return { error: 'eine Collection lässt sich nicht verschieben' };
+      if (from === name) continue;
+      if (dir === from || dir.startsWith(`${from}/`)) return { error: `${from} lässt sich nicht in sich selbst verschieben` };
+      items.push({ source: s, name, op: 'move' });
+    } else if (s.scheme === 'file' || s.scheme === 'vscode-remote') {
+      items.push({ source: s, name, op: 'copy' });
+    } else {
+      return { error: `aus ${s.scheme}: lässt sich nichts ablegen, nur Dateien und Ordner aus dem Projekt` };
+    }
+  }
+  return { hub, collection, dir, items };
+}
+
+// Die Zeile (ab 0) der Markdown-Überschrift heading in text, für „Kephalaion: Suchen“: die erste
+// ATX-Überschrift (#…), deren Text ohne schließende # gleich heading ist; außerhalb von
+// Code-Blöcken. -1, wenn es keine gibt (dann der Anfang des Dokuments).
+function headingLine(text, heading) {
+  const want = String(heading || '').trim();
+  if (!want) return -1;
+  const lines = String(text || '').split(/\r?\n/);
+  let fence;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(l);
+    if (f) {
+      if (!fence) fence = f[1][0];
+      else if (f[1][0] === fence) fence = undefined;
+      continue;
+    }
+    if (fence) continue;
+    const m = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t]*$/.exec(l);
+    if (!m) continue;
+    const t = (m[1] || '').replace(/[ \t]+#+$/, '').replace(/^#+$/, '').trim();
+    if (t === want) return i;
+  }
+  return -1;
+}
+
 module.exports = {
   parseNodeUrl, selectHubs, mcpLogins, mcpHeaders, explainResponse, validAlias, versionHint, hubStatus, whoamiOutcome,
   droppedHubs, PROXY_HINT, userConfigDir, locateConfig, configSourceText, parseNodeListen, DEFAULT_NODE_LISTEN,
   resolveAccount, parseDefaultAccount, choiceText,
+  splitAddress, shownCollections, folderRemovalPlan, mergeCollections, dropTarget, headingLine,
 };

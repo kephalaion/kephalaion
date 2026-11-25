@@ -407,6 +407,23 @@ Ausführlich: [`konzept.md`](konzept.md).
   und Header-Paaren wie `node mcp headers`; das Token setzt sie erst beim Start des Servers ein
   (`resolveMcpServerDefinition`), nie in die gemeldete Definition, die VS Code zwischenspeichert.
   `false` schaltet das ab.
+- **collection tree** (Baumansicht „Kephalaion“, Task 043) — der Abschnitt „Kephalaion“ im
+  Explorer von VS Code (View `kephalaion.collections`): oben die gezeigten Collections als
+  Knoten `<hub>:<collection>`, darunter Verzeichnisse und Dokumente. Er liest und schreibt über
+  denselben FileSystemProvider und dieselben `keph://`-URIs wie ein Workspace-Ordner, braucht
+  aber keinen. Welche Collections er zeigt, sagt **kephalaion.collections**.
+- **kephalaion.collections** — Einstellung der Erweiterung für VS Code (Liste von
+  `<hub>:<collection>`, ohne Vorgabe): die Collections im **collection tree**, in dieser
+  Reihenfolge. Ungesetzt (auf keiner Ebene) zeigt der Baum alle lesbaren Collections der
+  genutzten Hubs. Gesetzt auch leer; eine Adresse, die `whoami` nicht als lesbar meldet,
+  erscheint als Knoten mit Hinweis. Geschrieben von „Kephalaion: Collection im Baum zeigen“
+  und „… aus dem Baum nehmen“, auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist.
+- **kephalaion.workspaceFolders** — Einstellung der Erweiterung für VS Code (Vorgabe `true`,
+  Scope `window`): `true` wie vor Task 043, „Collection einbinden“ hängt einen
+  `keph://`-Workspace-Ordner ein. `false` nimmt alle `keph://`-Ordner aus dem Workspace,
+  übernimmt ihre Collections in den **collection tree** und merkt sich die herausgenommenen
+  Ordner im Speicher des Workspace; zurück auf `true` hängt sie genau diese wieder ein.
+  Besteht der Workspace nur aus `keph://`-Ordnern, nimmt sie nichts heraus.
 - **used hub** (genutzter Hub) — aus Sicht eines Clients der Erweiterung für VS Code (Task 030):
   ein Hub-Eintrag des Nodes, für den der Client ein Header-Paar hat — lokal jeder Hub mit
   Token-Datei unter `tokens/<hub>/`, an eine entfernte **kephalaion.nodeUrl** nur die in
