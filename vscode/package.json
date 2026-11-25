@@ -17,6 +17,8 @@
       { "command": "kephalaion.refresh", "title": "Kephalaion: Neu verbinden" },
       { "command": "kephalaion.chooseAccount", "title": "Kephalaion: Account wählen" },
       { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
+      { "command": "kephalaion.openDocument", "title": "Kephalaion: Dokument öffnen", "icon": "$(go-to-file)" },
+      { "command": "kephalaion.search", "title": "Kephalaion: Suchen", "icon": "$(search)" },
       { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" },
       { "command": "kephalaion.tree.newFile", "title": "Neue Datei…", "category": "Kephalaion", "icon": "$(new-file)" },
@@ -44,6 +46,8 @@
       "view/title": [
         { "command": "kephalaion.tree.newFile", "when": "view == kephalaion.collections", "group": "navigation@1" },
         { "command": "kephalaion.tree.newFolder", "when": "view == kephalaion.collections", "group": "navigation@2" },
+        { "command": "kephalaion.openDocument", "when": "view == kephalaion.collections", "group": "navigation@3" },
+        { "command": "kephalaion.search", "when": "view == kephalaion.collections", "group": "navigation@4" },
         { "command": "kephalaion.tree.refresh", "when": "view == kephalaion.collections", "group": "navigation@9" }
       ],
       "view/item/context": [

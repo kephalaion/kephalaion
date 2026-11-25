@@ -64,6 +64,7 @@ const executed = [];
 const settingUpdates = [];
 const editorListeners = [];
 const clipboard = [];
+const shownDocuments = [];
 
 class Disposable {
   constructor(fn) {
@@ -217,6 +218,9 @@ const vscode = {
     showQuickPick: async () => undefined,
     showInputBox: async () => undefined,
     showOpenDialog: async () => undefined,
+    showTextDocument: async (doc, options) => {
+      shownDocuments.push({ doc, options });
+    },
     createTreeView: (id, options) => {
       const visibility = [];
       treeView = {
@@ -252,6 +256,11 @@ const vscode = {
   },
   env: { logLevel: 2, onDidChangeLogLevel: noop, clipboard: { writeText: async (t) => { clipboard.push(t); } } },
   ViewColumn: { Beside: -2 },
+  Range: class {
+    constructor(sl, sc, el, ec) {
+      Object.assign(this, { start: { line: sl, character: sc }, end: { line: el, character: ec } });
+    }
+  },
   DataTransferItem: class {
     constructor(value) {
       this.value = value;
@@ -1740,5 +1749,74 @@ test('In den Projektordner kopieren: Dokument und Verzeichnis, nie überschreibe
     assert.match(shownErrors.pop(), /README\.md ist belegt/);
   } finally {
     reply = null;
+  }
+});
+
+test('Dokument öffnen: list mit recursive über alle gezeigten Collections, Blättern über cursor', async () => {
+  try {
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'vm:aus': { rights: ['read'], docs: { 'n.md': '' } } },
+      ['vm:omni', 'vm:wissen', 'vm:fremd']);
+    // Seiten zu zwei Einträgen: der Node blättert, die Erweiterung fragt bis zum Ende.
+    const paged = memNode({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'vm:aus': { rights: ['read'] } }, { pageSize: 2 });
+    reply = paged;
+    let items;
+    let opts;
+    await withWindow({ showQuickPick: async (p, o) => { items = await p; opts = o; return items[2]; } },
+      () => registered['kephalaion.openDocument']());
+    assert.deepStrictEqual(items.map((i) => [i.label, i.description]),
+      [['README.md', 'vm:omni'], ['docs/a.md', 'vm:omni'], ['docs/sub/b.md', 'vm:omni'], ['x.md', 'vm:wissen']]);
+    assert.strictEqual(opts.matchOnDescription, true);
+    const lists = calls.filter((c) => c.params.name === 'list').map((c) => c.params.arguments);
+    assert.deepStrictEqual(lists.filter((a) => a.collection === 'vm:omni'), [
+      { collection: 'vm:omni', recursive: true, limit: 1000 },
+      { collection: 'vm:omni', recursive: true, limit: 1000, cursor: '2' },
+    ]);
+    assert.ok(!lists.some((a) => a.collection === 'vm:aus'), 'nicht gezeigte Collection gelistet');
+    assert.strictEqual(executed.find((c) => c[0] === 'vscode.open')[1].toString(), 'keph://vm/omni/docs/sub/b.md');
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Suchen: search des Nodes, nur gezeigte Collections, Treffer öffnet an der Überschrift', async () => {
+  try {
+    const node = await treeStart({
+      'vm:omni': { rights: ['read'], docs: { 'docs/setup.md': '---\ntitle: Setup\n---\n# Setup\n\ntext\n\n## Install it\n\nmore\n' } },
+      'vm:aus': { rights: ['read'] },
+    }, ['vm:omni']);
+    node.searchResults = [
+      { address: 'vm:omni', hits: [
+        { rank: 1, name: 'docs/setup.md', title: 'Setup', section: { heading: 'Install it', headings: ['Setup', 'Install it'], anchor: 'install-it' } },
+        { rank: 2, name: 'docs/setup.md', title: 'Setup', section: { heading: '', headings: [], anchor: '' } },
+      ] },
+      { address: 'vm:aus', hits: [{ rank: 1, name: 'docs/x.md', title: 'X', section: { heading: 'X', headings: ['X'], anchor: 'x' } }] },
+    ];
+    let prompt;
+    let items;
+    const pick = async (i) => {
+      shownDocuments.length = 0;
+      await withWindow({
+        showInputBox: async (o) => { prompt = o; return ' install '; },
+        showQuickPick: async (p) => { items = await p; return items[i]; },
+      }, () => registered['kephalaion.search']());
+    };
+    await pick(0);
+    assert.match(prompt.placeHolder, /englische Wörter.*nur unter docs\//);
+    assert.deepStrictEqual(calls.filter((c) => c.params.name === 'search').map((c) => c.params.arguments), [{ query: 'install', limit: 20 }]);
+    assert.deepStrictEqual(items.map((i) => [i.label, i.description, i.detail]), [
+      ['Setup', 'vm:omni', 'Setup › Install it — docs/setup.md'], ['Setup', 'vm:omni', 'docs/setup.md']]);
+    assert.strictEqual(shownDocuments[0].doc.uri.toString(), 'keph://vm/omni/docs/setup.md');
+    assert.strictEqual(shownDocuments[0].options.selection.start.line, 7);
+    // Vor der ersten Überschrift: Anfang des Dokuments.
+    await pick(1);
+    assert.strictEqual(shownDocuments[0].options.selection.start.line, 0);
+    // Nichts gefunden: Hinweis mit der Grenze.
+    node.searchResults = [];
+    await withWindow({ showInputBox: async () => 'nothing' }, () => registered['kephalaion.search']());
+    assert.match(shownInfos.pop(), /nichts gefunden für „nothing“ in docs\//);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
   }
 });

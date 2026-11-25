@@ -1077,6 +1077,24 @@ class KephFs {
     return out;
   }
 
+  // Alle Dokumente einer Collection, für „Kephalaion: Dokument öffnen“: list mit recursive, mit
+  // cursor bis zum Ende; die ids merkt es wie readDirectory. Liefert die Namen.
+  async listDocuments(hub, col) {
+    const args = { collection: `${hub}:${col}`, recursive: true, limit: 1000 };
+    const out = [];
+    for (;;) {
+      const r = await this.node.call('list', args, { hub });
+      for (const e of r.entries || []) {
+        if (e.kind !== 'document') continue;
+        out.push(e.name);
+        this.know(hub, col, e.id, e.name, e.revision);
+      }
+      if (!r.more || !r.cursor) break;
+      args.cursor = r.cursor;
+    }
+    return out;
+  }
+
   async readFile(uri) {
     const { hub, col, name } = this.split(uri);
     if (!col || !name) throw vscode.FileSystemError.FileIsADirectory(uri);
@@ -1629,6 +1647,78 @@ class TreeDragAndDrop {
   }
 }
 
+// „Kephalaion: Dokument öffnen“ und „Kephalaion: Suchen“ (Etappe 5) — eigene Befehle statt
+// Strg+P und Strg+Umschalt+F, die in keph:// nichts finden (docs/vscode.md, „Suche: eigene
+// Befehle statt der Suche von VS Code“). Beide über die gezeigten, lesbaren Collections;
+// geöffnet wird über keph://-URIs, also über KephFs.
+function findCommands(tree, kfs, node, log) {
+  const readable = () => tree.shown().filter((c) => c.readable);
+  const none = () => vscode.window.showWarningMessage('Kephalaion: keine lesbare Collection im Baum — Anmeldung oder '
+    + 'kephalaion.collections prüfen.');
+
+  const openDocument = async () => {
+    const cols = readable();
+    if (!cols.length) return none();
+    const failed = [];
+    const items = Promise.all(cols.map((c) => kfs.listDocuments(c.hub, c.collection)
+      .then((names) => names.map((n) => ({ label: n, description: c.address, uri: docUri(c.hub, c.collection, n) })))
+      .catch((e) => {
+        failed.push(`${c.address}: ${e.message}`);
+        log(`Dokument öffnen: ${c.address} nicht gelistet: ${e.message}`);
+        return [];
+      }))).then((lists) => lists.flat());
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Dokument öffnen — Name in den Collections des Baums', matchOnDescription: true,
+    });
+    if (failed.length) vscode.window.showWarningMessage(`Kephalaion: nicht alle Collections gelistet — ${failed.join('; ')}`);
+    if (pick) await vscode.commands.executeCommand('vscode.open', pick.uri);
+  };
+
+  const search = async () => {
+    const cols = readable();
+    if (!cols.length) return none();
+    const query = await vscode.window.showInputBox({
+      prompt: 'Suchen in docs/ der Collections im Baum',
+      placeHolder: 'einfache englische Wörter — gesucht wird nur unter docs/, nicht im ganzen Text der Collection',
+    });
+    if (!query || !query.trim()) return undefined;
+    const shown = new Set(cols.map((c) => c.address));
+    let r;
+    try {
+      r = await node.call('search', { query: query.trim(), limit: 20 });
+    } catch (e) {
+      showTreeError(log, `suchen „${query}“`, e);
+      return undefined;
+    }
+    const items = (r.results || []).filter((x) => shown.has(x.address)).flatMap((x) => (x.hits || []).map((h) => {
+      const sec = h.section || {};
+      const trail = (sec.headings && sec.headings.length ? sec.headings.join(' › ') : sec.heading) || '';
+      return { label: h.title || h.name, description: x.address, detail: trail ? `${trail} — ${h.name}` : h.name, address: x.address, hit: h };
+    }));
+    if (!items.length) {
+      vscode.window.showInformationMessage(`Kephalaion: nichts gefunden für „${query.trim()}“ in docs/ der Collections im Baum`
+        + `${r.hint ? ` — ${r.hint}` : ''}`);
+      return undefined;
+    }
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: `Treffer für „${query.trim()}“ — Titel, Abschnitt, Collection`, matchOnDescription: true, matchOnDetail: true,
+    });
+    if (!pick) return undefined;
+    const { hub, collection } = rules.splitAddress(pick.address);
+    const uri = docUri(hub, collection, pick.hit.name);
+    try {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const line = Math.max(0, rules.headingLine(doc.getText(), (pick.hit.section || {}).heading));
+      await vscode.window.showTextDocument(doc, { selection: new vscode.Range(line, 0, line, 0) });
+    } catch (e) {
+      showTreeError(log, `öffnen ${uri.toString()}`, e);
+    }
+    return undefined;
+  };
+
+  return { 'kephalaion.openDocument': openDocument, 'kephalaion.search': search };
+}
+
 // Die Befehle zum Bearbeiten im Baum (Etappe 3). Alles über vscode.workspace.fs auf
 // keph://-URIs, also über KephFs; ein Befehl aus dem Kontextmenü bekommt das Element und die
 // Auswahl, einer aus der Titelleiste oder per Taste keines — dann gilt die Auswahl des Baums.
@@ -1819,7 +1909,7 @@ function activate(context) {
     });
   };
 
-  for (const [id, fn] of Object.entries(treeCommands(tree, view, log))) {
+  for (const [id, fn] of Object.entries({ ...treeCommands(tree, view, log), ...findCommands(tree, kfs, node, log) })) {
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
   }
   context.subscriptions.push(
@@ -1914,6 +2004,8 @@ function activate(context) {
         { label: '$(refresh) Neu verbinden', cmd: 'kephalaion.refresh' },
         { label: '$(account) Account wählen', cmd: 'kephalaion.chooseAccount' },
         { label: '$(folder-library) Collection einbinden', cmd: 'kephalaion.addCollection' },
+        { label: '$(go-to-file) Dokument öffnen', cmd: 'kephalaion.openDocument' },
+        { label: '$(search) Suchen (docs/)', cmd: 'kephalaion.search' },
         { label: '$(output) Log anzeigen', cmd: 'kephalaion.showLog' },
       ]);
       if (pick) vscode.commands.executeCommand(pick.cmd);
