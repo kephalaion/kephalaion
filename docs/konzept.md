@@ -2567,8 +2567,8 @@ bleibt aus dem Vertrag heraus.
 MCP-Werkzeuge des Nodes für Clients; die Kommandozeile und der Vertrag zwischen Node und Hub
 sind eigene Listen.
 
-**Eine Oberfläche in VS Code** über dieselben Werkzeuge — Collections als Ordner im Explorer —
-steht in [`vscode.md`](vscode.md); gebaut sind Lesen und, seit Task 014, Schreiben.
+**Eine Oberfläche in VS Code** über dieselben Werkzeuge — Collections im Baum „Kephalaion“ im
+Explorer — steht in [`vscode.md`](vscode.md); gebaut sind Lesen und, seit Task 014, Schreiben.
 
 **Allgemein und für k-playbook.** Kephalaion ist ein allgemeiner Store. Trotzdem braucht es
 Werkzeuge eigens für k-playbook, dem ersten und wichtigsten Nutzer. Grundsatz: Ein

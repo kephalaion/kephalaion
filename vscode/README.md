@@ -1,11 +1,11 @@
 # Kephalaion für VS Code
 
-Zeigt Collections von Kephalaion als Baum „Kephalaion“ im Explorer und wahlweise als Ordner des
-Workspace (`keph://<hub>/<collection>/…`), dazu den Stand des Nodes in der Statusleiste. Idee
-und Weg: [`../docs/vscode.md`](../docs/vscode.md).
+Zeigt Collections von Kephalaion als Baum „Kephalaion“ im Explorer
+(`keph://<hub>/<collection>/…`), dazu den Stand des Nodes in der Statusleiste. Idee und Weg:
+[`../docs/vscode.md`](../docs/vscode.md).
 
-Stand (0.0.6): lesen und schreiben; der Node als MCP-Server für Copilot. Braucht VS Code 1.101
-oder neuer.
+Stand (Task 044, 2026-11-26): lesen und schreiben im Baum und im Editor; Collections sind keine
+Workspace-Ordner mehr; der Node als MCP-Server für Copilot. Braucht VS Code 1.101 oder neuer.
 
 - **Lesen** aus der Replica des Nodes über `list`, `read` und `changes` — auch offline, solange
   der Node läuft. Änderungen anderer erscheinen nach dem Abgleich des Nodes, ein Umbenennen
@@ -24,12 +24,16 @@ oder neuer.
   ungesetzt alle lesbaren. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“
   schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist — **eine
   eingecheckte `.code-workspace` oder `.vscode/settings.json` ändert sich dadurch.**
-- **Ohne Workspace-Ordner:** `kephalaion.workspaceFolders: false` nimmt alle `keph://`-Ordner
-  aus dem Workspace (in einem gespeicherten Workspace schreibt VS Code dabei die
-  `.code-workspace`-Datei um), zeigt ihre Collections im Baum und merkt sich die Ordner; zurück
-  auf `true` kommen genau diese wieder. Ein Workspace nur aus Collections bleibt. So fragt
-  „Neues Terminal“ nicht mehr nach dem Ordner, und Sprachserver, die an einem `keph://`-Ordner
-  scheitern (etwa ty), sehen keinen mehr. Standard ist vorerst `true`, wie bisher.
+- **Kein Workspace-Ordner:** Die Erweiterung hängt keine Collection in den Workspace ein. Einen
+  `keph://`-Ordner neben einem anderen Ordner nimmt sie beim Start und nach jeder Änderung der
+  Workspace-Ordner heraus, ohne Einstellung (in einem gespeicherten Workspace schreibt VS Code
+  dabei die Ordnerliste der `.code-workspace`-Datei um); ist `kephalaion.collections` gesetzt,
+  nimmt sie seine Collection dort auf. So fragt „Neues Terminal“ nicht nach dem Ordner, und
+  Sprachserver, die an einem `keph://`-Ordner scheitern (etwa ty), sehen keinen. Ein Workspace
+  nur aus Collections bleibt, ein geduldeter Grenzfall. Für ein Projekt gehört
+  `"kephalaion.collections": ["<hub>:<collection>"]` in die `settings` seiner Workspace-Datei.
+  Eine noch gesetzte Einstellung `kephalaion.workspaceFolders` (bis Task 044) zeigt VS Code als
+  unbekannt; sie wirkt nicht mehr.
 - **Dokument öffnen und Suchen:** „Kephalaion: Dokument öffnen“ (alle Dokumente der Collections
   im Baum) und „Kephalaion: Suchen“ (das Werkzeug `search` des Nodes) — Strg+P und
   Strg+Umschalt+F finden in Collections nichts.
@@ -56,15 +60,6 @@ oder neuer.
   neu starten („MCP: Server auflisten“ → Kephalaion → Neu starten). Abschalten mit
   `kephalaion.mcpServer.enabled: false`.
 
-**Terminal:** Bei Collections neben genau einem echten Projekt ergänzt die Erweiterung beim
-Start und nach Workspace-Änderungen eine portable Workspace-cwd-Vorgabe, ohne explizite
-Benutzer-/Workspace-/Ordner-Werte zu überschreiben. Mehrere Projekte oder mehrdeutige Namen
-bleiben unverändert; Schreibfehler stehen nur im Log. VS Codes Standardbefehl kann wegen der
-verschiedenen URI-Schemata trotzdem nach dem Ordner fragen. **„Kephalaion: Projektterminal
-öffnen“** startet direkt im eindeutigen Projekt, ohne Auswahl und ohne Einstellungen zu ändern
-(expliziter Projektbefehl, unabhängig von cwd-Vorgaben). Details und Quellen in
-[`../docs/vscode.md`](../docs/vscode.md#terminal-im-projektordner).
-
 Bauen und installieren (unter WSL aus einem WSL-Terminal, dann landet die Erweiterung im
 VS-Code-Server der WSL):
 
@@ -75,5 +70,5 @@ make vscode-install   # baut dist/kephalaion-<version>.vsix und installiert sie 
 Nur bauen: `make vscode-vsix`. Braucht Node.js (`vsce` kommt per `npx`).
 
 Danach „Developer: Reload Window“. Die Statusleiste zeigt `Keph <hub>`; ein Klick öffnet das
-Menü (Status, neu verbinden, Account wählen, Collection einbinden, Collection im Baum zeigen
-bzw. herausnehmen, Dokument öffnen, Suchen, Log).
+Menü (Status, neu verbinden, Account wählen, Collection im Baum zeigen bzw. herausnehmen,
+Dokument öffnen, Suchen, Log).

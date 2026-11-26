@@ -1,13 +1,13 @@
 ---
 title: Kephalaion — VS Code
-description: Erweiterung, die Collections über einen FileSystemProvider in VS Code zeigt — als Baumansicht „Kephalaion“ im Explorer und wahlweise als Workspace-Ordner — lesen aus der Replica, schreiben über den Node am Hub; Ablauf, benötigte Werkzeuge, Baumansicht mit Ziehen und Ablegen, Dokument öffnen und Suchen, Schalter für die Workspace-Ordner, Status, Sprachen, Installation ohne Marketplace (`kephalaion vscode install`), eingebettet ins Binary mit gleicher Version, Ergebnis des Versuchs und Fundstellen.
+description: Erweiterung, die Collections über einen FileSystemProvider in VS Code zeigt — als Baumansicht „Kephalaion“ im Explorer — lesen aus der Replica, schreiben über den Node am Hub; Ablauf, benötigte Werkzeuge, Baumansicht mit Ziehen und Ablegen, Dokument öffnen und Suchen, Herausnehmen von `keph://`-Workspace-Ordnern, Status, Sprachen, Installation ohne Marketplace (`kephalaion vscode install`), eingebettet ins Binary mit gleicher Version, Ergebnis des Versuchs und Fundstellen.
 ---
 
 # Kephalaion in VS Code
 
 **Stand: Lesen und Schreiben gebaut** (2026-09-27, Version 0.0.5, siehe „Umsetzung: Lesen“ und
 „Umsetzung: Schreiben“ unten; seit 0.0.6 auch der Node als MCP-Server für Copilot, siehe
-„MCP-Server für Copilot“): Statusleiste aus `whoami`, Collections als Ordner mit Inhalt über
+„MCP-Server für Copilot“): Statusleiste aus `whoami`, Collections (damals als Workspace-Ordner) mit Inhalt über
 `list` und `read`, Änderungen über `changes`; speichern, neue Datei, neuer Ordner, löschen,
 umbenennen und verschieben über `create`, `write`, `delete` und `rename` (Task 014). Was die
 Erweiterung braucht, gibt es am Node: `whoami` in der Form, die die Statusleiste braucht —
@@ -16,19 +16,20 @@ Version, alle Hubs mit `login`, Node-Name und Stand des Abgleichs (Task 008) —
 lesen“) und die Werkzeuge, die schreiben (Task 014, „Allgemein — schreiben“); `serve` gleicht im
 Hintergrund ab. Das Schreiben ist mit einem Ersatz für `vscode` gegen den echten Node geprüft,
 im echten VS Code noch nicht — die Handgriffe dafür stehen unter „Umsetzung: Schreiben“.
-Seit Task 043 (2026-11-25) zeigt die Erweiterung die Collections zusätzlich als Baum im
-Explorer und kann auf Wunsch ganz ohne `keph://`-Workspace-Ordner arbeiten (siehe
+Seit Task 043 (2026-11-25) zeigt die Erweiterung die Collections als Baum im Explorer (siehe
 „Baumansicht“), dazu „Kephalaion: Dokument öffnen“ und „Kephalaion: Suchen“ (siehe „Suche:
-eigene Befehle statt der Suche von VS Code“); im echten VS Code ist das noch nicht geprüft.
+eigene Befehle statt der Suche von VS Code“); der Nutzer hat den Baum am 2026-11-25 im echten
+VS Code geprüft. Seit Task 044 (2026-11-26) ist der Baum der einzige Weg: Die Erweiterung hängt
+keine Collection mehr als Workspace-Ordner ein und nimmt einen `keph://`-Ordner neben dem
+Projekt selbst heraus.
 Begriffe nach [`begriffe.md`](begriffe.md), Hintergrund in [`konzept.md`](konzept.md).
 
 ## Wozu
 
-Eine Collection erscheint in VS Code neben dem Projekt — im Baum „Kephalaion“ im Explorer und,
-solange `kephalaion.workspaceFolders` nicht `false` ist, wahlweise als Ordner des Workspace:
+Eine Collection erscheint in VS Code neben dem Projekt im Baum „Kephalaion“ im Explorer:
 blättern, Dokumente lesen, in der Markdown-Vorschau ansehen, bearbeiten und speichern. Vor
 allem lassen sich **Daten leicht übergeben** — Dateien per Drag & Drop aus dem Projekt in eine
-Collection ziehen und umgekehrt; im Ordner des Workspace auch mit Kopieren und Einfügen.
+Collection ziehen, und mit „In den Projektordner kopieren…“ zurück (siehe „Baumansicht“).
 
 Die Erweiterung ist eine **Oberfläche für Menschen**. KI-Agenten brauchen sie nicht; sie
 lesen die echte Platte und sprechen mit dem Node über MCP.
@@ -40,7 +41,7 @@ Damit können auch Dokumente wie Tasks in den Store, ohne aus VS Code zu verschw
 
 VS Code kennt dafür die Schnittstelle `FileSystemProvider`. Eine Erweiterung meldet ein
 eigenes URI-Schema an, etwa `keph`, und beantwortet für dessen URIs die Vorgänge eines
-Dateisystems. Explorer, Editor, Vorschau, Speichern und Kopieren arbeiten danach mit
+Dateisystems. Der Baum „Kephalaion“, Editor, Vorschau und Speichern arbeiten danach mit
 `keph://…` wie mit `file://…`.
 
 ```ts
@@ -61,53 +62,42 @@ keph://<hub-alias>/<collection>/…    ← list / read
 
 Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS Code.
 
-**Einbinden** als Ordner eines Multi-Root-Workspace (der ältere Weg; der Baum braucht keinen
-Ordner, siehe „Baumansicht“):
+**Welche Collections der Baum zeigt,** sagt die Einstellung `kephalaion.collections`; für ein
+Projekt gehört sie in die `settings` seiner Workspace-Datei. Ungesetzt zeigt der Baum alle
+lesbaren Collections.
 
 ```json
 // projekt.code-workspace
-{ "folders": [
-  { "path": "." },
-  { "uri": "keph://team/wissen", "name": "Wissen" }
-]}
+{ "folders": [ { "path": "." } ],
+  "settings": { "kephalaion.collections": ["team:wissen"] } }
 ```
 
-### Terminal im Projektordner
+Ein `keph://`-Ordner unter `folders` gehört nicht dazu: Neben einem anderen Ordner nimmt die
+Erweiterung ihn heraus (siehe „Baumansicht“). Ein Workspace nur aus `keph://`-Ordnern ist ein
+geduldeter Grenzfall, kein empfohlener Weg: von Hand angelegt, die Erweiterung lässt ihn stehen,
+und der Provider funktioniert darin wie bisher.
 
-Beim Aktivieren (auch nach Upgrade/Reload) und nach tatsächlichen Änderungen der
-Workspace-Ordner ergänzt die Erweiterung `terminal.integrated.cwd` auf Workspace-Ebene als
-`${workspaceFolder:<Name>}`. Voraussetzung: mindestens ein `keph`-Ordner und genau ein echter
-Projektordner (`file` oder `vscode-remote`), dessen Name im gesamten Workspace eindeutig ist
-und keine Variablenbegrenzer enthält. Mehrere echte Projekte, virtuelle Fremdordner ohne
-Projekt und reine Collection-Workspaces bleiben unverändert. Explizite cwd-Werte auf Benutzer-,
-Workspace- oder irgendeiner Ordner-Ebene bleiben erhalten, auch leere Werte. Schreibfehler
-stehen im Output „Kephalaion“ und unterbrechen weder Aktivierung noch Collection-Einbindung.
-Die Prüfung erfolgt nach dem Workspace-Ereignis, nicht unmittelbar nach dem asynchronen
-`updateWorkspaceFolders`; beim Wechsel vom Einzelordner zum Workspace greift auch die
-Aktivierung nach dem Neustart des Extension Hosts.
+### Terminal im Projektordner (bis Task 044)
 
-**Grenze des Standardbefehls:** Diese cwd-Vorgabe allein beseitigt die Ordnerauswahl bei
-„Terminal: Neues Terminal erstellen“ nicht. VS Code bildet pro Workspace-Ordner eine cwd-URI
-unter Beibehaltung von Schema und Authority; gleiche Pfade mit `file` und `keph` bleiben
-verschiedene Kandidaten. Belegt an der offiziellen Quelle
-[`terminalActions.ts` (VS Code 1.101.0)](https://github.com/microsoft/vscode/blob/1.101.0/src/vs/workbench/contrib/terminal/browser/terminalActions.ts),
-Funktionen `pickTerminalCwd`, `resolveWorkspaceFolderCwd`, `shrinkWorkspaceFolderCwdPairs`,
-und am Stand `main` vom 2026-11-16. Keine gegenteilige GUI-Abnahme behauptet.
-
-**Ohne Ordnerauswahl:** „Kephalaion: Projektterminal öffnen“ öffnet über
-`window.createTerminal({ cwd: project.uri })` direkt im eindeutig bestimmbaren Projekt
-(gleiche Auswahlregel, Remote-URI bleibt erhalten). Dieser ausdrücklich gewählte Befehl
-verwendet den Projektordner unabhängig von cwd-Einstellungen, ändert diese aber nicht.
-Bei Mehrdeutigkeit erscheint nur ein Hinweis. Standardbefehle, Tastenkürzel und vorhandene
-Terminals werden nicht überschrieben. Den Standard-Picker global zu unterdrücken ist mit
-einer cwd-Einstellung allein nicht möglich; dafür ist dieser separate sichere Weg vorgesehen.
-
-**Ganz ohne Ordnerauswahl** geht es, wenn Collections keine Workspace-Ordner sind:
-`kephalaion.workspaceFolders: false` (Task 043, siehe „Baumansicht“). Die cwd-Vorgabe und
-der Befehl bleiben unverändert; ohne `keph://`-Ordner greifen sie nicht und sind nicht nötig.
-Eine früher geschriebene Workspace-Einstellung `terminal.integrated.cwd` bleibt stehen.
+Bis Task 044 (2026-11-26) ergänzte die Erweiterung in einem Workspace mit `keph://`-Ordner und
+genau einem echten Projektordner die Workspace-Einstellung `terminal.integrated.cwd` als
+`${workspaceFolder:<Name>}`, und der Befehl „Kephalaion: Projektterminal öffnen“ öffnete ein
+Terminal direkt im Projektordner. Beides gab es nur, weil „Terminal: Neues Terminal erstellen“
+bei mehr als einem Workspace-Ordner nach dem Ordner fragt; die cwd-Vorgabe allein verhinderte
+das nicht, denn VS Code bildet je Workspace-Ordner eine cwd-URI mit Schema und Authority (belegt
+an [`terminalActions.ts` (VS Code 1.101.0)](https://github.com/microsoft/vscode/blob/1.101.0/src/vs/workbench/contrib/terminal/browser/terminalActions.ts),
+Funktionen `pickTerminalCwd`, `resolveWorkspaceFolderCwd`, `shrinkWorkspaceFolderCwdPairs`).
+Ohne `keph://`-Ordner neben dem Projekt gibt es diese Frage nicht; beides fiel deshalb mit dem
+Einhängen weg. **Stehen bleibt** eine früher geschriebene Workspace-Einstellung
+`terminal.integrated.cwd`: Die Erweiterung weiß nicht, ob der Nutzer sie inzwischen selbst
+gesetzt hat, und der Wert zeigt weiter auf den Projektordner. Eine Tastenbelegung auf
+`kephalaion.openProjectTerminal` läuft ins Leere.
 
 ### Die Vorgänge und ihre Entsprechung
+
+Den Provider rufen der Baum „Kephalaion“ (über `vscode.workspace.fs`), der Editor, die
+Markdown-Vorschau und das Ziehen und Ablegen, alle über die `keph://`-URI eines Dokuments; einen
+Ordner im Explorer braucht es dafür nicht.
 
 | `FileSystemProvider` | Kephalaion (MCP-Werkzeug des Nodes) |
 |---|---|
@@ -162,8 +152,9 @@ und deren Benachrichtigungen brauchen eine Sitzung.
 
 Der Abschnitt **„Kephalaion“ im Explorer** (View `kephalaion.collections`, Begriff
 **collection tree** in [`begriffe.md`](begriffe.md)) zeigt die Collections als Baum — ein
-gleichwertiger Weg neben dem Workspace-Ordner, der vorerst Standard bleibt. Beide lesen und
-schreiben über denselben `FileSystemProvider` (`KephFs`) und dieselben `keph://`-URIs: Editor,
+seit Task 044 der einzige Weg; Workspace-Ordner hängt die Erweiterung nicht mehr ein. Baum und
+Editor lesen und schreiben über denselben `FileSystemProvider` (`KephFs`) und dieselben
+`keph://`-URIs: Editor,
 Dirty-State, Undo, Diff, Konflikt über `mtime` und Revision, Markdown-Vorschau mit relativen
 Links und das Aktualisieren über `onDidChangeFile` hängen an der URI, nicht am Ordner. Am Node
 kam kein Werkzeug dazu.
@@ -175,9 +166,9 @@ Abstürzen startet VS Code ihn nicht mehr, auch nicht für das lokale Projekt �
 0.0.110, ty-Erweiterung 2026.114.0, VS Code 1.148, gleich mit `vscode-vfs://`; gemeldet als
 https://github.com/astral-sh/ty/issues/5115. Pylance überspringt solche Ordner, „Python
 Environments“ hält `keph://vm/omni` für ein Projekt. Dazu fragt „Neues Terminal“ bei mehr als
-einem Workspace-Ordner nach dem Ordner (siehe „Terminal im Projektordner“). **Ob
-`kephalaion.workspaceFolders: false` den Absturz von ty behebt, ist offen**, bis der Handgriff
-unten es gezeigt hat; ty stürzt schon vor der Aktivierung der Erweiterung ab.
+einem Workspace-Ordner nach dem Ordner (siehe „Terminal im Projektordner (bis Task 044)“).
+**Ob das Herausnehmen der `keph://`-Ordner den Absturz von ty behebt, ist offen**, bis der
+Handgriff unten es gezeigt hat; ty stürzt schon vor der Aktivierung der Erweiterung ab.
 
 **Inhalt.** Oben die gezeigten Collections als Knoten `<hub>:<collection>` (nicht Hubs mit
 Collections darunter; die Adresse nennt den Hub), mit „nur lesen“, wenn `whoami` kein `write`
@@ -204,8 +195,9 @@ Workspace oder Ordner offen ist, sonst global. Beim ersten Schreiben einer unges
 Einstellung schreiben sie die bisher gezeigten plus bzw. minus die gewählte, damit sich das Bild
 nicht sprunghaft ändert. **In einem Fenster mit einem Ordner landet der Wert in dessen
 `.vscode/settings.json`, in einem gespeicherten Workspace in der `.code-workspace`-Datei —
-eine eingecheckte Datei ändert sich dadurch.** Von sich aus, beim Aktivieren oder nach einem
-Update, schreibt die Erweiterung mit dem Standard `true` nichts, was es vor Task 043 nicht gab.
+eine eingecheckte Datei ändert sich dadurch.** Von sich aus schreibt die Erweiterung
+`kephalaion.collections` nur beim Herausnehmen eines `keph://`-Ordners, und nur, wenn die
+Einstellung schon gesetzt ist (unten).
 
 **Bearbeiten** über Kontextmenü und Titelleiste: neue Datei (wird danach geöffnet), neuer
 Ordner (wie bisher nur in diesem Fenster gemerkt, bis darin etwas liegt), umbenennen (F2; ein
@@ -236,61 +228,74 @@ gibt, legt nichts an.
 - **„In den Projektordner kopieren…“** im Kontextmenü ist der Weg vom Baum ins Projekt,
   unabhängig davon: Ziel per Ordnerauswahl, vorgeschlagen der Projektordner; nie überschreiben.
 
-**Der Schalter `kephalaion.workspaceFolders`** (boolean, Standard `true`, Scope `window`,
-auf Benutzer- und Workspace-Ebene setzbar):
+**Herausnehmen der `keph://`-Ordner** (seit Task 044 ohne Einstellung; bis dahin der Schalter
+`kephalaion.workspaceFolders`, siehe [`begriffe.md`](begriffe.md)):
 
-- `true` wie bisher: „Kephalaion: Collection einbinden“ hängt einen Workspace-Ordner ein; der
-  Baum ist zusätzlich da.
-- `false`: Beim Aktivieren, bei der Änderung der Einstellung und nach jeder Änderung der
-  Workspace-Ordner nimmt die Erweiterung alle `keph://`-Ordner heraus. Vorher übernimmt sie
-  deren Collections in `kephalaion.collections`, wenn die Einstellung gesetzt ist (ungesetzt
-  zeigt der Baum ohnehin alle), und merkt sich die herausgenommenen Ordner (URI, Name) im
-  Speicher des Workspace (`workspaceState`). Ein Ordner mit Unterpfad (`keph://vm/omni/docs`)
-  wird als seine ganze Collection übernommen; das Log nennt es. „Collection einbinden“ zeigt
-  die Collection dann im Baum, statt einen Ordner einzuhängen.
-- Zurück auf `true`: Die Erweiterung hängt die gemerkten Ordner am Ende wieder ein und vergisst
-  sie. Ordner, die sie nicht selbst herausgenommen hat, hängt sie nicht ein.
+- Beim Aktivieren und nach jeder Änderung der Workspace-Ordner nimmt die Erweiterung jeden
+  `keph://`-Ordner heraus, wenn der Workspace noch mindestens einen anderen Ordner hat. Vorher
+  übernimmt sie deren Collections in `kephalaion.collections`, wenn die Einstellung gesetzt ist
+  (ungesetzt zeigt der Baum ohnehin alle). Ein Ordner mit Unterpfad (`keph://vm/omni/docs`)
+  wird als seine ganze Collection übernommen; das Log nennt es.
+- Sie merkt sich nichts und hängt nichts wieder ein. Den Schlüssel `kephalaion.removedFolders`
+  im Speicher des Workspace (`workspaceState`), unter dem sie bis Task 044 die herausgenommenen
+  Ordner für das Zurückschalten merkte, leert sie beim Aktivieren einmal.
+- Kein Befehl hängt mehr einen Workspace-Ordner ein; „Collection im Baum zeigen“ und „… aus dem
+  Baum nehmen“ ändern nur `kephalaion.collections`.
+
+**Spuren des alten Wegs:** Eine noch gesetzte Einstellung `kephalaion.workspaceFolders` zeigt
+VS Code ausgegraut als unbekannt; die Erweiterung liest sie nicht mehr, auch `true` hängt nichts
+ein. Eine Tastenbelegung auf die früheren Befehle `kephalaion.addCollection` („Collection
+einbinden“) oder `kephalaion.openProjectTerminal` läuft ins Leere. Eine früher geschriebene
+`terminal.integrated.cwd` bleibt stehen (siehe „Terminal im Projektordner (bis Task 044)“).
 
 **Fallen beim Herausnehmen** (`vscode.workspace.updateWorkspaceFolders`): Ein Aufruf ändert
 nur einen zusammenhängenden Bereich, und vor dem nächsten muss das Ereignis
 `onDidChangeWorkspaceFolders` des vorigen gekommen sein. Die Erweiterung nimmt deshalb Bereich
 für Bereich von hinten nach vorn heraus (`folderRemovalPlan` in `vscode/rules.js`) und wartet
-je auf das Ereignis (höchstens 10 s). Aktivierung, Einstellungs- und Ordnerereignis laufen
-durch eine Warteschlange, vor der Terminal-cwd, damit sich nichts überholt. Ändert sich der
-erste Ordner (ein `keph://`-Ordner an Index 0), startet VS Code den Extension Host neu; die
-Erweiterung macht beim Aktivieren dort weiter — der Plan entsteht jedes Mal neu aus dem
-Ist-Zustand, die Ordner sind vorher gemerkt. In einem gespeicherten Workspace schreibt VS Code
-dabei die `.code-workspace`-Datei um (nur die Ordnerliste).
+je auf das Ereignis (höchstens 10 s). Aktivierung und Ordnerereignis laufen durch eine
+Warteschlange, damit sich nichts überholt. Ändert sich der erste Ordner (ein `keph://`-Ordner an
+Index 0), startet VS Code den Extension Host neu; die Erweiterung macht beim Aktivieren dort
+weiter — der Plan entsteht jedes Mal neu aus dem Ist-Zustand. In einem gespeicherten Workspace
+schreibt VS Code dabei die `.code-workspace`-Datei um (nur die Ordnerliste: die Zeile des
+Ordners fällt weg).
 
 **Grenzen:**
 
-- **Ein Workspace nur aus `keph://`-Ordnern bleibt:** Mit `false` nimmt die Erweiterung dort
-  nichts heraus — ein leerer Workspace hilft niemandem — und sagt es im Log und einmal als
-  Hinweis. Das ist eine bewusste Ausnahme von „mit `false` kein `keph://`-Ordner“.
-- **Ein Skript, das die Zeile `keph://…` bei jedem Rebuild in die `.code-workspace`-Datei
-  zurückschreibt** (im OMNI-Setup), lässt die Erweiterung sie mit `false` jedes Mal wieder
-  herausnehmen; die Datei wird jedes Mal umgeschrieben. Behoben ist das erst, wenn das Skript
-  stattdessen `kephalaion.collections` in die `settings` der Workspace-Datei schreibt.
+- **Ein Workspace nur aus `keph://`-Ordnern bleibt:** Die Erweiterung nimmt dort nichts heraus
+  — ein leerer Workspace hilft niemandem — und sagt es im Log und einmal als Hinweis. Ein
+  solcher Workspace ist ein geduldeter Grenzfall, kein empfohlener Weg: von Hand angelegt, der
+  Provider funktioniert darin wie bisher, und nur dort gelten noch die Handgriffe im Explorer
+  aus den datierten Abschnitten unten.
+- **Eine `.code-workspace`-Datei mit einer Zeile `keph://…`** (im OMNI-Setup pflegt jeder seine
+  `omni.code-workspace` selbst, bei manchen steht noch `{ "uri": "keph://vm/omni" }` darin): Die
+  Erweiterung nimmt den Ordner beim ersten Start heraus und schreibt dabei die Ordnerliste der
+  Datei um; das ist gewollt. Wer nur `vm:omni` im Baum sehen will, setzt
+  `"kephalaion.collections": ["vm:omni"]` in die `settings` der Datei. Ein Skript, das die Zeile
+  immer wieder zurückschrieb, gibt es dort seit 2026-10-29 nicht mehr.
 - **Strg+P und Strg+Umschalt+F** sehen Collections weiter nicht, auch nicht im Baum; dafür gibt
   es „Kephalaion: Dokument öffnen“ und „Kephalaion: Suchen“ (unten). Die Suche geht nur über
   `docs/`.
 - **Kein Kopieren und Einfügen über die Zwischenablage** zwischen Baum und Explorer oder
   innerhalb einer Collection; dafür Ziehen und Ablegen und „In den Projektordner kopieren…“.
-- **Kein Kopieren zwischen Collections** (im Explorer heute Strg+Drag); im Baum kommt nur eine
-  Meldung.
+- **Kein Kopieren zwischen Collections** (im Explorer eines `keph://`-Ordners ging das mit
+  Strg+Drag); im Baum kommt nur eine Meldung.
 - **Kein Inline-Umbenennen** in einem eigenen Baum; dafür das Eingabefeld.
 
-**Folgeschritt** (nicht in Task 043): Hat sich der Baum bewährt, wird der Standard von
-`kephalaion.workspaceFolders` `false` und später das Einhängen ganz entfernt. Unabhängig davon
-legt das OMNI-Setup die Zeile `keph://vm/omni` nicht mehr an und setzt stattdessen
-`kephalaion.collections`.
+**Folgeschritt, erledigt mit Task 044 (2026-11-26):** Task 043 ließ den alten Weg hinter dem
+Schalter `kephalaion.workspaceFolders` (Standard `true`) stehen; vorgesehen war, erst den
+Standard auf `false` zu setzen und später das Einhängen zu entfernen. Nach der Prüfung des
+Baums im echten VS Code am 2026-11-25 ist beides in einem Zug geschehen. Die Anleitung für neue
+Mitarbeiter im OMNI-Projekt und eine Vorgabe von `kephalaion.collections` durch dessen
+Devcontainer gehören dem OMNI-Setup.
 
 ### Baumansicht im echten VS Code noch zu prüfen
 
-**Offen, Stand 2026-11-25** — geprüft ist der Baum bisher nur mit dem Ersatz für `vscode`
-(`vscode/test/extension.test.js`). Der Nutzer geht die Handgriffe selbst durch, mit einer
-Collection mit `write` und nur unter einem Testverzeichnis; jede Zeile im Output „Kephalaion“
-(Menü → Log) zeigt, was VS Code aufgerufen hat. Ergebnisse hier eintragen.
+**Geprüft vom Nutzer am 2026-11-25** im echten VS Code: der Baum („klappt gut“; der Abschnitt
+lässt sich im Explorer verschieben). **Offen, Stand 2026-11-26:** Punkt 8 (Ziehen Baum →
+Explorer), das Verhalten von ty und die Punkte 12 und 13 in der Fassung von Task 044, bis der
+Nutzer sie meldet. Der Nutzer geht die Handgriffe selbst durch, mit einer Collection mit `write`
+und nur unter einem Testverzeichnis; jede Zeile im Output „Kephalaion“ (Menü → Log) zeigt, was
+VS Code aufgerufen hat. Ergebnisse hier eintragen.
 
 1. **Blättern:** Explorer → Abschnitt „Kephalaion“: die Collections als `<hub>:<collection>`,
    eine ohne `write` mit „nur lesen“; Verzeichnisse aufklappen.
@@ -313,16 +318,14 @@ Collection mit `write` und nur unter einem Testverzeichnis; jede Zeile im Output
     Meldung.
 11. **„Kephalaion: Dokument öffnen“** und **„Kephalaion: Suchen“** (Titelleiste, Menü der
     Statusleiste): ein Treffer öffnet das Dokument an der Überschrift des Abschnitts.
-12. **Schalter in einem gespeicherten Workspace** mit Projekt und `keph://`-Ordner **an Index
-    1**: `kephalaion.workspaceFolders: false` → der Ordner verschwindet, die
-    `.code-workspace`-Datei verliert nur diese Zeile, der Baum zeigt die Collection. Danach
-    „Neues Terminal“ (+): **ohne Ordnerauswahl**? Und **läuft ty wieder** — sofort, erst nach
-    „Developer: Reload Window“ oder erst nach einem Neustart von VS Code? **Ergebnis
-    notieren.**
+12. **Herausnehmen in einem gespeicherten Workspace** mit Projekt und `keph://`-Ordner **an
+    Index 1** öffnen: Der Ordner verschwindet, die `.code-workspace`-Datei verliert nur diese
+    Zeile, der Baum zeigt die Collection. Danach „Neues Terminal“ (+): **ohne Ordnerauswahl**?
+    Und **läuft ty** — sofort, erst nach „Developer: Reload Window“ oder erst nach einem
+    Neustart von VS Code? **Ergebnis notieren.**
 13. Wie 12, aber mit dem `keph://`-Ordner **an Index 0**: Der Extension Host startet neu, die
     Erweiterung nimmt den Ordner trotzdem heraus (Log).
-14. **Zurück auf `true`:** Die herausgenommenen Ordner kommen am Ende wieder, sonst keiner.
-15. **„Collection im Baum zeigen“ und „… aus dem Baum nehmen“** in einem Fenster mit Ordner:
+14. **„Collection im Baum zeigen“ und „… aus dem Baum nehmen“** in einem Fenster mit Ordner:
     Der Wert steht danach in `.vscode/settings.json` (bzw. der `.code-workspace`-Datei).
 
 ## Status und Auswahl
@@ -364,7 +367,8 @@ Collection mit `write` und nur unter einem Testverzeichnis; jede Zeile im Output
   mit `login` ≠ `ok` die
   Leiste gelb — eine Annahme der ersten Fassung (2026-09-26: ein Node je User mit nur eigenen
   Hubs, `missing` hieß „Token vergessen“).
-- **Klick darauf:** ein kleines Menü — neu verbinden, Token setzen, Collection einbinden,
+- **Klick darauf:** ein kleines Menü — Status anzeigen, neu verbinden, Account wählen,
+  Collection im Baum zeigen, Collection aus dem Baum nehmen, Dokument öffnen, Suchen (`docs/`),
   Log anzeigen (Output-Channel „Kephalaion“ mit den Aufrufen und Fehlern).
 - **Node nicht erreichbar:** Dann scheitert auch das Lesen, weil die Erweiterung die Replica
   nie selbst öffnet. Die Statusleiste zeigt das — seit Task 035 mit der Ursache: „Keph: keine
@@ -376,9 +380,10 @@ Collection mit `write` und nur unter einem Testverzeichnis; jede Zeile im Output
   (ungültige `nodeUrl`, Wahl der Hubs) bleibt „Keph: Node nicht erreichbar“. Die Ursache steht
   im Fehler als eigenes Feld `reason` neben `kind`; `pause.js` und die Fehler des Dateisystems
   entscheiden weiter nach `kind` (unten, „Die config wie das Binary“).
-- **In VS Code wird gewählt, was angezeigt wird:** „Collection einbinden“ bietet die
-  lesbaren Collections aus `whoami` zur Auswahl an und fügt die gewählte als Ordner in den
-  Workspace ein.
+- **In VS Code wird gewählt, was angezeigt wird:** „Kephalaion: Collection im Baum zeigen“
+  bietet die lesbaren Collections aus `whoami` an, die der Baum noch nicht zeigt, und schreibt
+  die gewählte in `kephalaion.collections`; „… aus dem Baum nehmen“ nimmt sie wieder heraus
+  (siehe „Baumansicht“).
 - **Über die CLI wird eingerichtet:** Hubs, Tokens, gewünschte Collections, Accounts. Das
   ist Verwaltung mit Tokens und heute schon Kommandozeile; die Verwaltung über MCP ist im
   Konzept nur vorgemerkt. Nicht doppelt bauen.
@@ -843,9 +848,11 @@ Treffer (mit etwas Verzögerung, erst nach einer weiteren Suche). Das ist in Ord
   ist unverändert.
 - Leere Verzeichnisse: vorerst nur in der Erweiterung gemerkt (Task 014); ob später als
   `SYSTEM:D:`-Zeile am Hub, bleibt offen (vgl. „Persönliche Verzeichnisse“ im Konzept).
-- Das Schreiben im echten VS Code: die Handgriffe unter „Umsetzung: Schreiben“, „Im echten
+- ~~Das Schreiben im echten VS Code: die Handgriffe unter „Umsetzung: Schreiben“, „Im echten
   VS Code noch zu prüfen“ — vor allem, ob der `FileService` den Provider so ruft wie
-  angenommen.
+  angenommen.~~ *Für Baum und Editor erledigt mit der Prüfung vom 2026-11-25* (siehe
+  „Baumansicht im echten VS Code noch zu prüfen“); die Handgriffe im Explorer gelten seit
+  Task 044 nur noch im reinen Collection-Workspace.
 - Wie die Erweiterung mit `personal`-Verzeichnissen umgeht (nur Eigenes zeigen, Schalter für
   alles).
 - ~~Ob eine TreeView zusätzlich zum Dateisystem sinnvoll ist, etwa für Status und Abgleich.~~
@@ -853,6 +860,10 @@ Treffer (mit etwas Verzögerung, erst nach einer weiteren Suche). Das ist in Ord
   „Baumansicht“); Status und Abgleich bleiben in der Statusleiste.
 
 ## Versuch: Dummy (2026-09-26)
+
+*Dieser und die beiden folgenden datierten Abschnitte sind Geschichte: Sie beschreiben den Weg
+über einen `keph://`-Workspace-Ordner, den es seit Task 044 nicht mehr gibt; ihre Handgriffe im
+Explorer gelten nur noch im reinen Collection-Workspace (siehe „Baumansicht“, „Grenzen“).*
 
 Unter [`vscode/`](../vscode/): reines JavaScript ohne Abhängigkeiten, ein
 `FileSystemProvider` für `keph://` mit einem festen Verzeichnis und einer Datei, nur lesen,
@@ -963,6 +974,8 @@ Jeder Schreibvorgang geht über die Werkzeuge des Nodes zum Hub (`create`, `writ
   `TestMCPWriteTwoNodes` in `cmd/kephalaion`.
 
 ### Im echten VS Code noch zu prüfen
+
+*Seit Task 044 gelten diese Handgriffe im Explorer nur noch im reinen Collection-Workspace.*
 
 **Offen, Stand 2026-09-27** — der Nutzer geht die Handgriffe selbst durch, nur unter `test/`
 in `home:eins`. Im Output „Kephalaion“ (Menü → Log) steht jeder Aufruf mit Vorgang, Name und

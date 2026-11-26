@@ -410,20 +410,18 @@ Ausführlich: [`konzept.md`](konzept.md).
 - **collection tree** (Baumansicht „Kephalaion“, Task 043) — der Abschnitt „Kephalaion“ im
   Explorer von VS Code (View `kephalaion.collections`): oben die gezeigten Collections als
   Knoten `<hub>:<collection>`, darunter Verzeichnisse und Dokumente. Er liest und schreibt über
-  denselben FileSystemProvider und dieselben `keph://`-URIs wie ein Workspace-Ordner, braucht
-  aber keinen. Welche Collections er zeigt, sagt **kephalaion.collections**.
+  den FileSystemProvider und die `keph://`-URIs; seit Task 044 ist er der einzige Weg zu den
+  Collections, Workspace-Ordner hängt die Erweiterung nicht mehr ein. Welche Collections er
+  zeigt, sagt **kephalaion.collections**.
 - **kephalaion.collections** — Einstellung der Erweiterung für VS Code (Liste von
   `<hub>:<collection>`, ohne Vorgabe): die Collections im **collection tree**, in dieser
   Reihenfolge. Ungesetzt (auf keiner Ebene) zeigt der Baum alle lesbaren Collections der
   genutzten Hubs. Gesetzt auch leer; eine Adresse, die `whoami` nicht als lesbar meldet,
   erscheint als Knoten mit Hinweis. Geschrieben von „Kephalaion: Collection im Baum zeigen“
   und „… aus dem Baum nehmen“, auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist.
-- **kephalaion.workspaceFolders** — Einstellung der Erweiterung für VS Code (Vorgabe `true`,
-  Scope `window`): `true` wie vor Task 043, „Collection einbinden“ hängt einen
-  `keph://`-Workspace-Ordner ein. `false` nimmt alle `keph://`-Ordner aus dem Workspace,
-  übernimmt ihre Collections in den **collection tree** und merkt sich die herausgenommenen
-  Ordner im Speicher des Workspace; zurück auf `true` hängt sie genau diese wieder ein.
-  Besteht der Workspace nur aus `keph://`-Ordnern, nimmt sie nichts heraus.
+- **kephalaion.workspaceFolders** — Geschichte: bis Task 044 (2026-11-26) der Schalter der
+  Erweiterung für VS Code für den alten Weg über `keph://`-Workspace-Ordner, seitdem entfallen;
+  eine noch gesetzte Einstellung zeigt VS Code ausgegraut als unbekannt.
 - **used hub** (genutzter Hub) — aus Sicht eines Clients der Erweiterung für VS Code (Task 030):
   ein Hub-Eintrag des Nodes, für den der Client ein Header-Paar hat — lokal jeder Hub mit
   Token-Datei unter `tokens/<hub>/`, an eine entfernte **kephalaion.nodeUrl** nur die in

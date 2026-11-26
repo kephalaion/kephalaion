@@ -33,10 +33,9 @@ Abhilfe auf der Kommandozeile ([`docs/konzept.md`](docs/konzept.md), „Anleitun
 Ein User richtet seinen Account mit dem Einrichtungstoken selbst ein, über einen Node, den er
 erreicht (`node account setup`), und sieht seine Token-Dateien mit Zustand (`node account
 list`); am eigenen Node tauscht `node account rotate` ein Token; `node whoami` zeigt, wen der
-Node kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und bindet Collections als Ordner
-ein, zum Lesen und Schreiben. Bei Collections neben genau einem echten Projekt ergänzt sie
-sicher die Workspace-Terminal-cwd; „Kephalaion: Projektterminal öffnen“ umgeht die weiterhin
-mögliche Ordnerauswahl des VS-Code-Standardbefehls ([Details](docs/vscode.md#terminal-im-projektordner)).
+Node kennt. Eine Erweiterung für VS Code zeigt den Stand des Nodes und die Collections im Baum
+„Kephalaion“ im Explorer, zum Lesen und Schreiben; einen `keph://`-Workspace-Ordner neben dem
+Projekt nimmt sie heraus ([Details](docs/vscode.md#baumansicht-task-043-2026-11-25)).
 Ein Node auf einem anderen Rechner erreicht den Hub über
 `https`: TLS beendet ein Reverse-Proxy vor dem Hub, der auf Loopback bleibt
 ([`docs/installation.md`](docs/installation.md)). Für das Verzeichnis `docs/` einer Collection
@@ -952,7 +951,7 @@ push privat:team-x vendor/k-playbook/: 115 angelegt, 0 geändert, 0 gelöscht, 0
 
 ## VS Code
 
-Die Erweiterung unter [`vscode/`](vscode/) zeigt Collections als Ordner im Explorer
+Die Erweiterung unter [`vscode/`](vscode/) zeigt Collections im Baum „Kephalaion“ im Explorer
 (`keph://<hub>/<collection>/…`) und den Stand des Nodes in der Statusleiste. Sie spricht mit
 dem Node über MCP wie jeder andere Client. Hintergrund: [`docs/vscode.md`](docs/vscode.md).
 
@@ -989,11 +988,17 @@ im Container; wie sie dort einen Node erreicht, ist noch nicht gebaut
   Token hat, ist kein Fehler und steht nur im Tooltip als „nicht genutzt“ — ein Node bedient
   viele Hubs, ein Client nutzt davon einige. Abgefragt alle 30 s.
 - **Menü** per Klick auf die Statusleiste: Status anzeigen (dasselbe als Text im Output
-  „Kephalaion“), neu verbinden, Account wählen, Collection einbinden, Log.
-- **„Kephalaion: Collection einbinden“** bietet die lesbaren Collections zur Auswahl an und
-  fügt die gewählte als Ordner in den Workspace ein. Verzeichnisse und Dokumente kommen über
-  `list` und `read` aus der Replica; Änderungen erscheinen nach dem Abgleich des Nodes von
-  selbst (`changes`, alle 3 s), ein Umbenennen als alter Name weg, neuer da.
+  „Kephalaion“), neu verbinden, Account wählen, Collection im Baum zeigen, Collection aus dem
+  Baum nehmen, Dokument öffnen, Suchen (`docs/`), Log.
+- **Baum „Kephalaion“** im Explorer: die Collections als `<hub>:<collection>`, darunter
+  Verzeichnisse und Dokumente; ein Klick öffnet im Editor. Welche Collections er zeigt, sagt
+  `kephalaion.collections` (ungesetzt alle lesbaren); für ein Projekt gehört die Einstellung in
+  die `settings` seiner Workspace-Datei. „Kephalaion: Collection im Baum zeigen“ und „… aus dem
+  Baum nehmen“ schreiben sie. Einen `keph://`-Ordner neben einem anderen Workspace-Ordner nimmt
+  die Erweiterung ohne Einstellung heraus; in den Workspace hängt sie keine Collection mehr ein.
+  Verzeichnisse und Dokumente kommen über `list` und `read` aus der Replica; Änderungen
+  erscheinen nach dem Abgleich des Nodes von selbst (`changes`, alle 3 s), ein Umbenennen als
+  alter Name weg, neuer da.
 - **MCP-Server für Copilot** (0.0.6, VS Code ab 1.101): Die Erweiterung meldet den Node als
   MCP-Server „Kephalaion“, mit den Header-Paaren aus den Token-Dateien; das Token setzt sie erst
   beim Start des Servers ein. Solange VS Code auf „Trace“ protokolliert, meldet sie ihn nicht

@@ -1,8 +1,11 @@
 # Fortschritt
 
-Stand: 2026-11-25 (Task 043 VS Code: Collections als Baumansicht „Kephalaion“ im Explorer,
-Schalter `kephalaion.workspaceFolders`, „Dokument öffnen“ und „Suchen“ — gebaut und
-dokumentiert, die Prüfung im echten VS Code ist Nacharbeit des Nutzers;
+Stand: 2026-11-26 (Task 044 VS Code: Einbinden von Collections als Workspace-Ordner entfernt,
+`keph://`-Ordner neben dem Projekt nimmt die Erweiterung ohne Einstellung heraus — gebaut und
+dokumentiert, die Handgriffe zum Herausnehmen im echten VS Code sind Nacharbeit des Nutzers;
+2026-11-25: Task 043 VS Code: Collections als Baumansicht „Kephalaion“ im Explorer,
+Schalter `kephalaion.workspaceFolders` (mit Task 044 entfallen), „Dokument öffnen“ und
+„Suchen“ — gebaut und dokumentiert, der Baum am 2026-11-25 vom Nutzer im echten VS Code geprüft;
 2026-11-24: Task 039 Export und Restore des Hubs: `hub export` und `hub restore`
 gebaut und dokumentiert, in v0.5.0; Task 040 Anleitung für Clients: der Node gibt bei `initialize` einen festen
 Text als `instructions` mit, gebaut und dokumentiert, in v0.5.0; Task 042 Abgleich
@@ -464,6 +467,20 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 044 (`044-vscode-ordner-entfernen`) — VS Code: Einbinden von Collections als
+  Workspace-Ordner entfernen** (2026-11-26, Etappen 1–3 ausgeführt; `docs/vscode.md`,
+  „Baumansicht“):
+  - `syncWorkspaceFolders` nimmt jeden `keph://`-Ordner neben einem anderen Ordner beim
+    Aktivieren und nach jeder Änderung der Workspace-Ordner heraus, ohne Einstellung, nach
+    `rules.folderRemovalPlan`; ein reiner Collection-Workspace bleibt (geduldeter Grenzfall);
+  - weg: Einstellung `kephalaion.workspaceFolders`, das Wiedereinhängen aus dem
+    `workspaceState` (der Schlüssel `kephalaion.removedFolders` wird einmal geleert), die Befehle
+    „Collection einbinden“ und „Projektterminal öffnen“, die Vorgabe `terminal.integrated.cwd`;
+  - Tests in `vscode/test/extension.test.js` nachgezogen, neu: kein Befehl hängt einen
+    Workspace-Ordner ein;
+  - Doku: `docs/vscode.md`, `README.md`, `vscode/README.md`, `konzept.md`, `begriffe.md`;
+    Todo 31 erledigt.
+
 - **Task 043 (`043-vscode-collection-baum`) — VS Code: Collections als Baumansicht statt
   Workspace-Ordner** (2026-11-25, Etappen 1–7 ausgeführt; `docs/vscode.md`, „Baumansicht“):
   - Regeln ohne `vscode` in `vscode/rules.js` (`shownCollections`, `folderRemovalPlan`,
@@ -478,11 +495,9 @@ ist Nacharbeit des Nutzers)
   - „Collection im Baum zeigen“ / „… aus dem Baum nehmen“ schreiben `kephalaion.collections`;
     Schalter `kephalaion.workspaceFolders` (Standard `true`), `false` nimmt die
     `keph://`-Ordner Bereich für Bereich heraus und merkt sie, `true` hängt sie wieder ein;
-  - geprüft nur mit dem Ersatz für `vscode` (`vscode/test/extension.test.js`); Handgriffe für
-    das echte VS Code unter „Zu testen“;
-  - **Folgeschritt** (Todo 31): Standard von `kephalaion.workspaceFolders` auf `false`, später das
-    Einhängen entfernen; unabhängig davon setzt das OMNI-Setup `kephalaion.collections` in der
-    `.code-workspace`-Datei statt der Zeile `keph://vm/omni`.
+  - der Baum am 2026-11-25 vom Nutzer im echten VS Code geprüft; Offenes unter „Zu testen“;
+  - **Folgeschritt** (Todo 31): erledigt mit Task 044 — das Einhängen ist entfernt, ohne den
+    Zwischenschritt mit Standard `false`.
 
 - **Task 039 (`039-hub-export-restore`) — Hub-Export und -Restore unabhängig von der Datenbank**
   (2026-11-24, Etappen 1–3 ausgeführt, in v0.5.0):
@@ -791,14 +806,14 @@ ist Nacharbeit des Nutzers)
 
 ## Zu testen
 
-- **Task 043 — Baumansicht im echten VS Code** (nur der Nutzer; nach einem Build mit der
-  Erweiterung, `make vscode-install`): die Handgriffe in `docs/vscode.md`, „Baumansicht im
-  echten VS Code noch zu prüfen“ — Blättern, Öffnen, Speichern mit Konflikt, Markdown-Vorschau
-  mit relativem Link, neue Datei/Ordner, umbenennen, löschen, Ziehen Explorer → Baum,
-  Baum → Editor, Baum → Explorer (Ergebnis notieren), „In den Projektordner kopieren…“, beide
-  Befehle, Schalter auf `false` mit `keph://`-Ordner an Index 1 und an Index 0, danach Terminal
-  ohne Ordnerauswahl und ob ty wieder läuft (sofort, nach Neuladen des Fensters oder erst nach
-  Neustart; Ergebnis notieren), zurück auf `true`.
+- **Task 043/044 — Baumansicht im echten VS Code** (nur der Nutzer; nach einem Build mit der
+  Erweiterung, `make vscode-install`): der Baum ist am 2026-11-25 geprüft. Offen sind die
+  Handgriffe in `docs/vscode.md`, „Baumansicht im echten VS Code noch zu prüfen“, Punkt 8
+  (Baum → Explorer, Ergebnis notieren) und Punkte 12 und 13 (Task 044): gespeicherter Workspace
+  mit Projekt und `keph://`-Ordner an Index 1 bzw. 0 → der Ordner verschwindet, die Datei
+  verliert nur diese Zeile, der Baum zeigt die Collection, danach Terminal ohne Ordnerauswahl
+  und ob ty läuft (sofort, nach Neuladen des Fensters oder erst nach Neustart; Ergebnis
+  notieren).
 
 - **Task 039 — Export und Restore, Probe an einem echten Hub** (nur der Nutzer; nach dem Release
   mit `hub export`, eingespielt über Ansible): neben dem laufenden Dienst `sudo -u kephalaion
