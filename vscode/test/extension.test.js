@@ -61,6 +61,8 @@ const settingUpdates = [];
 const editorListeners = [];
 const clipboard = [];
 const shownDocuments = [];
+// Die Watcher aus createFileSystemWatcher ({ pattern, on: { create, change, delete }, disposed }).
+const watchers = [];
 // Der Speicher des Workspace (context.workspaceState), über einen Neustart der Erweiterung hinweg.
 const workspaceStore = new Map();
 // updateWorkspaceFolders wie VS Code: ändert die Liste, das Ereignis kommt danach; ein Aufruf
@@ -144,7 +146,10 @@ class Uri {
   }
 }
 
-// workspace.fs wie in VS Code: keph:// an den gemeldeten Provider, file:// auf die Platte.
+// workspace.fs wie in VS Code: keph:// an den gemeldeten Provider, file:// auf die Platte; eine
+// fehlende Datei ist FileNotFound. readFileGate(u), wenn gesetzt, hält readFile von file:// auf,
+// bis es sich erfüllt (Task 045: spät antwortendes Lesen).
+let readFileGate;
 const onDisk = (u) => u.scheme === 'file';
 const diskFs = {
   stat: async (u) => {
@@ -157,7 +162,15 @@ const diskFs = {
     return { type: st.isDirectory() ? 2 : 1, ctime: 0, mtime: st.mtimeMs, size: st.size };
   },
   readDirectory: async (u) => fs.readdirSync(u.path, { withFileTypes: true }).map((d) => [d.name, d.isDirectory() ? 2 : 1]),
-  readFile: async (u) => new Uint8Array(fs.readFileSync(u.path)),
+  readFile: async (u) => {
+    if (readFileGate) await readFileGate(u);
+    try {
+      return new Uint8Array(fs.readFileSync(u.path));
+    } catch (e) {
+      if (e.code === 'ENOENT') throw FileSystemError.FileNotFound(u.toString());
+      throw e;
+    }
+  },
   writeFile: async (u, c) => {
     fs.mkdirSync(path.dirname(u.path), { recursive: true });
     fs.writeFileSync(u.path, c);
@@ -207,6 +220,20 @@ const vscode = {
     onDidChangeConfiguration: (fn) => listen(configListeners, fn),
     workspaceFolders: [],
     updateWorkspaceFolders,
+    createFileSystemWatcher: (pattern) => {
+      const on = { create: [], change: [], delete: [] };
+      const w = {
+        pattern,
+        on,
+        disposed: false,
+        onDidCreate: (fn) => listen(on.create, fn),
+        onDidChange: (fn) => listen(on.change, fn),
+        onDidDelete: (fn) => listen(on.delete, fn),
+        dispose: () => { w.disposed = true; },
+      };
+      watchers.push(w);
+      return w;
+    },
     fs: workspaceFs,
     openTextDocument: async (u) => {
       const text = new TextDecoder().decode(await workspaceFs.readFile(u));
@@ -337,6 +364,11 @@ const vscode = {
   QuickPickItemKind: { Separator: -1 },
   ConfigurationTarget: { Global: 1, Workspace: 2 },
   Uri,
+  RelativePattern: class {
+    constructor(base, pattern) {
+      Object.assign(this, { base, pattern });
+    }
+  },
   McpHttpServerDefinition: class {
     constructor(label, uri, headers, version) {
       Object.assign(this, { label, uri, headers, version });
@@ -418,6 +450,8 @@ test.afterEach(() => {
   workspaceStore.clear();
   folderUpdates.length = 0;
   folderOverlaps = 0;
+  watchers.length = 0;
+  readFileGate = undefined;
 });
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 
@@ -1293,19 +1327,48 @@ function memNode(collections, { pageSize = 1000 } = {}) {
 const OMNI = { rights: ['read', 'write'], docs: { 'README.md': '# Omni\n', 'docs/a.md': '# A\n', 'docs/sub/b.md': '# B\n' } };
 const WISSEN = { rights: ['read'], docs: { 'x.md': 'x' } };
 
-// Die Erweiterung mit einem Node im Speicher; settings.collections wie übergeben (undefined:
-// ungesetzt).
-async function treeStart(collections, collectionsSetting) {
+// Die Erweiterung mit einem Node im Speicher; settings.collections wie übergeben, ohne Angabe
+// alle Collections des Nodes; UNSET: ungesetzt — dann zeigt der Baum die Collections des
+// Projekts (Task 045).
+const UNSET = Symbol('ungesetzt');
+async function treeStart(collections, collectionsSetting = Object.keys(collections)) {
   resetTokens();
   putToken('vm', 'kamran', TOKEN_A);
   putToken('home', 'kamran', TOKEN_B);
-  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {}, collections: collectionsSetting });
+  Object.assign(settings, { nodeUrl: 'http://127.0.0.1:7433', hubs: [], accounts: {},
+    collections: collectionsSetting === UNSET ? undefined : collectionsSetting });
   const node = memNode(collections);
   reply = node;
   start();
   await settle();
   return node;
 }
+
+const kfolder = (p, name = `Keph ${p}`) => ({ name, uri: Uri.parse(`keph://vm${p}`) });
+const folderUris = () => vscode.workspace.workspaceFolders.map((f) => f.uri.toString());
+// Wartet, bis die Warteschlange der Erweiterung leer ist (Ereignisse kommen nach 5 ms).
+const quiet = () => new Promise((r) => setTimeout(r, 120));
+// Projektordner im temporären HOME: pfolder ohne Datei, projectFolder mit
+// .k-playbook/K-PLAYBOOK.yaml (text; undefined: ohne Datei), puri die URI als Text.
+const wsDir = path.join(home, 'ws');
+const pfolder = (name) => ({ name, uri: Uri.file(path.join(wsDir, name)) });
+const puri = (name) => `file://${path.join(wsDir, name)}`;
+const projectFile = (name) => path.join(wsDir, name, '.k-playbook', 'K-PLAYBOOK.yaml');
+function projectFolder(name, text) {
+  fs.rmSync(path.join(wsDir, name), { recursive: true, force: true });
+  if (text !== undefined) putConfig(projectFile(name), text);
+  else fs.mkdirSync(path.join(wsDir, name), { recursive: true });
+  return pfolder(name);
+}
+const block = (hub, collection) => `version: 1\nkephalaion:\n  # die Collection des Projekts\n  hub: ${hub}\n  collection: ${collection}\n`;
+// Ein Ereignis des Watchers für die Datei des Projektordners name (create, change, delete).
+function fileEvent(name, kind = 'change') {
+  const w = watchers.find((x) => !x.disposed && x.pattern.base.uri.toString() === puri(name));
+  assert.ok(w, `kein Watcher für ${name}`);
+  assert.strictEqual(w.pattern.pattern, '.k-playbook/K-PLAYBOOK.yaml');
+  for (const fn of [...w.on[kind]]) fn(Uri.file(projectFile(name)));
+}
+const roots = async () => (await treeView.provider.getChildren()).map((r) => treeView.provider.getTreeItem(r).label);
 
 const tp = () => treeView.provider;
 const label = (n) => {
@@ -1328,13 +1391,13 @@ function treeEvents() {
   return seen;
 }
 
-test('Baum: Wurzel ungesetzt alle lesbaren, gesetzt genau diese mit Hinweis', async () => {
+test('Baum: Wurzel gesetzt genau diese, mit Hinweis', async () => {
   try {
     await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'home:notizen': { rights: ['read', 'write'] } });
     assert.strictEqual(treeView.id, 'kephalaion.collections');
-    const roots = await tp().getChildren();
-    assert.deepStrictEqual(roots.map((r) => tp().getTreeItem(r).label), ['vm:omni', 'vm:wissen', 'home:notizen']);
-    const items = roots.map((r) => tp().getTreeItem(r));
+    const top = await tp().getChildren();
+    assert.deepStrictEqual(top.map((r) => tp().getTreeItem(r).label), ['vm:omni', 'vm:wissen', 'home:notizen']);
+    const items = top.map((r) => tp().getTreeItem(r));
     assert.deepStrictEqual(items.map((i) => [i.description, i.contextValue, i.collapsibleState]),
       [[undefined, 'collection-writable', 1], ['nur lesen', 'collection-readonly', 1], [undefined, 'collection-writable', 1]]);
     assert.strictEqual(items[0].id, 'keph://vm/omni');
@@ -1351,8 +1414,177 @@ test('Baum: Wurzel ungesetzt alle lesbaren, gesetzt genau diese mit Hinweis', as
     const fremd = tp().getTreeItem(set[1]);
     assert.deepStrictEqual([fremd.description, fremd.contextValue, fremd.collapsibleState], ['nicht lesbar', 'collection-unreadable', 0]);
     assert.deepStrictEqual(await tp().getChildren(set[1]), []);
+    assert.match(fremd.tooltip, /in kephalaion\.collections prüfen/);
     settings.collections = [];
     assert.deepStrictEqual(await tp().getChildren(), [], 'leer gesetzt: kein Knoten (viewsWelcome)');
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+// --- Die Collection des Projekts (Task 045) ---
+
+const OWN = { rights: ['read', 'write'], docs: { 'docs/own.md': '# Own\n' } };
+
+test('Baum ungesetzt: Wurzel aus der K-PLAYBOOK.yaml der Projektordner, ohne Datei leer, die Einstellung geht vor', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [projectFolder('p1', block('vm', 'kephalaion-dev')), projectFolder('ohne'),
+      projectFolder('p2', block('home', 'notizen')), projectFolder('p3', block('vm', 'kephalaion-dev'))];
+    await treeStart({ 'vm:omni': OMNI, 'vm:kephalaion-dev': OWN, 'home:notizen': { rights: ['read'] } }, UNSET);
+    await quiet();
+    // In der Reihenfolge der Projektordner, doppelte einmal; ein Ordner ohne Datei still.
+    assert.deepStrictEqual(await roots(), ['vm:kephalaion-dev', 'home:notizen']);
+    assert.deepStrictEqual(await childNames(await nodeAt('vm:kephalaion-dev')), ['docs']);
+    assert.ok(!logs.some((l) => l.includes(`${puri('ohne')}/.k-playbook`)), 'fehlende Datei ist still');
+    assert.deepStrictEqual(settingUpdates, [], 'Lesen schreibt nichts');
+    // Je Projektordner ein Watcher.
+    assert.deepStrictEqual(watchers.map((w) => w.pattern.base.uri.toString()), [puri('p1'), puri('ohne'), puri('p2'), puri('p3')]);
+    // Gesetzt geht die Einstellung vor.
+    settings.collections = ['vm:omni'];
+    await configChanged('kephalaion.collections');
+    assert.deepStrictEqual(await roots(), ['vm:omni']);
+
+    // Nur ein Projektordner ohne Datei, ungesetzt: leer.
+    settings.collections = undefined;
+    vscode.workspace.workspaceFolders = [projectFolder('ohne')];
+    await workspaceChanged();
+    await quiet();
+    assert.deepStrictEqual(await roots(), [], 'ohne Datei: leer (viewsWelcome)');
+    assert.deepStrictEqual(watchers.filter((w) => !w.disposed).map((w) => w.pattern.base.uri.toString()), [puri('ohne')],
+      'die Watcher verschwundener Ordner sind abgemeldet');
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Baum ungesetzt: eine Änderung der Datei baut den Baum neu auf; ungültig oder nicht lesbar eine Logzeile', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [projectFolder('p', block('vm', 'kephalaion-dev'))];
+    await treeStart({ 'vm:omni': OMNI, 'vm:kephalaion-dev': OWN }, UNSET);
+    await quiet();
+    assert.deepStrictEqual(await roots(), ['vm:kephalaion-dev']);
+    const events = treeEvents();
+    putConfig(projectFile('p'), block('vm', 'omni'));
+    fileEvent('p', 'change');
+    await quiet();
+    assert.deepStrictEqual(events, [undefined], 'die Datei lädt den ganzen Baum neu');
+    assert.deepStrictEqual(await roots(), ['vm:omni']);
+
+    // Ungültig: eine Logzeile, auch bei der nächsten Änderung mit demselben Fehler; kein Baum.
+    const mark = logs.length;
+    putConfig(projectFile('p'), 'kephalaion:\n  hub: vm\n');
+    fileEvent('p', 'change');
+    await quiet();
+    assert.deepStrictEqual(await roots(), []);
+    fileEvent('p', 'change');
+    await quiet();
+    const bad = logs.slice(mark).filter((l) => l.includes('fehlt collection'));
+    assert.strictEqual(bad.length, 2, 'eine Logzeile je Änderung');
+    assert.ok(bad[0].includes(`${puri('p')}/.k-playbook/K-PLAYBOOK.yaml`));
+    // Ein Ordnerereignis liest neu, ohne den unveränderten Fehler noch einmal zu melden.
+    await workspaceChanged();
+    await quiet();
+    assert.strictEqual(logs.slice(mark).filter((l) => l.includes('fehlt collection')).length, 2);
+
+    // Nicht lesbar (hier: ein Verzeichnis statt der Datei) hält nichts auf.
+    fs.rmSync(projectFile('p'));
+    fs.mkdirSync(projectFile('p'));
+    fileEvent('p', 'create');
+    await quiet();
+    assert.ok(logs.slice(mark).some((l) => l.includes('K-PLAYBOOK.yaml nicht lesbar')));
+    assert.deepStrictEqual(await roots(), []);
+    fs.rmSync(projectFile('p'), { recursive: true });
+    putConfig(projectFile('p'), block('vm', 'kephalaion-dev'));
+    fileEvent('p', 'create');
+    await quiet();
+    assert.deepStrictEqual(await roots(), ['vm:kephalaion-dev']);
+    // Die nicht lesbare Collection des Projekts erscheint mit Hinweis auf die Datei.
+    putConfig(projectFile('p'), block('vm', 'fremd'));
+    fileEvent('p', 'change');
+    await quiet();
+    const [fremd] = await tp().getChildren();
+    assert.deepStrictEqual([tp().getTreeItem(fremd).label, tp().getTreeItem(fremd).description], ['vm:fremd', 'nicht lesbar']);
+    assert.match(tp().getTreeItem(fremd).tooltip, /Block kephalaion: der \.k-playbook\/K-PLAYBOOK\.yaml/);
+    // Gelöscht: leer.
+    fs.rmSync(projectFile('p'));
+    fileEvent('p', 'delete');
+    await quiet();
+    assert.deepStrictEqual(await roots(), []);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Herausnehmen ungesetzt beim Aktivieren: eigene und herausgenommene, auch wenn readFile spät antwortet', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [projectFolder('kp', block('vm', 'kephalaion-dev')), kfolder('/omni')];
+    vscode.workspace.workspaceFolders.forEach((f, i) => { f.index = i; });
+    let reads = 0;
+    readFileGate = (u) => {
+      if (!u.path.endsWith('K-PLAYBOOK.yaml')) return undefined;
+      reads++;
+      return new Promise((r) => setTimeout(r, 150));
+    };
+    await treeStart({ 'vm:omni': OMNI, 'vm:kephalaion-dev': OWN }, UNSET);
+    assert.strictEqual(reads, 1, 'das Lesen läuft');
+    assert.deepStrictEqual(folderUpdates, [], 'herausgenommen erst nach dem Lesen');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepStrictEqual(folderUpdates, [[1, 1]]);
+    // Das Ordnerereignis liest noch einmal: abwarten, damit nichts in den nächsten Test läuft.
+    await new Promise((r) => setTimeout(r, 250));
+    assert.deepStrictEqual(folderUris(), [puri('kp')]);
+    assert.deepStrictEqual(watchers.map((w) => w.pattern.base.uri.toString()), [puri('kp')], 'kein Watcher für keph://');
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections'),
+      [{ key: 'collections', value: ['vm:kephalaion-dev', 'vm:omni'], target: 2 }]);
+    assert.deepStrictEqual(await roots(), ['vm:kephalaion-dev', 'vm:omni']);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Herausnehmen ungesetzt: ist die Collection schon gezeigt, bleibt die Einstellung ungesetzt', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [projectFolder('kp', block('vm', 'omni')), kfolder('/omni/docs')];
+    vscode.workspace.workspaceFolders.forEach((f, i) => { f.index = i; });
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN }, UNSET);
+    await quiet();
+    assert.deepStrictEqual(folderUris(), [puri('kp')]);
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections'), [], 'ungesetzt bleibt ungesetzt');
+    assert.deepStrictEqual(await roots(), ['vm:omni']);
+  } finally {
+    reply = null;
+    settings.collections = undefined;
+  }
+});
+
+test('Zeigen und nehmen ungesetzt: warten auf das laufende Lesen, dann eigene plus gewählte', async () => {
+  try {
+    vscode.workspace.workspaceFolders = [projectFolder('kp', block('vm', 'kephalaion-dev'))];
+    readFileGate = (u) => (u.path.endsWith('K-PLAYBOOK.yaml') ? new Promise((r) => setTimeout(r, 150)) : undefined);
+    await treeStart({ 'vm:omni': OMNI, 'vm:kephalaion-dev': OWN, 'vm:wissen': WISSEN }, UNSET);
+    // Noch während des Lesens aufgerufen: das Angebot kennt die eigene schon als gezeigt.
+    let offered;
+    await withWindow({ showQuickPick: async (items) => { offered = items; return items.find((i) => i.label === 'vm:omni'); } },
+      () => registered['kephalaion.showInTree']());
+    assert.deepStrictEqual(offered.map((i) => i.label), ['vm:omni', 'vm:wissen']);
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['vm:kephalaion-dev', 'vm:omni'], target: 2 });
+    readFileGate = undefined;
+    // Ab dem ersten Schreiben zählt die Datei nicht mehr.
+    putConfig(projectFile('kp'), block('vm', 'wissen'));
+    fileEvent('kp', 'change');
+    await quiet();
+    assert.deepStrictEqual(await roots(), ['vm:kephalaion-dev', 'vm:omni']);
+    // Die Einstellung entfernt: wieder die Datei; „aus dem Baum nehmen“ der eigenen schreibt sie ohne sie.
+    settings.collections = undefined;
+    await configChanged('kephalaion.collections');
+    assert.deepStrictEqual(await roots(), ['vm:wissen']);
+    await registered['kephalaion.hideFromTree'](await nodeAt('vm:wissen'));
+    assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: [], target: 2 });
+    assert.deepStrictEqual(await roots(), [], 'die eigene bleibt weg, bis man sie wieder zeigt');
   } finally {
     reply = null;
     settings.collections = undefined;
@@ -1804,21 +2036,16 @@ test('Suchen: search des Nodes, nur gezeigte Collections, Treffer öffnet an der
 
 // --- Auswahl der Collections und das Herausnehmen der keph://-Ordner (Task 043 Etappe 6, Task 044) ---
 
-const kfolder = (p, name = `Keph ${p}`) => ({ name, uri: Uri.parse(`keph://vm${p}`) });
-const pfolder = (name) => ({ name, uri: Uri.file(`/home/k/${name}`) });
-const folderUris = () => vscode.workspace.workspaceFolders.map((f) => f.uri.toString());
-// Wartet, bis die Warteschlange der Erweiterung leer ist (Ereignisse kommen nach 5 ms).
-const quiet = () => new Promise((r) => setTimeout(r, 120));
 
-test('Auswahl: zeigen und herausnehmen schreiben kephalaion.collections auf Workspace-Ebene, ungesetzt von den gezeigten aus', async () => {
+test('Auswahl: zeigen und herausnehmen schreiben kephalaion.collections auf Workspace-Ebene, ohne Workspace beim Benutzer', async () => {
   try {
     vscode.workspace.workspaceFolders = [pfolder('projekt')];
     await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN, 'home:notizen': { rights: ['read'] } });
-    // Ungesetzt zeigt der Baum alle: „zeigen“ hat nichts anzubieten.
+    // Alle lesbaren sind schon gezeigt: „zeigen“ hat nichts anzubieten.
     await registered['kephalaion.showInTree']();
     assert.match(shownInfos.pop(), /schon im Baum/);
     assert.deepStrictEqual(settingUpdates, []);
-    // Herausnehmen aus dem Kontextmenü: das erste Mal die gezeigten minus diese.
+    // Herausnehmen aus dem Kontextmenü: der Wert minus diese.
     await registered['kephalaion.hideFromTree'](await nodeAt('vm:wissen'));
     assert.deepStrictEqual(settingUpdates.pop(), { key: 'collections', value: ['vm:omni', 'home:notizen'], target: 2 });
     // Zeigen: nur die nicht gezeigten, ans Ende.
@@ -1848,7 +2075,7 @@ test('Herausnehmen ohne Einstellung: nur keph://-Ordner heraus, Bereich für Ber
     await quiet();
     assert.deepStrictEqual(folderUpdates, [[4, 1], [1, 2]]);
     assert.strictEqual(folderOverlaps, 0, 'ein Aufruf vor dem Ereignis des vorigen');
-    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt', 'file:///home/k/zwei', 'file:///home/k/drei']);
+    assert.deepStrictEqual(folderUris(), [puri('projekt'), puri('zwei'), puri('drei')]);
     // Gesetzte Einstellung: die Collections der Ordner kommen dazu (Unterpfad abgeschnitten).
     assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections').map((u) => u.value),
       [['vm:aus', 'vm:omni', 'vm:wissen']]);
@@ -1863,7 +2090,7 @@ test('Herausnehmen ohne Einstellung: nur keph://-Ordner heraus, Bereich für Ber
     await workspaceChanged();
     await quiet();
     assert.deepStrictEqual(folderUpdates, [[3, 1]]);
-    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt', 'file:///home/k/zwei', 'file:///home/k/drei']);
+    assert.deepStrictEqual(folderUris(), [puri('projekt'), puri('zwei'), puri('drei')]);
     assert.strictEqual(workspaceStore.has('kephalaion.removedFolders'), false);
     // Ein geänderter Wert der alten Einstellung hängt nichts wieder ein.
     folderUpdates.length = 0;
@@ -1878,14 +2105,15 @@ test('Herausnehmen ohne Einstellung: nur keph://-Ordner heraus, Bereich für Ber
   }
 });
 
-test('Herausnehmen: ungesetzte kephalaion.collections bleibt ungesetzt, Index 0, Neustart mitten im Herausnehmen', async () => {
+test('Herausnehmen ungesetzt ohne Collection des Projekts: die Collections in die Einstellung, Index 0, Neustart mitten im Herausnehmen', async () => {
   try {
     vscode.workspace.workspaceFolders = [kfolder('/omni'), pfolder('projekt'), kfolder('/wissen')];
-    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN });
+    await treeStart({ 'vm:omni': OMNI, 'vm:wissen': WISSEN }, UNSET);
     await quiet();
     assert.deepStrictEqual(folderUpdates, [[2, 1], [0, 1]]);
     assert.ok(logs.some((l) => l.includes('Index 0: VS Code startet den Extension Host neu')));
-    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections'), [], 'ungesetzt bleibt ungesetzt');
+    // Der Baum zeigt keine: Keine Collection verschwindet still.
+    assert.deepStrictEqual(settingUpdates.filter((u) => u.key === 'collections').map((u) => u.value), [['vm:omni', 'vm:wissen']]);
     // Neustart, als wäre der Ordner an Index 0 noch da (VS Code startete vor dem Ereignis neu):
     // der Plan entsteht neu aus dem Ist-Zustand.
     stop();
@@ -1894,9 +2122,11 @@ test('Herausnehmen: ungesetzte kephalaion.collections bleibt ungesetzt, Index 0,
     start();
     await quiet();
     assert.deepStrictEqual(folderUpdates, [[0, 1]]);
-    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt']);
+    assert.deepStrictEqual(folderUris(), [puri('projekt')]);
+    assert.deepStrictEqual(settings.collections, ['vm:omni', 'vm:wissen']);
   } finally {
     reply = null;
+    settings.collections = undefined;
   }
 });
 
@@ -1925,7 +2155,7 @@ test('Herausnehmen: der Schlüssel kephalaion.removedFolders aus der Zeit vor Ta
     await quiet();
     assert.strictEqual(workspaceStore.has('kephalaion.removedFolders'), false);
     assert.deepStrictEqual(folderUpdates, []);
-    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt']);
+    assert.deepStrictEqual(folderUris(), [puri('projekt')]);
   } finally {
     reply = null;
   }
@@ -1958,7 +2188,7 @@ test('Kein Befehl hängt einen Workspace-Ordner ein; die Befehle und die Einstel
       });
     await quiet();
     assert.deepStrictEqual(folderUpdates.filter((u) => u.length > 2), []);
-    assert.deepStrictEqual(folderUris(), ['file:///home/k/projekt']);
+    assert.deepStrictEqual(folderUris(), [puri('projekt')]);
   } finally {
     reply = null;
     settings.collections = undefined;

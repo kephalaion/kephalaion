@@ -82,7 +82,7 @@
       {
         "view": "kephalaion.collections",
         "when": "kephalaion.signedIn",
-        "contents": "Keine Collection im Baum.\n[Collection im Baum zeigen](command:kephalaion.showInTree)\n[Status anzeigen](command:kephalaion.showStatus)"
+        "contents": "Keine Collection im Baum. Die Collection des Projekts kommt aus dem Block `kephalaion:` (`hub`, `collection`) der Datei `.k-playbook/K-PLAYBOOK.yaml` im Projektordner, oder aus der Einstellung `kephalaion.collections`.\n[Collection im Baum zeigen](command:kephalaion.showInTree)\n[Status anzeigen](command:kephalaion.showStatus)"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -114,7 +114,7 @@
           "type": "array",
           "items": { "type": "string" },
           "scope": "window",
-          "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Ungesetzt: alle lesbaren Collections der genutzten Hubs. Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“ schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist (`.code-workspace` bzw. `.vscode/settings.json`)."
+          "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Gesetzt geht sie vor. Ungesetzt: die Collection des Projekts, die `hub` und `collection` im Block `kephalaion:` von `.k-playbook/K-PLAYBOOK.yaml` im Projektordner nennen (ohne die Datei ist der Baum leer). Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“ schreiben sie — ungesetzt von den gezeigten aus, danach zählt die Datei nicht mehr — auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist (`.code-workspace` bzw. `.vscode/settings.json`)."
         },
         "kephalaion.mcpServer.enabled": {
           "type": "boolean",

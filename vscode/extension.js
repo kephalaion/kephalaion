@@ -1360,13 +1360,115 @@ function signedIn(status) {
   return Boolean(status.who && !status.who.hidden && status.hubs().some((h) => h.login === 'ok'));
 }
 
+// Die Datei unter einem Projektordner, deren Block kephalaion: die Collection des Projekts nennt.
+const PROJECT_FILE = '.k-playbook/K-PLAYBOOK.yaml';
+
+// Die Collections des Projekts (Task 045; docs/begriffe.md, „project collection“): je
+// Projektordner (file und vscode-remote) die Adresse aus <ordner>/.k-playbook/K-PLAYBOOK.yaml,
+// gelesen über workspace.fs, nicht weiter oben. addresses in der Reihenfolge der Ordner, jede
+// einmal. schedule(fn) reiht das Lesen in die Warteschlange der Workspace-Ordner ein (Festlegung
+// 6); ready ist das zuletzt eingereihte Lesen, auf das die Befehle warten. Ein Watcher je Ordner
+// liest nach jeder Änderung der Datei neu. Eine fehlende Datei ist still; eine nicht lesbare oder
+// ungültige ergibt eine Logzeile je Ordner und Änderung (Festlegung 5) und hält nichts auf.
+class ProjectCollections {
+  constructor(log, schedule) {
+    this.log = log;
+    this.schedule = schedule;
+    this.addresses = [];
+    this.ready = Promise.resolve();
+    this.watchers = new Map();
+    this.notes = new Map();
+    this._changed = new vscode.EventEmitter();
+    this.onChanged = this._changed.event;
+  }
+
+  // Neu lesen, eingereiht; changed ist der Ordner, dessen Datei sich geändert hat (seine Logzeile
+  // kommt auch, wenn sie gleich lautet).
+  refresh(changed) {
+    this.ready = this.schedule(() => this.read(changed));
+    return this.ready;
+  }
+
+  folders() {
+    return (vscode.workspace.workspaceFolders || []).filter((f) => f.uri.scheme === 'file' || f.uri.scheme === 'vscode-remote');
+  }
+
+  // Ein Watcher je Projektordner; die Watcher verschwundener Ordner werden abgemeldet.
+  watch(folders) {
+    const keys = new Set(folders.map((f) => f.uri.toString()));
+    for (const [k, w] of this.watchers) {
+      if (keys.has(k)) continue;
+      w.dispose();
+      this.watchers.delete(k);
+      this.notes.delete(k);
+    }
+    for (const f of folders) {
+      const k = f.uri.toString();
+      if (this.watchers.has(k)) continue;
+      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(f, PROJECT_FILE));
+      const again = () => this.refresh(k);
+      w.onDidCreate(again);
+      w.onDidChange(again);
+      w.onDidDelete(again);
+      this.watchers.set(k, w);
+    }
+  }
+
+  async read(changed) {
+    if (this.disposed) return;
+    const folders = this.folders();
+    this.watch(folders);
+    const found = [];
+    for (const f of folders) {
+      const a = await this.readOne(f, changed);
+      if (a && !found.includes(a)) found.push(a);
+    }
+    if (this.disposed) return;
+    const before = JSON.stringify(this.addresses);
+    this.addresses = found;
+    if (JSON.stringify(found) !== before) {
+      this.log(`Baum: Collection des Projekts ${found.length ? found.join(', ') : '(keine)'}`);
+      this._changed.fire(found);
+    }
+  }
+
+  // Die Adresse aus der Datei eines Ordners, undefined ohne gültigen Block.
+  async readOne(folder, changed) {
+    const key = folder.uri.toString();
+    const uri = vscode.Uri.joinPath(folder.uri, ...PROJECT_FILE.split('/'));
+    let note;
+    let address;
+    try {
+      const r = rules.parseProjectCollection(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
+      if (r.address) address = r.address;
+      else note = `${uri.toString()}: ${r.reason} — keine Collection des Projekts aus diesem Ordner`;
+    } catch (e) {
+      if (!e || e.code !== 'FileNotFound') {
+        note = `${uri.toString()} nicht lesbar (${(e && (e.code || e.message)) || 'Fehler'}) — keine Collection des Projekts aus diesem Ordner`;
+      }
+    }
+    if (note && (this.notes.get(key) !== note || changed === key)) this.log(`Baum: ${note}`);
+    if (note) this.notes.set(key, note);
+    else this.notes.delete(key);
+    return address;
+  }
+
+  dispose() {
+    this.disposed = true;
+    for (const w of this.watchers.values()) w.dispose();
+    this.watchers.clear();
+    this._changed.dispose();
+  }
+}
+
 // Ein Element des Baums: kind collection, directory oder document; dazu hub, collection, name
 // (Pfad in der Collection, leer für die Collection) und uri. Je URI gibt es genau ein Objekt:
 // VS Code erkennt ein Element für refresh und reveal an seiner Identität.
 class CollectionTree {
-  constructor(kfs, status, log) {
+  constructor(kfs, status, project, log) {
     this.kfs = kfs;
     this.status = status;
+    this.project = project;
     this.log = log;
     this.nodes = new Map();
     this.shape = '';
@@ -1375,12 +1477,13 @@ class CollectionTree {
     this.onDidChangeTreeData = this._changed.event;
     kfs.onDidChangeFile((events) => this.filesChanged(events));
     status.onChanged(() => this.reshape(false));
+    project.onChanged(() => this.reshape(false));
   }
 
-  // Die gezeigten Collections nach Einstellung und whoami (rules.shownCollections).
+  // Die gezeigten Collections nach Einstellung, Collections des Projekts und whoami
+  // (rules.shownCollections).
   shown() {
-    const readable = readableCollections(this.status);
-    return rules.shownCollections(collectionsSetting(), readable, readable.map((c) => c.address));
+    return rules.shownCollections(collectionsSetting(), readableCollections(this.status), this.project.addresses);
   }
 
   // Der Eintrag einer gezeigten Collection, undefined, wenn sie nicht gezeigt ist.
@@ -1516,7 +1619,7 @@ class CollectionTree {
       if (!readable) {
         item.description = 'nicht lesbar';
         item.tooltip = `${item.label}: whoami meldet diese Collection nicht als lesbar — Anmeldung, Recht oder Schreibweise `
-          + 'in kephalaion.collections prüfen';
+          + (collectionsSetting() === undefined ? `im Block kephalaion: der ${PROJECT_FILE} prüfen` : 'in kephalaion.collections prüfen');
         item.contextValue = 'collection-unreadable';
       } else {
         if (!writable) item.description = 'nur lesen';
@@ -1833,9 +1936,11 @@ function changeFolders(log, start, deleteCount, ...add) {
 
 // Nimmt die keph://-Ordner aus dem Workspace, jedes Mal aus dem Ist-Zustand und seit Task 044
 // ohne Einstellung: nach rules.folderRemovalPlan Bereich für Bereich von hinten, vorher ihre
-// Collections in kephalaion.collections, wenn die Einstellung gesetzt ist, damit der Baum sie
-// zeigt. Index 0 startet den Extension Host neu, danach geht es beim Aktivieren weiter. Ein
-// Workspace nur aus keph://-Ordnern bleibt.
+// Collections in kephalaion.collections, damit der Baum sie zeigt — wenn die Einstellung gesetzt
+// ist oder eine davon nicht gezeigt wird (rules.removalWritesSetting, Task 045 Festlegung 4).
+// Läuft in der Warteschlange nach dem Lesen der Collections des Projekts (Festlegung 6). Index 0
+// startet den Extension Host neu, danach geht es beim Aktivieren weiter. Ein Workspace nur aus
+// keph://-Ordnern bleibt.
 async function syncWorkspaceFolders(tree, log, state) {
   const folders = (vscode.workspace.workspaceFolders || []).map((f, i) => ({
     scheme: f.uri.scheme, authority: f.uri.authority, path: f.uri.path, uri: f.uri.toString(), name: f.name,
@@ -1853,7 +1958,9 @@ async function syncWorkspaceFolders(tree, log, state) {
   }
   if (!plan.ranges.length) return;
   for (const s of plan.subpaths) log(`Workspace-Ordner: ${s.uri} zeigt nur einen Teil — im Baum als ganze Collection ${s.address}`);
-  if (collectionsSetting() !== undefined) await writeCollections(tree, plan.collections, [], log);
+  if (rules.removalWritesSetting(collectionsSetting(), plan.collections, tree.shown().map((c) => c.address))) {
+    await writeCollections(tree, plan.collections, [], log);
+  }
   log(`Workspace-Ordner: nehme heraus: ${plan.removed.map((r) => r.uri).join(', ')}`
     + `${plan.touchesFirst ? ' (Index 0: VS Code startet den Extension Host neu)' : ''}`);
   for (const r of plan.ranges) {
@@ -1862,9 +1969,12 @@ async function syncWorkspaceFolders(tree, log, state) {
 }
 
 // „Collection im Baum zeigen“ und „… aus dem Baum nehmen“; sie schreiben kephalaion.collections
-// nur auf Aufruf (Festlegung 4).
+// nur auf Aufruf (Festlegung 4). Beide warten auf das laufende Lesen der Collections des Projekts
+// (Task 045, Festlegung 6), sonst gälte die eigene als nicht gezeigt; in die Warteschlange gehen
+// sie nicht, damit eine offene Auswahl das Herausnehmen nicht aufhält.
 function selectionCommands(tree, status, log) {
   const showInTree = async () => {
+    await tree.project.ready;
     await status.refresh();
     const shown = new Set(tree.shown().map((c) => c.address));
     const items = readableCollections(status).filter((c) => !shown.has(c.address))
@@ -1883,6 +1993,7 @@ function selectionCommands(tree, status, log) {
     }
   };
   const hideFromTree = async (n) => {
+    await tree.project.ready;
     let address = n && n.kind === 'collection' ? `${n.hub}:${n.collection}` : undefined;
     if (!address) {
       const items = tree.shown().map((c) => ({ label: c.address, description: c.readable ? '' : 'nicht lesbar' }));
@@ -2034,7 +2145,16 @@ function activate(context) {
   const node = new Node(log, () => status && status.render());
   status = new Status(node, log);
   const kfs = new KephFs(node, status, log);
-  const tree = new CollectionTree(kfs, status, log);
+  // Eine Warteschlange für Aktivierung, Ordnerereignis und das Lesen der Collections des Projekts
+  // (Task 044 Festlegung 6, Task 045 Festlegung 6): Das Herausnehmen der keph://-Ordner überholt
+  // sich nicht und läuft erst nach dem Lesen.
+  let folderQueue = Promise.resolve();
+  const enqueue = (fn) => {
+    folderQueue = folderQueue.then(fn).catch((e) => log(`Workspace-Ordner: ${e.message}`));
+    return folderQueue;
+  };
+  const project = new ProjectCollections(log, enqueue);
+  const tree = new CollectionTree(kfs, status, project, log);
   const view = vscode.window.createTreeView(VIEW_ID, {
     treeDataProvider: tree,
     showCollapseAll: true,
@@ -2053,20 +2173,17 @@ function activate(context) {
     });
   };
 
-  // Eine Warteschlange für Aktivierung und Ordnerereignis (Festlegung 6): Das Herausnehmen der
-  // keph://-Ordner überholt sich nicht. Zuerst wird der Schlüssel aus der Zeit vor Task 044
-  // geleert.
-  let folderQueue = Promise.resolve();
-  const enqueue = (fn) => {
-    folderQueue = folderQueue.then(fn).catch((e) => log(`Workspace-Ordner: ${e.message}`));
-    return folderQueue;
-  };
+  // Zuerst wird der Schlüssel aus der Zeit vor Task 044 geleert; dann beim Aktivieren und nach
+  // jeder Änderung der Workspace-Ordner erst die Collections des Projekts lesen, dann herausnehmen.
   const folderState = {};
-  const syncFolders = () => enqueue(() => syncWorkspaceFolders(tree, log, folderState));
+  const syncFolders = () => {
+    project.refresh();
+    return enqueue(() => syncWorkspaceFolders(tree, log, folderState));
+  };
   if (context.workspaceState.get(REMOVED_FOLDERS) !== undefined) {
     enqueue(() => context.workspaceState.update(REMOVED_FOLDERS, undefined));
   }
-  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(syncFolders));
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(syncFolders), project);
   syncFolders();
 
   for (const [id, fn] of Object.entries({ ...treeCommands(tree, view, log), ...findCommands(tree, kfs, node, log),
