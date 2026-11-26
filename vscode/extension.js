@@ -1379,7 +1379,8 @@ class CollectionTree {
 
   // Die gezeigten Collections nach Einstellung und whoami (rules.shownCollections).
   shown() {
-    return rules.shownCollections(collectionsSetting(), readableCollections(this.status));
+    const readable = readableCollections(this.status);
+    return rules.shownCollections(collectionsSetting(), readable, readable.map((c) => c.address));
   }
 
   // Der Eintrag einer gezeigten Collection, undefined, wenn sie nicht gezeigt ist.

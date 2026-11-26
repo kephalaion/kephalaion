@@ -415,10 +415,21 @@ Ausführlich: [`konzept.md`](konzept.md).
   zeigt, sagt **kephalaion.collections**.
 - **kephalaion.collections** — Einstellung der Erweiterung für VS Code (Liste von
   `<hub>:<collection>`, ohne Vorgabe): die Collections im **collection tree**, in dieser
-  Reihenfolge. Ungesetzt (auf keiner Ebene) zeigt der Baum alle lesbaren Collections der
-  genutzten Hubs. Gesetzt auch leer; eine Adresse, die `whoami` nicht als lesbar meldet,
-  erscheint als Knoten mit Hinweis. Geschrieben von „Kephalaion: Collection im Baum zeigen“
-  und „… aus dem Baum nehmen“, auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist.
+  Reihenfolge. Ungesetzt (auf keiner Ebene) zeigt der Baum seit Task 045 die **project
+  collection** jedes Projektordners, ohne eine keine (bis dahin alle lesbaren Collections der
+  genutzten Hubs). Gesetzt auch leer, und dann geht sie vor; eine Adresse, die `whoami` nicht
+  als lesbar meldet, erscheint als Knoten mit Hinweis. Geschrieben von „Kephalaion: Collection
+  im Baum zeigen“ und „… aus dem Baum nehmen“ — ungesetzt von den gezeigten aus — und beim
+  Herausnehmen eines `keph://`-Ordners, dessen Collection nicht gezeigt wird; auf
+  Workspace-Ebene, wenn ein Workspace oder Ordner offen ist.
+- **project collection** (Collection des Projekts, Task 045) — die Collection, die die
+  `.k-playbook/K-PLAYBOOK.yaml` eines Projektordners (`file` oder `vscode-remote`) im Block
+  `kephalaion:` nennt, als `<hub>:<collection>` aus `hub` und `collection`; die Datei ist die
+  Konfiguration von k-playbook im Projekt. Die Erweiterung für VS Code liest davon nur diese
+  beiden Werte und nur `<ordner>/.k-playbook/K-PLAYBOOK.yaml` selbst, nicht aufwärts wie
+  k-playbook. Sie bestimmt, was der **collection tree** zeigt, solange
+  **kephalaion.collections** ungesetzt ist. Regel `parseProjectCollection` in
+  `vscode/rules.js`.
 - **kephalaion.workspaceFolders** — Geschichte: bis Task 044 (2026-11-26) der Schalter der
   Erweiterung für VS Code für den alten Weg über `keph://`-Workspace-Ordner, seitdem entfallen;
   eine noch gesetzte Einstellung zeigt VS Code ausgegraut als unbekannt.

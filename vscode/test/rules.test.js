@@ -383,6 +383,7 @@ test('listen aus dem Abschnitt node: Standard, Port allein, kein Abschnitt', () 
 
 const {
   splitAddress, shownCollections, folderRemovalPlan, mergeCollections, dropTarget, headingLine,
+  parseProjectCollection, removalWritesSetting,
 } = require('../rules');
 
 const READABLE = [
@@ -396,10 +397,77 @@ test('splitAddress: hub und collection, sonst undefined', () => {
   for (const bad of ['', 'vm', 'vm:', ':omni', 'vm:omni/docs', undefined]) assert.strictEqual(splitAddress(bad), undefined, bad);
 });
 
-test('shownCollections: ungesetzt alle lesbaren, mit Schreibrecht', () => {
-  assert.deepStrictEqual(shownCollections(undefined, READABLE).map((c) => [c.address, c.readable, c.writable]),
-    [['vm:omni', true, true], ['vm:wissen', true, false], ['home:notizen', true, true]]);
-  assert.deepStrictEqual(shownCollections(undefined, []), []);
+test('shownCollections: ungesetzt die Collections des Projekts, ohne keine', () => {
+  const pick = (r) => r.map((c) => [c.address, c.readable, c.writable]);
+  assert.deepStrictEqual(shownCollections(undefined, READABLE), [], 'ohne Projekt-Collection: leer');
+  assert.deepStrictEqual(shownCollections(undefined, READABLE, []), []);
+  assert.deepStrictEqual(pick(shownCollections(undefined, READABLE, ['vm:wissen'])), [['vm:wissen', true, false]]);
+  // Zwei, in der Reihenfolge der Projektordner, doppelte einmal; eine nicht lesbare mit Kennzeichen.
+  assert.deepStrictEqual(pick(shownCollections(null, READABLE, ['home:notizen', 'vm:fremd', 'home:notizen'])),
+    [['home:notizen', true, true], ['vm:fremd', false, false]]);
+});
+
+test('shownCollections: eine gesetzte Einstellung geht vor die Collections des Projekts', () => {
+  assert.deepStrictEqual(shownCollections(['vm:omni'], READABLE, ['vm:wissen']).map((c) => c.address), ['vm:omni']);
+  assert.deepStrictEqual(shownCollections([], READABLE, ['vm:wissen']), [], 'leer gesetzt: keine');
+});
+
+test('parseProjectCollection: Block kephalaion: mit Kommentaren, Anführungszeichen, Kommentar hinter dem Wert', () => {
+  const want = { hub: 'vm', collection: 'kephalaion-dev', address: 'vm:kephalaion-dev' };
+  assert.deepStrictEqual(parseProjectCollection([
+    'version: 1',
+    'kephalaion:',
+    '  # Anbindung an die Collection dieses Projekts: der Alias des',
+    '  # Hubs (auf jedem Rechner gleich) und die Collection.',
+    '  hub: vm',
+    '  collection: kephalaion-dev',
+    '',
+    'maintenance:',
+    '  hub: anders',
+  ].join('\n')), want);
+  assert.deepStrictEqual(parseProjectCollection('kephalaion:  # Projekt\r\n  hub: "vm"\r\n  collection: \'kephalaion-dev\'\r\n'), want);
+  assert.deepStrictEqual(parseProjectCollection('kephalaion:\n    hub: vm   # der Alias\n    collection: kephalaion-dev # die Collection\n'), want);
+  assert.deepStrictEqual(parseProjectCollection('kephalaion:\n  hub: "vm" # x\n  collection: \'kephalaion-dev\' # y\n'), want);
+  // Andere Schlüssel im Block und tiefer Eingerücktes zählen nicht; der erste Wert gilt.
+  assert.deepStrictEqual(parseProjectCollection([
+    'kephalaion:',
+    '  account: egal',
+    '  extra:',
+    '    collection: tiefer',
+    '  hub: vm',
+    '  collection: kephalaion-dev',
+    '  collection: zweiter',
+  ].join('\n')), want);
+});
+
+test('parseProjectCollection: Block nicht auf oberster Ebene, fehlender Wert, ungültig', () => {
+  // Ein anderer Block gleichen Namens, tiefer eingerückt: kein Block auf oberster Ebene.
+  const nested = parseProjectCollection('projekt:\n  kephalaion:\n    hub: vm\n    collection: omni\n');
+  assert.match(nested.reason, /kein Block kephalaion: auf oberster Ebene/);
+  assert.strictEqual(nested.address, undefined);
+  assert.match(parseProjectCollection('').reason, /kein Block/);
+  assert.match(parseProjectCollection('# kephalaion:\n#   hub: vm\n').reason, /kein Block/);
+  assert.match(parseProjectCollection('kephalaion:\n  hub: vm\n').reason, /fehlt collection/);
+  assert.match(parseProjectCollection('kephalaion:\n  collection: omni\n').reason, /fehlt hub/);
+  assert.match(parseProjectCollection('kephalaion:\n  hub: ""\n  collection: # leer\n').reason, /fehlt hub und collection/);
+  // Der Block endet mit dem nächsten Schlüssel auf oberster Ebene.
+  assert.match(parseProjectCollection('kephalaion:\n  hub: vm\nanders:\n  collection: omni\n').reason, /fehlt collection/);
+  // Ein anderer Block gleichen Namens tiefer eingerückt im Block selbst zählt nicht.
+  assert.match(parseProjectCollection('kephalaion:\n  hub: vm\n  sub:\n    kephalaion:\n      collection: omni\n').reason,
+    /fehlt collection/);
+  assert.match(parseProjectCollection('kephalaion:\n  hub: VM Hub\n  collection: omni\n').reason, /kein gültiger Alias/);
+  assert.match(parseProjectCollection('kephalaion:\n  hub: vm\n  collection: omni/docs\n').reason, /kein Name einer Collection/);
+});
+
+test('removalWritesSetting: gesetzt immer, ungesetzt nur, wenn eine herausgenommene nicht gezeigt wird', () => {
+  assert.strictEqual(removalWritesSetting(['vm:omni'], ['vm:omni'], ['vm:omni']), true);
+  assert.strictEqual(removalWritesSetting([], [], []), true);
+  assert.strictEqual(removalWritesSetting(undefined, ['vm:omni'], ['vm:kephalaion-dev']), true);
+  assert.strictEqual(removalWritesSetting(undefined, ['vm:kephalaion-dev'], ['vm:kephalaion-dev']), false);
+  assert.strictEqual(removalWritesSetting(undefined, [], []), false);
+  assert.strictEqual(removalWritesSetting(null, ['vm:omni'], undefined), true);
+  // Zusammen mit mergeCollections: die gezeigte eigene und die herausgenommene.
+  assert.deepStrictEqual(mergeCollections(undefined, ['vm:omni'], [], ['vm:kephalaion-dev']), ['vm:kephalaion-dev', 'vm:omni']);
 });
 
 test('shownCollections: gesetzt genau diese, in dieser Reihenfolge, nicht lesbare mit Kennzeichen', () => {

@@ -436,21 +436,81 @@ function splitAddress(address) {
   return { hub, collection };
 }
 
-// Die gezeigten Collections (Festlegung 3): setting ist der Wert von kephalaion.collections oder
-// undefined, wenn sie auf keiner Ebene gesetzt ist; readable sind die lesbaren Collections aus
-// whoami ({ address, hub, collection, rights }), in der Reihenfolge der Hubs. Ungesetzt: alle
-// lesbaren. Gesetzt (auch leer): genau diese, in dieser Reihenfolge, jede Adresse einmal; eine,
-// die whoami nicht als lesbar meldet, mit readable: false statt still zu fehlen. Liefert
+// Der Wert eines Schlüssels in einer Zeile der K-PLAYBOOK.yaml, ohne YAML-Bibliothek: in
+// doppelten Anführungszeichen (mit \" und \\), in einfachen (mit ''), sonst bis zu einem
+// Kommentar „ #…“; leer ist undefined.
+function yamlScalar(raw) {
+  const s = String(raw || '').trim();
+  let v;
+  if (s.startsWith('"')) {
+    const m = /^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/.exec(s);
+    if (!m) return undefined;
+    v = m[1].replace(/\\(.)/g, '$1');
+  } else if (s.startsWith("'")) {
+    const m = /^'((?:[^']|'')*)'\s*(?:#.*)?$/.exec(s);
+    if (!m) return undefined;
+    v = m[1].replace(/''/g, "'");
+  } else {
+    v = s.replace(/(?:^|\s+)#.*$/, '');
+  }
+  v = v.trim();
+  return v || undefined;
+}
+
+// Die Collection des Projekts aus dem Text einer .k-playbook/K-PLAYBOOK.yaml (Task 045;
+// docs/begriffe.md, „project collection“): nur hub und collection direkt unter dem Schlüssel
+// kephalaion: auf oberster Ebene, ohne YAML-Bibliothek. Direkt darunter heißt: mit der Einrückung
+// des ersten Schlüssels im Block; tiefer Eingerücktes und andere Blöcke werden übergangen, ohne
+// sie zu deuten. Gilt der erste Wert eines Schlüssels. Liefert { hub, collection, address } oder
+// { reason }, wenn der Block fehlt, ein Wert fehlt oder keine Adresse ergibt.
+function parseProjectCollection(text) {
+  let inBlock = false;
+  let found = false;
+  let indent;
+  const values = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    if (!/^\s/.test(line)) {
+      inBlock = /^kephalaion:\s*(?:#.*)?$/.test(line);
+      if (inBlock) {
+        found = true;
+        indent = undefined;
+      }
+      continue;
+    }
+    if (!inBlock) continue;
+    const m = /^(\s+)([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(line);
+    if (!m) continue;
+    if (indent === undefined) indent = m[1];
+    if (m[1] !== indent) continue;
+    if ((m[2] === 'hub' || m[2] === 'collection') && !(m[2] in values)) values[m[2]] = yamlScalar(m[3]);
+  }
+  if (!found) return { reason: 'kein Block kephalaion: auf oberster Ebene' };
+  const missing = ['hub', 'collection'].filter((k) => !values[k]);
+  if (missing.length) return { reason: `im Block kephalaion: fehlt ${missing.join(' und ')}` };
+  const { hub, collection } = values;
+  if (!validAlias(hub)) return { reason: `hub „${hub}“ ist kein gültiger Alias` };
+  if (/[\s/:]/.test(collection)) return { reason: `collection „${collection}“ ist kein Name einer Collection` };
+  return { hub, collection, address: `${hub}:${collection}` };
+}
+
+// Die gezeigten Collections (Task 043, Festlegung 3; Task 045, Festlegung 1 bis 3): setting ist
+// der Wert von kephalaion.collections oder undefined, wenn sie auf keiner Ebene gesetzt ist;
+// readable sind die lesbaren Collections aus whoami ({ address, hub, collection, rights }),
+// project die Adressen der Collections des Projekts aus den K-PLAYBOOK.yaml der Projektordner,
+// in deren Reihenfolge. Gesetzt (auch leer) geht die Einstellung vor: genau diese, in dieser
+// Reihenfolge. Ungesetzt: die Collections des Projekts, ohne eine keine. Jede Adresse einmal;
+// eine, die whoami nicht als lesbar meldet, mit readable: false statt still zu fehlen. Liefert
 // [{ address, hub, collection, readable, writable }].
-function shownCollections(setting, readable) {
+function shownCollections(setting, readable, project) {
   const byAddress = new Map();
   for (const c of readable || []) byAddress.set(c.address, c);
   const entry = (c) => ({ address: c.address, hub: c.hub, collection: c.collection, readable: true,
     writable: (c.rights || []).includes('write') });
-  if (setting === undefined || setting === null) return (readable || []).map(entry);
+  const list = setting === undefined || setting === null ? project : setting;
   const out = [];
   const seen = new Set();
-  for (const raw of Array.isArray(setting) ? setting : []) {
+  for (const raw of Array.isArray(list) ? list : []) {
     const address = String(raw).trim();
     if (!address || seen.has(address)) continue;
     seen.add(address);
@@ -522,6 +582,16 @@ function mergeCollections(setting, add, remove, shownNow) {
     if (s && !drop.has(s) && !out.includes(s)) out.push(s);
   }
   return out;
+}
+
+// Ob das Herausnehmen der keph://-Ordner kephalaion.collections schreibt (Task 045, Festlegung
+// 4): gesetzt immer (ihre Collections kommen dazu, wie bisher); ungesetzt, sobald eine der
+// herausgenommenen Collections (collections) nicht unter den gezeigten (shownNow) ist — sonst
+// verschwände sie still. Geschrieben wird dann mit mergeCollections von den gezeigten aus.
+function removalWritesSetting(setting, collections, shownNow) {
+  if (setting !== undefined && setting !== null) return true;
+  const shown = new Set(shownNow || []);
+  return (collections || []).some((a) => !shown.has(a));
 }
 
 // Wohin ein Ablegen im Baum geht (Festlegung 8). target ist das Element, auf das abgelegt wird
@@ -610,4 +680,5 @@ module.exports = {
   droppedHubs, PROXY_HINT, userConfigDir, locateConfig, configSourceText, parseNodeListen, DEFAULT_NODE_LISTEN,
   resolveAccount, parseDefaultAccount, choiceText,
   splitAddress, shownCollections, folderRemovalPlan, mergeCollections, dropTarget, headingLine,
+  parseProjectCollection, removalWritesSetting,
 };
