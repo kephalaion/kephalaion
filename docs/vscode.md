@@ -63,8 +63,9 @@ keph://<hub-alias>/<collection>/…    ← list / read
 Welche Collections es gibt, fragt die Erweiterung ab; sie stehen nirgends in VS Code.
 
 **Welche Collections der Baum zeigt,** sagt die Einstellung `kephalaion.collections`; für ein
-Projekt gehört sie in die `settings` seiner Workspace-Datei. Ungesetzt zeigt der Baum alle
-lesbaren Collections.
+Projekt gehört sie in die `settings` seiner Workspace-Datei. Ungesetzt zeigt der Baum seit Task
+045 die Collection des Projekts, die `.k-playbook/K-PLAYBOOK.yaml` im Projektordner nennt (siehe
+„Baumansicht“, „Welche Collections“); ohne diese Datei ist er leer.
 
 ```json
 // projekt.code-workspace
@@ -181,23 +182,49 @@ darüber neu, gebündelt je Runde von `changes`. Nach einem Löschen (auch dem a
 Umbenennens) prüft der Baum mit `stat`, ob das Verzeichnis darüber noch besteht — mit dem letzten
 Dokument verschwindet es, der Hub kennt keine leeren Verzeichnisse —, und lädt dann das nächste
 bestehende darüber neu. Eine Änderung am Inhalt lädt nichts neu; eine Hub-URI, ein
-anderer Stand von `whoami` oder eine andere `kephalaion.collections` den ganzen Baum. Ohne
-Collection zeigt der Baum, je nach Anmeldung, „Collection im Baum zeigen“ oder den Weg zum
+anderer Stand von `whoami`, eine andere `kephalaion.collections` oder eine andere Collection des
+Projekts den ganzen Baum. Ohne Collection zeigt der Baum, je nach Anmeldung, „Collection im Baum
+zeigen“ samt den beiden Wegen zur eigenen Collection (Datei, Einstellung) oder den Weg zum
 Status (`viewsWelcome`).
 
-**Welche Collections** (`kephalaion.collections`, Scope `window`): ungesetzt — auf keiner
-Ebene, über `inspect` — alle lesbaren Collections der genutzten Hubs. Gesetzt, auch leer, genau
-diese in dieser Reihenfolge; eine Adresse, die `whoami` nicht als lesbar meldet, erscheint als
-Knoten „nicht lesbar“ statt still zu fehlen. „Kephalaion: Collection im Baum zeigen“ (Auswahl
-der lesbaren, die nicht gezeigt sind) und „Kephalaion: Collection aus dem Baum nehmen“ (auch im
-Kontextmenü des Collection-Knotens) schreiben die Einstellung auf **Workspace-Ebene**, wenn ein
-Workspace oder Ordner offen ist, sonst global. Beim ersten Schreiben einer ungesetzten
-Einstellung schreiben sie die bisher gezeigten plus bzw. minus die gewählte, damit sich das Bild
-nicht sprunghaft ändert. **In einem Fenster mit einem Ordner landet der Wert in dessen
-`.vscode/settings.json`, in einem gespeicherten Workspace in der `.code-workspace`-Datei —
-eine eingecheckte Datei ändert sich dadurch.** Von sich aus schreibt die Erweiterung
-`kephalaion.collections` nur beim Herausnehmen eines `keph://`-Ordners, und nur, wenn die
-Einstellung schon gesetzt ist (unten).
+**Welche Collections** (`kephalaion.collections`, Scope `window`; Task 045, 2026-11-26):
+
+- **Gesetzt geht die Einstellung vor**, auch leer: genau diese in dieser Reihenfolge.
+- **Ungesetzt** — auf keiner Ebene, über `inspect` — zeigt der Baum die **Collection des
+  Projekts** (Begriff **project collection** in [`begriffe.md`](begriffe.md)): Für jeden
+  Projektordner (`file://` und `vscode-remote://`) liest die Erweiterung
+  `<ordner>/.k-playbook/K-PLAYBOOK.yaml`, die Konfiguration von k-playbook, über
+  `vscode.workspace.fs`. Davon zählen nur `hub` und `collection` direkt unter dem Schlüssel
+  `kephalaion:` auf oberster Ebene (Werte auch in Anführungszeichen, ein Kommentar ` #…`
+  dahinter zählt nicht); die Adresse ist `<hub>:<collection>`. Alles andere in der Datei
+  übergeht sie, ohne es zu deuten (`parseProjectCollection` in `vscode/rules.js`, ohne
+  YAML-Bibliothek). Mehrere Projektordner ergeben ihre Collections in der Reihenfolge der
+  Ordner, jede einmal. **Gelesen wird nur die Datei im Projektordner selbst, nicht aufwärts**
+  wie bei k-playbook, das vom Projektordner nach oben sucht: Die Erweiterung liest nur innerhalb
+  der Workspace-Ordner. Liegt die Datei nur weiter oben, hat der Baum keine Collection des
+  Projekts.
+- **Ohne gültigen Block ist der Baum leer** und bietet „Collection im Baum zeigen“. Eine
+  fehlende Datei ist still; eine nicht lesbare oder ungültige (etwa ohne `collection`) ergibt
+  eine Zeile im Log je Ordner und Änderung. Beides hält Baum und Aktivierung nicht auf.
+- **Gelesen** wird beim Aktivieren, nach jeder Änderung der Workspace-Ordner und über einen
+  `FileSystemWatcher` je Projektordner nach jeder Änderung der Datei; danach baut sich der Baum
+  neu auf. Eine Adresse, die `whoami` nicht als lesbar meldet, erscheint wie bei der
+  Einstellung als Knoten „nicht lesbar“ statt still zu fehlen; der Tooltip nennt dann die Datei
+  statt der Einstellung.
+
+„Kephalaion: Collection im Baum zeigen“ (Auswahl der lesbaren, die nicht gezeigt sind) und
+„Kephalaion: Collection aus dem Baum nehmen“ (auch im Kontextmenü des Collection-Knotens)
+schreiben die Einstellung auf **Workspace-Ebene**, wenn ein Workspace oder Ordner offen ist,
+sonst global. Beim ersten Schreiben einer ungesetzten Einstellung gehen sie von den gezeigten
+aus, plus bzw. minus die gewählte, damit sich das Bild nicht sprunghaft ändert: Danach stehen die
+eigene und die gewählte Collection in der Einstellung; die eigene herausgenommen bleibt weg, bis
+man sie wieder zeigt. Beide warten auf ein laufendes Lesen der Datei, sonst gälte die eigene als
+nicht gezeigt. **Ab dem ersten Schreiben zählt die Datei für den Baum nicht mehr**; eine
+Änderung an ihr wirkt erst wieder, wenn man `kephalaion.collections` entfernt. **In einem
+Fenster mit einem Ordner landet der Wert in dessen `.vscode/settings.json`, in einem
+gespeicherten Workspace in der `.code-workspace`-Datei — eine eingecheckte Datei ändert sich
+dadurch.** Von sich aus schreibt die Erweiterung `kephalaion.collections` nur beim Herausnehmen
+eines `keph://`-Ordners (unten).
 
 **Bearbeiten** über Kontextmenü und Titelleiste: neue Datei (wird danach geöffnet), neuer
 Ordner (wie bisher nur in diesem Fenster gemerkt, bis darin etwas liegt), umbenennen (F2; ein
@@ -234,8 +261,11 @@ gibt, legt nichts an.
 - Beim Aktivieren und nach jeder Änderung der Workspace-Ordner nimmt die Erweiterung jeden
   `keph://`-Ordner heraus, wenn der Workspace noch mindestens einen anderen Ordner hat. Vorher
   übernimmt sie deren Collections in `kephalaion.collections`, wenn die Einstellung gesetzt ist
-  (ungesetzt zeigt der Baum ohnehin alle). Ein Ordner mit Unterpfad (`keph://vm/omni/docs`)
-  wird als seine ganze Collection übernommen; das Log nennt es.
+  oder — seit Task 045 — eine davon nicht gezeigt wird; dann von den gezeigten aus, also mit der
+  Collection des Projekts (`removalWritesSetting` in `vscode/rules.js`). Keine Collection
+  verschwindet still. Ist ungesetzt jede schon gezeigt (die Datei nennt sie), bleibt die
+  Einstellung ungesetzt. Ein Ordner mit Unterpfad (`keph://vm/omni/docs`) wird als seine ganze
+  Collection übernommen; das Log nennt es.
 - Sie merkt sich nichts und hängt nichts wieder ein. Den Schlüssel `kephalaion.removedFolders`
   im Speicher des Workspace (`workspaceState`), unter dem sie bis Task 044 die herausgenommenen
   Ordner für das Zurückschalten merkte, leert sie beim Aktivieren einmal.
@@ -253,7 +283,9 @@ nur einen zusammenhängenden Bereich, und vor dem nächsten muss das Ereignis
 `onDidChangeWorkspaceFolders` des vorigen gekommen sein. Die Erweiterung nimmt deshalb Bereich
 für Bereich von hinten nach vorn heraus (`folderRemovalPlan` in `vscode/rules.js`) und wartet
 je auf das Ereignis (höchstens 10 s). Aktivierung und Ordnerereignis laufen durch eine
-Warteschlange, damit sich nichts überholt. Ändert sich der erste Ordner (ein `keph://`-Ordner an
+Warteschlange, damit sich nichts überholt; darin liest die Erweiterung zuerst die Collections des
+Projekts und nimmt erst danach heraus — sonst gälte die eigene als nicht gezeigt, und die
+Einstellung würde ohne sie geschrieben. Ändert sich der erste Ordner (ein `keph://`-Ordner an
 Index 0), startet VS Code den Extension Host neu; die Erweiterung macht beim Aktivieren dort
 weiter — der Plan entsteht jedes Mal neu aus dem Ist-Zustand. In einem gespeicherten Workspace
 schreibt VS Code dabei die `.code-workspace`-Datei um (nur die Ordnerliste: die Zeile des
@@ -270,7 +302,8 @@ Ordners fällt weg).
   `omni.code-workspace` selbst, bei manchen steht noch `{ "uri": "keph://vm/omni" }` darin): Die
   Erweiterung nimmt den Ordner beim ersten Start heraus und schreibt dabei die Ordnerliste der
   Datei um; das ist gewollt. Wer nur `vm:omni` im Baum sehen will, setzt
-  `"kephalaion.collections": ["vm:omni"]` in die `settings` der Datei. Ein Skript, das die Zeile
+  `"kephalaion.collections": ["vm:omni"]` in die `settings` der Datei — oder das Projekt nennt
+  `vm:omni` in seiner `.k-playbook/K-PLAYBOOK.yaml`; dann bleibt die Einstellung ungesetzt. Ein Skript, das die Zeile
   immer wieder zurückschrieb, gibt es dort seit 2026-10-29 nicht mehr.
 - **Strg+P und Strg+Umschalt+F** sehen Collections weiter nicht, auch nicht im Baum; dafür gibt
   es „Kephalaion: Dokument öffnen“ und „Kephalaion: Suchen“ (unten). Die Suche geht nur über
@@ -292,8 +325,8 @@ Devcontainer gehören dem OMNI-Setup.
 
 **Geprüft vom Nutzer am 2026-11-25** im echten VS Code: der Baum („klappt gut“; der Abschnitt
 lässt sich im Explorer verschieben). **Offen, Stand 2026-11-26:** Punkt 8 (Ziehen Baum →
-Explorer), das Verhalten von ty und die Punkte 12 und 13 in der Fassung von Task 044, bis der
-Nutzer sie meldet. Der Nutzer geht die Handgriffe selbst durch, mit einer Collection mit `write`
+Explorer), das Verhalten von ty, die Punkte 12 und 13 in der Fassung von Task 044 und die
+Punkte 15 und 16 (Task 045), bis der Nutzer sie meldet. Der Nutzer geht die Handgriffe selbst durch, mit einer Collection mit `write`
 und nur unter einem Testverzeichnis; jede Zeile im Output „Kephalaion“ (Menü → Log) zeigt, was
 VS Code aufgerufen hat. Ergebnisse hier eintragen.
 
@@ -327,6 +360,14 @@ VS Code aufgerufen hat. Ergebnisse hier eintragen.
     Erweiterung nimmt den Ordner trotzdem heraus (Log).
 14. **„Collection im Baum zeigen“ und „… aus dem Baum nehmen“** in einem Fenster mit Ordner:
     Der Wert steht danach in `.vscode/settings.json` (bzw. der `.code-workspace`-Datei).
+15. **Collection des Projekts** (Task 045): ein Projekt mit `.k-playbook/K-PLAYBOOK.yaml` und
+    ohne `kephalaion.collections` öffnen: Der Baum zeigt nur die eigene Collection.
+    „Collection im Baum zeigen“ → eine zweite wählen: Der Baum zeigt beide, und beide stehen in
+    der Einstellung.
+16. **Datei ändern** (Task 045), nur bei ungesetzter Einstellung (sonst vorher
+    `kephalaion.collections` entfernen): in der `.k-playbook/K-PLAYBOOK.yaml` eine andere
+    `collection` eintragen und speichern: Der Baum folgt ohne Neuladen; einen Wert löschen: Der
+    Baum ist leer, das Log nennt den Grund.
 
 ## Status und Auswahl
 

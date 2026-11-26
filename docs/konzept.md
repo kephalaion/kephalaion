@@ -667,8 +667,8 @@ Am Hub heißt „lesbar“ dasselbe für jeden gültigen Account; abgleichen dar
 Collection, die nur öffentlich ist, weiter nur über `hub node grant` und `node collection add`.
 
 **Die Liste der Quellen.** Dass Kephalaion k-playbook beim Namen kennt, ist eine bewusste
-Ausnahme von der Trennung beider Projekte. Sie steht an genau einer Stelle: in einer YAML-Datei
-im Binary (`internal/hub/source/sources.yaml`, `go:embed`, strikt gelesen, beim Bau getestet).
+Ausnahme von der Trennung beider Projekte. Sie steht an zwei Stellen. Die erste ist eine
+YAML-Datei im Binary (`internal/hub/source/sources.yaml`, `go:embed`, strikt gelesen, beim Bau getestet).
 Sie nennt je Collection-Name die festen Vorgaben — öffentlich, Quelle (`git`: URL des Repos,
 `asset`: Name des Archivs im Release), `max_bytes` —, für k-playbook
 `https://github.com/kascada/k-playbook` mit `k-playbook-defaults.tar.gz` und 8 MiB. `hub
@@ -676,6 +676,13 @@ collection add k-playbook` bekommt diese Vorgaben ohne Flag; eine Collection mit
 nur so. Maßgeblich für Quelle, Sperre, `public` und Abo ist zur Laufzeit die Liste, nicht die
 Datenbank (dort stehen nur `public` und der geholte Stand); eine geänderte URL braucht ein neues
 Release von Kephalaion.
+
+Die zweite Stelle ist eine Entscheidung vom 2026-11-26 (Task 045): Die Erweiterung für VS Code
+liest aus `.k-playbook/K-PLAYBOOK.yaml` im Projektordner nur den Block `kephalaion:` (`hub`,
+`collection`), damit der Baum ohne Einstellung die Collection des Projekts zeigt (Begriff
+**project collection** in [`begriffe.md`](begriffe.md)). Sonst liest sie nichts von k-playbook,
+und das Binary liest die Datei nicht. Grund: Die Collection des Projekts steht schon dort; eine
+zweite Angabe müsste man doppelt pflegen.
 
 **Was eine Collection mit Quelle ist:**
 

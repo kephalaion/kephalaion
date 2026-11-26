@@ -4,8 +4,9 @@ Zeigt Collections von Kephalaion als Baum „Kephalaion“ im Explorer
 (`keph://<hub>/<collection>/…`), dazu den Stand des Nodes in der Statusleiste. Idee und Weg:
 [`../docs/vscode.md`](../docs/vscode.md).
 
-Stand (Task 044, 2026-11-26): lesen und schreiben im Baum und im Editor; Collections sind keine
-Workspace-Ordner mehr; der Node als MCP-Server für Copilot. Braucht VS Code 1.101 oder neuer.
+Stand (Task 045, 2026-11-26): lesen und schreiben im Baum und im Editor; Collections sind keine
+Workspace-Ordner mehr; ohne Einstellung zeigt der Baum nur die Collection des Projekts; der Node
+als MCP-Server für Copilot. Braucht VS Code 1.101 oder neuer.
 
 - **Lesen** aus der Replica des Nodes über `list`, `read` und `changes` — auch offline, solange
   der Node läuft. Änderungen anderer erscheinen nach dem Abgleich des Nodes, ein Umbenennen
@@ -20,17 +21,25 @@ Workspace-Ordner mehr; der Node als MCP-Server für Copilot. Braucht VS Code 1.1
   öffnen, URI bzw. relativen Pfad kopieren, „In den Projektordner kopieren…“. Ziehen und
   Ablegen: im Baum innerhalb einer Collection verschieben, Dateien und Ordner aus dem Projekt
   in den Baum kopieren (nie überschreiben), Dokumente in den Editor ziehen.
-- **Welche Collections:** Einstellung `kephalaion.collections` (Liste von `<hub>:<collection>`),
-  ungesetzt alle lesbaren. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“
-  schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist — **eine
-  eingecheckte `.code-workspace` oder `.vscode/settings.json` ändert sich dadurch.**
+- **Welche Collections:** Einstellung `kephalaion.collections` (Liste von `<hub>:<collection>`);
+  gesetzt geht sie vor. Ungesetzt die **Collection des Projekts**: `hub` und `collection` im
+  Block `kephalaion:` der `.k-playbook/K-PLAYBOOK.yaml` jedes Projektordners (nur dort, nicht
+  weiter oben); eine Änderung der Datei zeigt der Baum sofort. **Geändert mit Task 045:**
+  Bisher zeigte er ungesetzt alle lesbaren Collections; ein Projekt ohne `K-PLAYBOOK.yaml`
+  zeigt nach dem Update einen leeren Baum — zurück mit „Collection im Baum zeigen“ oder mit
+  gesetzter `kephalaion.collections`. „Kephalaion: Collection im Baum zeigen“ und „… aus dem
+  Baum nehmen“ schreiben die Einstellung — ungesetzt von den gezeigten aus; danach zählt die
+  Datei nicht mehr, bis man die Einstellung entfernt — auf Workspace-Ebene, wenn ein Workspace
+  oder Ordner offen ist — **eine eingecheckte `.code-workspace` oder `.vscode/settings.json`
+  ändert sich dadurch.**
 - **Kein Workspace-Ordner:** Die Erweiterung hängt keine Collection in den Workspace ein. Einen
   `keph://`-Ordner neben einem anderen Ordner nimmt sie beim Start und nach jeder Änderung der
   Workspace-Ordner heraus, ohne Einstellung (in einem gespeicherten Workspace schreibt VS Code
-  dabei die Ordnerliste der `.code-workspace`-Datei um); ist `kephalaion.collections` gesetzt,
-  nimmt sie seine Collection dort auf. So fragt „Neues Terminal“ nicht nach dem Ordner, und
-  Sprachserver, die an einem `keph://`-Ordner scheitern (etwa ty), sehen keinen. Ein Workspace
-  nur aus Collections bleibt, ein geduldeter Grenzfall. Für ein Projekt gehört
+  dabei die Ordnerliste der `.code-workspace`-Datei um); ist `kephalaion.collections` gesetzt
+  oder wird seine Collection nicht gezeigt, nimmt sie sie dort auf — keine verschwindet still.
+  So fragt „Neues Terminal“ nicht nach dem Ordner, und Sprachserver, die an einem
+  `keph://`-Ordner scheitern (etwa ty), sehen keinen. Ein Workspace nur aus Collections bleibt,
+  ein geduldeter Grenzfall. Für ein Projekt ohne `K-PLAYBOOK.yaml` gehört
   `"kephalaion.collections": ["<hub>:<collection>"]` in die `settings` seiner Workspace-Datei.
   Eine noch gesetzte Einstellung `kephalaion.workspaceFolders` (bis Task 044) zeigt VS Code als
   unbekannt; sie wirkt nicht mehr.

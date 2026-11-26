@@ -1,6 +1,8 @@
 # Fortschritt
 
-Stand: 2026-11-26 (Task 044 VS Code: Einbinden von Collections als Workspace-Ordner entfernt,
+Stand: 2026-11-26 (Task 045 VS Code: der Baum zeigt ohne Einstellung nur die Collection des
+Projekts aus `.k-playbook/K-PLAYBOOK.yaml` — gebaut und dokumentiert, die Handgriffe 15 und 16
+im echten VS Code sind Nacharbeit des Nutzers; Task 044 VS Code: Einbinden von Collections als Workspace-Ordner entfernt,
 `keph://`-Ordner neben dem Projekt nimmt die Erweiterung ohne Einstellung heraus — gebaut und
 dokumentiert, die Handgriffe zum Herausnehmen im echten VS Code sind Nacharbeit des Nutzers;
 2026-11-25: Task 043 VS Code: Collections als Baumansicht „Kephalaion“ im Explorer,
@@ -467,6 +469,26 @@ ist Nacharbeit des Nutzers)
 
 ## In Arbeit
 
+- **Task 045 (`045-vscode-baum-eigene-collection`) — VS Code: Baum zeigt ohne Einstellung nur
+  die Collection des Projekts** (2026-11-26, Etappen 1–3 ausgeführt; `docs/vscode.md`,
+  „Baumansicht“, „Welche Collections“):
+  - **Geändertes Verhalten:** Ungesetzt zeigt der Baum nicht mehr alle lesbaren Collections,
+    sondern die **project collection** — `hub` und `collection` im Block `kephalaion:` der
+    `.k-playbook/K-PLAYBOOK.yaml` jedes Projektordners, nur dort, nicht aufwärts. **Ein Projekt
+    ohne `K-PLAYBOOK.yaml` zeigt nach dem Update einen leeren Baum.** Zurück geht es mit
+    „Collection im Baum zeigen“ oder indem man `kephalaion.collections` setzt;
+  - Regeln in `vscode/rules.js`: `parseProjectCollection` (ohne YAML-Bibliothek),
+    `shownCollections(setting, readable, project)`, `removalWritesSetting`;
+  - `vscode/extension.js`: Lesen über `workspace.fs` beim Aktivieren, nach jeder Änderung der
+    Workspace-Ordner und über einen Watcher je Projektordner; das Lesen läuft in der
+    Warteschlange vor dem Herausnehmen der `keph://`-Ordner, „Collection im Baum zeigen“ und
+    „… aus dem Baum nehmen“ warten darauf; das Herausnehmen schreibt die Einstellung auch
+    ungesetzt, sobald eine herausgenommene Collection nicht gezeigt wird;
+  - `viewsWelcome` und die Beschreibung von `kephalaion.collections` nennen Datei und
+    Einstellung; Tests in `vscode/test/rules.test.js` und `vscode/test/extension.test.js`;
+  - Doku: `docs/vscode.md`, `docs/konzept.md` (zweite Stelle, an der Kephalaion k-playbook beim
+    Namen kennt), `docs/begriffe.md`, `README.md`, `vscode/README.md`.
+
 - **Task 044 (`044-vscode-ordner-entfernen`) — VS Code: Einbinden von Collections als
   Workspace-Ordner entfernen** (2026-11-26, Etappen 1–3 ausgeführt; `docs/vscode.md`,
   „Baumansicht“):
@@ -813,7 +835,9 @@ ist Nacharbeit des Nutzers)
   mit Projekt und `keph://`-Ordner an Index 1 bzw. 0 → der Ordner verschwindet, die Datei
   verliert nur diese Zeile, der Baum zeigt die Collection, danach Terminal ohne Ordnerauswahl
   und ob ty läuft (sofort, nach Neuladen des Fensters oder erst nach Neustart; Ergebnis
-  notieren).
+  notieren). Dazu Punkte 15 und 16 (Task 045): Projekt mit `K-PLAYBOOK.yaml` öffnen → nur die
+  eigene Collection, „Collection im Baum zeigen“ → beide; bei ungesetzter Einstellung die Datei
+  ändern → der Baum folgt.
 
 - **Task 039 — Export und Restore, Probe an einem echten Hub** (nur der Nutzer; nach dem Release
   mit `hub export`, eingespielt über Ansible): neben dem laufenden Dienst `sudo -u kephalaion

@@ -599,8 +599,9 @@ Ausführlich: [`konzept.md`](konzept.md).
   `public`, die Quelle (`source.git`: URL des Repos, `source.asset`: Name des Archivs im
   Release) und `max_bytes` (Obergrenze für Archiv und entpackten Inhalt). Erster und einziger
   Eintrag: `k-playbook` aus `kascada/k-playbook` mit `k-playbook-defaults.tar.gz` — die einzige
-  Stelle, an der Kephalaion k-playbook beim Namen kennt, eine bewusste Ausnahme von der
-  Trennung beider Projekte. Maßgeblich für Quelle, Sperre, `public` und **subscribed** ist zur
+  Stelle im Binary, an der Kephalaion k-playbook beim Namen kennt, eine bewusste Ausnahme von der
+  Trennung beider Projekte; die zweite liegt in der Erweiterung für VS Code (**project
+  collection**, `docs/konzept.md`, „Die Liste der Quellen“). Maßgeblich für Quelle, Sperre, `public` und **subscribed** ist zur
   Laufzeit die Liste, nicht die Datenbank; eine geänderte URL braucht ein neues Release von
   Kephalaion.
 - **subscribed** (fest abonniert) — eine Collection aus der **source list**, die es am Hub

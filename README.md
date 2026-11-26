@@ -992,8 +992,10 @@ im Container; wie sie dort einen Node erreicht, ist noch nicht gebaut
   Baum nehmen, Dokument öffnen, Suchen (`docs/`), Log.
 - **Baum „Kephalaion“** im Explorer: die Collections als `<hub>:<collection>`, darunter
   Verzeichnisse und Dokumente; ein Klick öffnet im Editor. Welche Collections er zeigt, sagt
-  `kephalaion.collections` (ungesetzt alle lesbaren); für ein Projekt gehört die Einstellung in
-  die `settings` seiner Workspace-Datei. „Kephalaion: Collection im Baum zeigen“ und „… aus dem
+  `kephalaion.collections`; ungesetzt seit Task 045 nur die Collection des Projekts, die
+  `.k-playbook/K-PLAYBOOK.yaml` im Projektordner im Block `kephalaion:` nennt (ohne die Datei
+  ist der Baum leer). Für ein Projekt ohne diese Datei gehört die Einstellung in die
+  `settings` seiner Workspace-Datei. „Kephalaion: Collection im Baum zeigen“ und „… aus dem
   Baum nehmen“ schreiben sie. Einen `keph://`-Ordner neben einem anderen Workspace-Ordner nimmt
   die Erweiterung ohne Einstellung heraus; in den Workspace hängt sie keine Collection mehr ein.
   Verzeichnisse und Dokumente kommen über `list` und `read` aus der Replica; Änderungen
