@@ -1773,7 +1773,7 @@ function findCommands(tree, kfs, node, log) {
   return { 'kephalaion.openDocument': openDocument, 'kephalaion.search': search };
 }
 
-// --- Auswahl der Collections und der Schalter kephalaion.workspaceFolders (Etappe 6) ---
+// --- Auswahl der Collections und das Herausnehmen der keph://-Ordner (Task 043 Etappe 6, Task 044) ---
 
 // Wohin kephalaion.collections geschrieben wird (Festlegung 4): auf Workspace-Ebene, wenn ein
 // Workspace oder Ordner offen ist — in .code-workspace bzw. .vscode/settings.json —, sonst in
@@ -1792,12 +1792,9 @@ async function writeCollections(tree, add, remove, log) {
     ? 'Workspace' : 'Benutzer'})`);
 }
 
-function foldersEnabled() {
-  return vscode.workspace.getConfiguration('kephalaion').get('workspaceFolders', true) !== false;
-}
-
-// Der Schlüssel im Speicher des Workspace für die Ordner, die die Erweiterung selbst
-// herausgenommen hat ([{ uri, name }]).
+// Der Schlüssel im Speicher des Workspace, unter dem die Erweiterung bis Task 044 die selbst
+// herausgenommenen Ordner zum Wiedereinhängen merkte. Er wird beim Aktivieren einmal geleert und
+// nicht mehr geschrieben.
 const REMOVED_FOLDERS = 'kephalaion.removedFolders';
 
 // Ein Aufruf von updateWorkspaceFolders, dann das Warten auf sein Ereignis (Festlegung 6): Vor
@@ -1833,46 +1830,30 @@ function changeFolders(log, start, deleteCount, ...add) {
   });
 }
 
-// Der Schalter kephalaion.workspaceFolders (Festlegung 5 und 6), jedes Mal aus dem Ist-Zustand:
-// false nimmt die keph://-Ordner heraus (rules.folderRemovalPlan; vorher ihre Collections in
-// kephalaion.collections, wenn gesetzt, und die Ordner in den Speicher des Workspace — Index 0
-// startet den Extension Host neu, danach geht es beim Aktivieren weiter); true hängt die
-// gemerkten Ordner am Ende wieder ein, die noch fehlen, und vergisst sie.
-async function syncWorkspaceFolders(context, tree, log, state) {
+// Nimmt die keph://-Ordner aus dem Workspace, jedes Mal aus dem Ist-Zustand und seit Task 044
+// ohne Einstellung: nach rules.folderRemovalPlan Bereich für Bereich von hinten, vorher ihre
+// Collections in kephalaion.collections, wenn die Einstellung gesetzt ist, damit der Baum sie
+// zeigt. Index 0 startet den Extension Host neu, danach geht es beim Aktivieren weiter. Ein
+// Workspace nur aus keph://-Ordnern bleibt.
+async function syncWorkspaceFolders(tree, log, state) {
   const folders = (vscode.workspace.workspaceFolders || []).map((f, i) => ({
     scheme: f.uri.scheme, authority: f.uri.authority, path: f.uri.path, uri: f.uri.toString(), name: f.name,
     index: typeof f.index === 'number' ? f.index : i,
   }));
-  const remembered = context.workspaceState.get(REMOVED_FOLDERS) || [];
-  if (foldersEnabled()) {
-    if (!remembered.length) return;
-    const present = new Set(folders.map((f) => f.uri));
-    const back = remembered.filter((r) => !present.has(r.uri));
-    if (back.length) {
-      log(`Workspace-Ordner: kephalaion.workspaceFolders true — hänge wieder ein: ${back.map((r) => r.uri).join(', ')}`);
-      const ok = await changeFolders(log, folders.length, 0, ...back.map((r) => ({ uri: vscode.Uri.parse(r.uri), name: r.name })));
-      if (!ok) return;
-    }
-    await context.workspaceState.update(REMOVED_FOLDERS, undefined);
-    return;
-  }
   const plan = rules.folderRemovalPlan(folders);
   if (plan.onlyKeph) {
-    log('Workspace-Ordner: kephalaion.workspaceFolders false, aber der Workspace besteht nur aus keph://-Ordnern — '
-      + 'nichts herausgenommen');
+    log('Workspace-Ordner: der Workspace besteht nur aus keph://-Ordnern — nichts herausgenommen');
     if (!state.onlyKephNoted) {
       state.onlyKephNoted = true;
-      vscode.window.showInformationMessage('Kephalaion: kephalaion.workspaceFolders ist false, aber dieser Workspace besteht '
-        + 'nur aus Collections — sie bleiben als Ordner, ein leerer Workspace hilft niemandem.');
+      vscode.window.showInformationMessage('Kephalaion: Dieser Workspace besteht nur aus Collections — sie bleiben '
+        + 'als Ordner, ein leerer Workspace hilft niemandem. Neben einem Projektordner zeigt sie der Baum „Kephalaion“.');
     }
     return;
   }
   if (!plan.ranges.length) return;
   for (const s of plan.subpaths) log(`Workspace-Ordner: ${s.uri} zeigt nur einen Teil — im Baum als ganze Collection ${s.address}`);
   if (collectionsSetting() !== undefined) await writeCollections(tree, plan.collections, [], log);
-  const keep = remembered.filter((r) => !plan.removed.some((x) => x.uri === r.uri));
-  await context.workspaceState.update(REMOVED_FOLDERS, [...keep, ...plan.removed]);
-  log(`Workspace-Ordner: kephalaion.workspaceFolders false — nehme heraus: ${plan.removed.map((r) => r.uri).join(', ')}`
+  log(`Workspace-Ordner: nehme heraus: ${plan.removed.map((r) => r.uri).join(', ')}`
     + `${plan.touchesFirst ? ' (Index 0: VS Code startet den Extension Host neu)' : ''}`);
   for (const r of plan.ranges) {
     if (!(await changeFolders(log, r.start, r.count))) return;
@@ -2044,36 +2025,6 @@ function treeCommands(tree, view, log) {
 
 let ext;
 
-function terminalProject() {
-  const folders = vscode.workspace.workspaceFolders || [];
-  if (!folders.some((f) => f.uri.scheme === SCHEME)) return;
-  const projects = folders.filter((f) => f.uri.scheme === 'file' || f.uri.scheme === 'vscode-remote');
-  if (projects.length !== 1) return;
-  const project = projects[0];
-  if (!project.name || /[${}]/.test(project.name)
-    || folders.filter((f) => f.name === project.name).length !== 1) return;
-  return project;
-}
-
-async function ensureTerminalCwd(log) {
-  try {
-    const project = terminalProject();
-    if (!project) return;
-    const folders = vscode.workspace.workspaceFolders || [];
-    for (const resource of [undefined, ...folders.map((f) => f.uri)]) {
-      const value = vscode.workspace.getConfiguration('terminal.integrated', resource).inspect('cwd');
-      if (!value) return;
-      if (['globalValue', 'workspaceValue', 'workspaceFolderValue', 'globalLanguageValue',
-        'workspaceLanguageValue', 'workspaceFolderLanguageValue'].some((key) => value[key] !== undefined)) return;
-    }
-    await vscode.workspace.getConfiguration('terminal.integrated').update(
-      'cwd', `\${workspaceFolder:${project.name}}`, vscode.ConfigurationTarget.Workspace);
-    log('Terminal: Workspace-cwd ergänzt; für ein Terminal ohne Ordnerauswahl „Kephalaion: Projektterminal öffnen“ verwenden');
-  } catch (e) {
-    log(`Terminal: Workspace-cwd konnte nicht ergänzt werden: ${e.message}`);
-  }
-}
-
 function activate(context) {
   ext = context.extension;
   const out = vscode.window.createOutputChannel('Kephalaion');
@@ -2101,26 +2052,21 @@ function activate(context) {
     });
   };
 
-  // Eine Warteschlange für Aktivierung, Einstellungs- und Ordnerereignis (Festlegung 6): erst der
-  // Schalter kephalaion.workspaceFolders, dann die Terminal-cwd — nichts überholt sich.
+  // Eine Warteschlange für Aktivierung und Ordnerereignis (Festlegung 6): Das Herausnehmen der
+  // keph://-Ordner überholt sich nicht. Zuerst wird der Schlüssel aus der Zeit vor Task 044
+  // geleert.
   let folderQueue = Promise.resolve();
   const enqueue = (fn) => {
     folderQueue = folderQueue.then(fn).catch((e) => log(`Workspace-Ordner: ${e.message}`));
     return folderQueue;
   };
   const folderState = {};
-  const syncFolders = () => enqueue(() => syncWorkspaceFolders(context, tree, log, folderState));
-  const foldersChanged = () => {
-    syncFolders();
-    return enqueue(() => ensureTerminalCwd(log));
-  };
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeWorkspaceFolders(foldersChanged),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('kephalaion.workspaceFolders')) syncFolders();
-    }),
-  );
-  foldersChanged();
+  const syncFolders = () => enqueue(() => syncWorkspaceFolders(tree, log, folderState));
+  if (context.workspaceState.get(REMOVED_FOLDERS) !== undefined) {
+    enqueue(() => context.workspaceState.update(REMOVED_FOLDERS, undefined));
+  }
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(syncFolders));
+  syncFolders();
 
   for (const [id, fn] of Object.entries({ ...treeCommands(tree, view, log), ...findCommands(tree, kfs, node, log),
     ...selectionCommands(tree, status, log) })) {
@@ -2177,14 +2123,6 @@ function activate(context) {
       await cfg.update('accounts', { ...chosenAccounts(), [pick.hub]: pick.account }, vscode.ConfigurationTarget.Global);
       log(`Hub ${pick.hub}: Account ${pick.account} gewählt`);
     }),
-    vscode.commands.registerCommand('kephalaion.openProjectTerminal', () => {
-      const project = terminalProject();
-      if (!project) {
-        vscode.window.showWarningMessage('Kephalaion: Projektterminal braucht genau einen echten Projektordner mit eindeutigem Namen neben einer Collection.');
-        return;
-      }
-      vscode.window.createTerminal({ cwd: project.uri }).show();
-    }),
     vscode.commands.registerCommand('kephalaion.showLog', () => out.show()),
     vscode.commands.registerCommand('kephalaion.showStatus', async () => {
       await status.refresh();
@@ -2192,41 +2130,11 @@ function activate(context) {
       for (const l of status.summary()) out.appendLine(l);
       out.show();
     }),
-    vscode.commands.registerCommand('kephalaion.addCollection', async () => {
-      await status.refresh();
-      const items = status.hubs().flatMap((h) => status.collections(h.hub).map((c) => ({
-        label: c.address,
-        description: c.rights.join(', '),
-        hub: h.hub,
-        collection: c.collection,
-      })));
-      if (items.length === 0) {
-        vscode.window.showWarningMessage('Kephalaion: keine lesbare Collection — Anmeldung prüfen (Statusleiste).');
-        return;
-      }
-      const asFolder = foldersEnabled();
-      const pick = await vscode.window.showQuickPick(items, {
-        placeHolder: asFolder ? 'Collection als Ordner einbinden' : 'Collection im Baum zeigen (kephalaion.workspaceFolders ist false)',
-      });
-      if (!pick) return;
-      if (!asFolder) {
-        // Mit false kein Workspace-Ordner: die Collection im Baum zeigen (Festlegung 5).
-        if (!tree.shown().some((c) => c.address === pick.label)) await writeCollections(tree, [pick.label], [], log);
-        await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
-        return;
-      }
-      const n = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
-      vscode.workspace.updateWorkspaceFolders(n, 0, {
-        uri: docUri(pick.hub, pick.collection, ''),
-        name: `Keph ${pick.label}`,
-      });
-    }),
     vscode.commands.registerCommand('kephalaion.menu', async () => {
       const pick = await vscode.window.showQuickPick([
         { label: '$(info) Status anzeigen', cmd: 'kephalaion.showStatus' },
         { label: '$(refresh) Neu verbinden', cmd: 'kephalaion.refresh' },
         { label: '$(account) Account wählen', cmd: 'kephalaion.chooseAccount' },
-        { label: '$(folder-library) Collection einbinden', cmd: 'kephalaion.addCollection' },
         { label: '$(list-tree) Collection im Baum zeigen', cmd: 'kephalaion.showInTree' },
         { label: '$(list-flat) Collection aus dem Baum nehmen', cmd: 'kephalaion.hideFromTree' },
         { label: '$(go-to-file) Dokument öffnen', cmd: 'kephalaion.openDocument' },

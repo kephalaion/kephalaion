@@ -1,7 +1,7 @@
 {
   "name": "kephalaion",
   "displayName": "Kephalaion",
-  "description": "Collections von Kephalaion als Baum im Explorer und als Ordner in VS Code",
+  "description": "Collections von Kephalaion als Baum „Kephalaion“ im Explorer von VS Code",
   "version": "0.0.0",
   "publisher": "kascada",
   "license": "SEE LICENSE IN ../LICENSE",
@@ -16,12 +16,10 @@
       { "command": "kephalaion.showStatus", "title": "Kephalaion: Status anzeigen" },
       { "command": "kephalaion.refresh", "title": "Kephalaion: Neu verbinden" },
       { "command": "kephalaion.chooseAccount", "title": "Kephalaion: Account wählen" },
-      { "command": "kephalaion.addCollection", "title": "Kephalaion: Collection einbinden" },
       { "command": "kephalaion.openDocument", "title": "Kephalaion: Dokument öffnen", "icon": "$(go-to-file)" },
       { "command": "kephalaion.search", "title": "Kephalaion: Suchen", "icon": "$(search)" },
       { "command": "kephalaion.showInTree", "title": "Kephalaion: Collection im Baum zeigen", "icon": "$(add)" },
       { "command": "kephalaion.hideFromTree", "title": "Kephalaion: Collection aus dem Baum nehmen" },
-      { "command": "kephalaion.openProjectTerminal", "title": "Kephalaion: Projektterminal öffnen" },
       { "command": "kephalaion.showLog", "title": "Kephalaion: Log anzeigen" },
       { "command": "kephalaion.tree.newFile", "title": "Neue Datei…", "category": "Kephalaion", "icon": "$(new-file)" },
       { "command": "kephalaion.tree.newFolder", "title": "Neuer Ordner…", "category": "Kephalaion", "icon": "$(new-folder)" },
@@ -117,12 +115,6 @@
           "items": { "type": "string" },
           "scope": "window",
           "markdownDescription": "Die Collections im Baum „Kephalaion“ im Explorer als `<hub>:<collection>`, in dieser Reihenfolge, etwa `[\"vm:omni\"]`. Ungesetzt: alle lesbaren Collections der genutzten Hubs. Eine Adresse, die der Node nicht als lesbar meldet, erscheint mit Hinweis. „Kephalaion: Collection im Baum zeigen“ und „… aus dem Baum nehmen“ schreiben sie auf Workspace-Ebene, wenn ein Workspace oder Ordner offen ist (`.code-workspace` bzw. `.vscode/settings.json`)."
-        },
-        "kephalaion.workspaceFolders": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "markdownDescription": "`true`: Collections lassen sich wie bisher als `keph://`-Ordner in den Workspace einbinden; der Baum „Kephalaion“ ist zusätzlich da. `false`: Die Erweiterung nimmt alle `keph://`-Ordner aus dem Workspace (in einem gespeicherten Workspace ändert VS Code dabei die `.code-workspace`-Datei), zeigt ihre Collections im Baum und merkt sich die Ordner; zurück auf `true` hängt sie genau diese wieder ein. Besteht der Workspace nur aus `keph://`-Ordnern, bleibt er."
         },
         "kephalaion.mcpServer.enabled": {
           "type": "boolean",
